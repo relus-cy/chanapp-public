@@ -380,7 +380,7 @@
       : ymd[0] + '/' + ymd[1] + '/' + ymd[2];
   }
 
-  function renderLegend(bar, prev) {
+  function renderLegend(bar, prev, idx) {
     if (!legendEl) return;
     if (!bar) { legendEl.textContent = ''; return; }
     var pct = '', pctCls = 'dim';
@@ -389,6 +389,15 @@
       pct = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
       pctCls = chg >= 0 ? 'up' : 'down';  // 涨红跌青
     }
+    // 十字线 bar 至今：间隔周期数（最新一根为 0）+ 收盘→最新收盘涨跌幅
+    var since = '';
+    if (idx != null && klineData.length && bar.close) {
+      var last = klineData[klineData.length - 1];
+      var sinceChg = (last.close - bar.close) / bar.close * 100;
+      since = ' <span class="dim">至今' + (klineData.length - 1 - idx) + '期</span>' +
+        ' <span class="' + (sinceChg >= 0 ? 'up' : 'down') + '">' +
+        (sinceChg >= 0 ? '+' : '') + sinceChg.toFixed(2) + '%</span>';
+    }
     legendEl.innerHTML =
       '<span class="dim">' + fmtBarTime(bar.time) + '</span>' +
       ' 开 <b>' + bar.open.toFixed(2) + '</b>' +
@@ -396,12 +405,12 @@
       ' 低 <b>' + bar.low.toFixed(2) + '</b>' +
       ' 收 <b>' + bar.close.toFixed(2) + '</b>' +
       ' <span class="' + pctCls + '">' + pct + '</span>' +
-      ' <span class="dim">量 ' + fmtVol(bar.volume) + '</span>';
+      ' <span class="dim">量 ' + fmtVol(bar.volume) + '</span>' + since;
   }
 
   function legendLatest() {
     var n = klineData.length;
-    renderLegend(n ? klineData[n - 1] : null, n > 1 ? klineData[n - 2] : null);
+    renderLegend(n ? klineData[n - 1] : null, n > 1 ? klineData[n - 2] : null, n - 1);
   }
 
   // ---------- 图表 ----------
@@ -466,7 +475,7 @@
     main.subscribeCrosshairMove(function (param) {
       if (!param.time) { legendLatest(); return; }  // 移出图表回落到最新一根
       var hit = klineByTime[param.time];
-      if (hit) renderLegend(hit.bar, hit.prev); else legendLatest();
+      if (hit) renderLegend(hit.bar, hit.prev, hit.i); else legendLatest();
     });
 
     var markers = LW.createSeriesMarkers(candleSeries, []);
@@ -1075,7 +1084,7 @@
     klineData = kline;
     klineByTime = {};
     kline.forEach(function (b, i) {
-      klineByTime[toTime(b.time)] = { bar: b, prev: i > 0 ? kline[i - 1] : null };
+      klineByTime[toTime(b.time)] = { bar: b, prev: i > 0 ? kline[i - 1] : null, i: i };
     });
     macdRowsRaw = data.macd.rows;
     beichiLinksRaw = data.macd.beichi_links;
