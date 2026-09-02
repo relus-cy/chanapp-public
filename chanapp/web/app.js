@@ -400,12 +400,12 @@
     }
     legendEl.innerHTML =
       '<span class="dim">' + fmtBarTime(bar.time) + '</span>' +
-      ' 开 <b>' + bar.open.toFixed(2) + '</b>' +
-      ' 高 <b>' + bar.high.toFixed(2) + '</b>' +
-      ' 低 <b>' + bar.low.toFixed(2) + '</b>' +
-      ' 收 <b>' + bar.close.toFixed(2) + '</b>' +
+      ' 开<b>' + bar.open.toFixed(2) + '</b>' +
+      ' 高<b>' + bar.high.toFixed(2) + '</b>' +
+      ' 低<b>' + bar.low.toFixed(2) + '</b>' +
+      ' 收<b>' + bar.close.toFixed(2) + '</b>' +
       ' <span class="' + pctCls + '">' + pct + '</span>' +
-      ' <span class="dim">量 ' + fmtVol(bar.volume) + '</span>' + since;
+      ' <span class="dim">量' + fmtVol(bar.volume) + '</span>' + since;
   }
 
   function legendLatest() {
@@ -854,10 +854,14 @@
     if (j.raw) {  // LLM 输出解析失败：展示原文
       html += '<div class="card"><div class="kv">' + esc(j.raw) + '</div></div>';
     }
-    (j.scenarios || []).slice(0, 3).forEach(function (s) {
+    // 后验·低 情景不展示（噪声档位，口径同 posteriorBadge 的首字提取）
+    var scenarios = (j.scenarios || []).filter(function (s) {
+      return String(s.posterior || '').charAt(0) !== '低';
+    }).slice(0, 3);
+    scenarios.forEach(function (s) {
       html += renderScenario(s);
     });
-    if (!j.current_state && !(j.scenarios || []).length && !j.raw) {
+    if (!j.current_state && !scenarios.length && !j.raw) {
       html += '<div class="card"><span class="text">暂无完全分类结果</span></div>';
     }
     box.innerHTML = html;
@@ -911,11 +915,17 @@
   }
 
   // fetch 失败或未配置 LLM 时回落到静态样例渲染，保证无 key 也能验收 UI
+  var AI_SPIN_MIN = 500;  // 旋转反馈最短时长：缓存秒回时也要让用户感知「已刷新」
+
   function loadAnalysis() {
     if (!state.code) { el('aiPanel').innerHTML = ''; return; }
     if (analysisAbort) analysisAbort.abort();
-    analysisAbort = new AbortController();
-    fetch('/api/analysis?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq, { signal: analysisAbort.signal })
+    var ctl = analysisAbort = new AbortController();
+    var btn = el('aiRefresh');
+    btn.classList.add('spin');
+    btn.disabled = true;
+    var t0 = Date.now();
+    fetch('/api/analysis?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq, { signal: ctl.signal })
       .then(function (r) {
         if (!r.ok) throw new Error('analysis ' + r.status);
         return r.json();
@@ -926,11 +936,20 @@
       })
       .catch(function (e) {
         if (e && e.name === 'AbortError') return;  // 被新请求中止，静默
-        fetchAnalysisSample()
+        return fetchAnalysisSample()
           .then(function (s) { renderAnalysis(s, 'fallback'); })
           .catch(function () {
             el('aiPanel').innerHTML = '<div class="ai-note">完全分类不可用</div>';
           });
+      })
+      .then(function () {  // 复位仅由最新一次请求执行（旧请求被 abort 后 ctl 已易主）
+        if (ctl !== analysisAbort) return;
+        var wait = Math.max(0, AI_SPIN_MIN - (Date.now() - t0));
+        setTimeout(function () {
+          if (ctl !== analysisAbort) return;
+          btn.classList.remove('spin');
+          btn.disabled = false;
+        }, wait);
       });
   }
 
@@ -1111,7 +1130,6 @@
     c.zsOverlay.setBoxes(data.structure.zs.map(function (z) {
       return { t0: toTime(z.dt0), t1: toTime(z.dt1), zg: z.zg, zd: z.zd };
     }));
-    c.markers.setMarkers(buildMarkers(data.signals, data.forming_signal));
 
     computeMAs();
     refreshMaSeries();
@@ -1143,6 +1161,11 @@
       c.main.timeScale().setVisibleLogicalRange(range);
       c.macdChart.timeScale().setVisibleLogicalRange(range);
     }
+
+    // 信号箭头必须在同一任务内所有 series 更新（K线/MA/通道/可视区间）之后设置：
+    // lightweight-charts 5.0.9 markers 插件对其后的 series setData 敏感（上游 issue #1990），
+    // 否则新 bar 到达时箭头按旧索引落位并持续错位，直到下一次重绘才跳回
+    c.markers.setMarkers(buildMarkers(data.signals, data.forming_signal));
 
     legendLatest();
     renderResonance(data.resonance);

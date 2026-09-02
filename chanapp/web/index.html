@@ -155,6 +155,8 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     position: absolute; left: 10px; top: 8px; z-index: 6; pointer-events: none;
     font-size: 12px; white-space: nowrap; font-family: var(--mono);
     color: var(--dim);
+    /* 右侧为共振角标预留 ~180px + 66px 偏移，窄窗宁可省略号也不与角标重叠 */
+    max-width: calc(100% - 260px); overflow: hidden; text-overflow: ellipsis;
   }
   .legend b { color: var(--fg); font-weight: 600; }
   .legend .dim { color: var(--faint); }
@@ -165,7 +167,9 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--mono);
     background: var(--overlay); border: 1px solid var(--line2); border-radius: var(--radius-s);
     padding: 2px 8px; color: var(--dim);
+    white-space: nowrap; max-width: 180px;  /* 上限与 .legend 的右侧预留联动 */
   }
+  .res-chip .zs { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .res-chip .lv { color: var(--faint); }
   .res-chip .sig-b { color: var(--up); font-weight: 600; }
   .res-chip .sig-s { color: var(--down); font-weight: 600; }
@@ -237,8 +241,14 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     padding: 0 8px; cursor: pointer; font-size: 12px; line-height: 20px;
     transition: transform .1s ease-out, color .1s ease-out, border-color .1s ease-out;
   }
+  #aiRefresh .ic { display: inline-block; }
   #aiRefresh:active { transform: scale(.96); }
   @media (hover:hover) { #aiRefresh:hover { color: var(--gold); border-color: var(--gold-dim); } }
+  /* 请求期间旋转 ⟳ 作加载反馈（最短时长由 app.js 控制，避免缓存秒回时闪烁不可感知） */
+  #aiRefresh.spin { color: var(--gold); border-color: var(--gold-dim); cursor: default; }
+  #aiRefresh.spin .ic { animation: ai-spin .8s linear infinite; }
+  @keyframes ai-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { #aiRefresh.spin .ic { animation: none; } }
   .ai-state {
     margin: 8px 0; padding: 6px 10px; background: var(--raise); border-radius: var(--radius-s);
     font-size: 12px; line-height: 1.5;
@@ -342,7 +352,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
       <div class="bars" id="flowBars"></div>
     </div>
     <div class="sec">
-      <div class="ai-head"><h3 id="aiTitle">AI 完全分类</h3><button id="aiRefresh" title="刷新完全分类">⟳</button></div>
+      <div class="ai-head"><h3 id="aiTitle">AI 完全分类</h3><button id="aiRefresh" title="刷新完全分类"><span class="ic">⟳</span></button></div>
       <div id="aiPanel"></div>
     </div>
     <div class="sec">
