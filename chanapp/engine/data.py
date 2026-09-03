@@ -4,8 +4,9 @@
 get_bars 改为读取内置演示数据（engine/demo_data/ 静态历史快照），
 签名与返回结构与完整版冻结契约一致：
 {code, freq, bars, source, fqf, fetch_time, degraded, degraded_note,
-from_cache, cache_ttl}；bars 元素 {dt,open,high,low,close,volume}，
+from_cache, cache_ttl, stale}；bars 元素 {dt,open,high,low,close,volume}，
 日线 dt "YYYY-MM-DD"、分钟 "YYYY-MM-DD HH:mm"，A 股 volume 单位为手。
+v1.3.1 起契约增量扩展 stale 键（演示数据恒为 False）。
 
 未覆盖的 (code, freq) 组合抛 DataSourceError，由 API 层统一转 502。
 接入自有数据源时保持本契约不动，上层（结构/信号/证据/缓存/路由）无需改动。
@@ -49,4 +50,5 @@ def get_bars(code: str, freq: str) -> dict:
         "fetch_time": datetime.now().astimezone().isoformat(timespec="seconds"),
         "degraded": False, "degraded_note": "",
         "from_cache": False, "cache_ttl": 0,
+        "stale": False,
     }
