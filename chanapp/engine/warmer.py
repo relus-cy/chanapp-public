@@ -1,6 +1,8 @@
 """交易时段自选股缓存预热：daemon 线程每 60s 唤醒一次，cn/hk 任一在开市时
-遍历 watchlist × (day, m30, m60) 调 get_bars——TTL 内命中仅本地读（~2ms），
-过期的才发 HTTP（0.3s 限速自然排队）。单条异常记录不中断。
+遍历 watchlist × (day, m30, m60) 调 get_bars——TTL 内命中仅本地读（~2ms）；
+过期 key 由 get_bars 秒回旧数据并触发后台异步刷新（同 key 防踩踏，v1.3.1 起），
+预热职责由后台线程完成，warm_once 本身不再现场等抓取（errors 仅含首冷失败）。
+单条异常记录不中断。
 
 开关：WARMER_ENABLED（默认 1，置 0 关闭；测试与本地调试时关闭）。
 """

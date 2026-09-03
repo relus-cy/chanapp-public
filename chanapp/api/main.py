@@ -3,7 +3,9 @@
 GET /api/chart?code=sh000001&freq=day|m30|m60
 返回 {kline, macd{rows, beichi_links}, structure{bi,xd,zs,forming}, signals,
       forming_signal, evidence, channels, resonance, meta{source, fqf,
-      fetch_time, degraded, degraded_note, from_cache, bars}}
+      fetch_time, degraded, degraded_note, from_cache, stale, stale_age_s, bars}}
+meta.stale：K 线缓存已过 TTL 但本次回的是旧数据（stale-while-revalidate，后台异步
+刷新中），stale_age_s 为距缓存写入的秒数；新鲜数据 stale=False 且无 stale_age_s。
 resonance：多级别共振角标（日/60/30 三级各取最新确认信号、最新中枢、雏形信号），
 纯计算零新数据，复用 compute_cache；某级取数/计算失败则该级缺省，不影响主响应。
 
@@ -15,7 +17,9 @@ POST /api/watchlist/{code}/star（星标置顶；文件保持 append 序，响�
 适配层未安装时 503）。
 
 行情显示层：GET /api/quotes（自选股快照）、GET /api/f10?code=（F10+资金流+板块涨幅）；
-适配层未安装时 503。
+适配层未安装时 503。v1.3.1 起 SWR：缓存过期先回旧数据并后台异步刷新，仅首冷同步抓取；
+degraded=True 一律表示「本次回的是过期旧缓存」，此时 fetch_time 为旧缓存时间（数据年龄），
+新鲜数据 degraded=False。
 
 AI 完全分类：GET /api/analysis?code=&freq=（chanapp/api/analysis.py，
 结构哈希缓存到 chanapp/.cache/analysis/，LLM 未配置时返回 unconfigured）。
