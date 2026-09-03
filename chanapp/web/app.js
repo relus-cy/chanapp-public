@@ -50,6 +50,8 @@
   })();
   var charts = null; // {main, macdChart, candleSeries, ...}
   var chartAbort = null, analysisAbort = null;
+  var CHART_TIMEOUT_MS = 25000;     // 冷取数正常 ~8s；25s 在病理性兜底链前切断
+  var ANALYSIS_TIMEOUT_MS = 35000;  // 盖过后端 LLM 30s 上限
   var klineData = [];    // 当前 K 线原始数据（time 为原始字符串，供图例/指标计算）
   var klineByTime = {};  // toTime(time) → {bar, prev}，十字光标定位用
   var macdRowsRaw = [];  // 后端 MACD 行（原始 dt 字符串）
@@ -66,18 +68,19 @@
     box.innerHTML = '';
     state.watchlist.forEach(function (w) {
       var q = (state.quotes || {})[w.code] || {};
+      var noPx = q.price == null;  // 上游零值/缺失行：价格与涨跌幅一并显空（v1.3.0）
       var pctCls = q.pct > 0 ? 'up' : (q.pct < 0 ? 'down' : 'flat');
       var div = document.createElement('div');
       div.className = 'item' + (w.code === state.code ? ' active' : '');
       div.innerHTML = '<div class="row"><span>' + (w.starred ? '★ ' : '') + esc(w.name) +
         (q.limit_up ? '<span class="tag-limit">涨停</span>' : '') + '</span>' +
         '<span class="chg ' + pctCls + '">' +
-        (q.pct == null ? '' : (q.pct > 0 ? '+' : '') + q.pct.toFixed(2) + '%') + '</span>' +
+        (noPx || q.pct == null ? '' : (q.pct > 0 ? '+' : '') + q.pct.toFixed(2) + '%') + '</span>' +
         '<span class="btns">' +
         '<button class="star' + (w.starred ? ' on' : '') + '" title="置顶">★</button>' +
         '<button class="del" title="删除">×</button></span></div>' +
         '<div class="row2"><span class="code">' + esc(w.code) + '</span>' +
-        '<span class="px ' + pctCls + '">' + (q.price == null ? '' : q.price.toFixed(2)) + '</span></div>';
+        '<span class="px ' + pctCls + '">' + (noPx ? '' : q.price.toFixed(2)) + '</span></div>';
       div.querySelector('.star').onclick = function (ev) {
         ev.stopPropagation();
         toggleStar(w.code);
@@ -250,6 +253,16 @@
   var lastMeta = null;    // 最近一次 /api/chart 的 meta（抓取时间/缓存标记）
 
   function setStatus(msg) { statusMsg = msg || null; renderStatus(); }
+
+  function showChartError(msg) {
+    var e = el('chartError');
+    e.textContent = '图表数据加载失败：' + msg + '（点击自选股或周期重试）';
+    e.hidden = false;
+  }
+
+  function hideChartError() {
+    el('chartError').hidden = true;
+  }
 
   function renderStatus() {
     var s = el('status');
@@ -925,6 +938,9 @@
     btn.classList.add('spin');
     btn.disabled = true;
     var t0 = Date.now();
+    var timer = setTimeout(function () {
+      ctl.abort(new Error('analysis timeout'));
+    }, ANALYSIS_TIMEOUT_MS);
     fetch('/api/analysis?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq, { signal: ctl.signal })
       .then(function (r) {
         if (!r.ok) throw new Error('analysis ' + r.status);
@@ -950,7 +966,8 @@
           btn.classList.remove('spin');
           btn.disabled = false;
         }, wait);
-      });
+      })
+      .finally(function () { clearTimeout(timer); });
   }
 
   // ---------- 数据口径条 ----------
@@ -1175,12 +1192,17 @@
   function load() {
     ensureCharts();
     if (chartAbort) chartAbort.abort();
-    chartAbort = new AbortController();
+    var ctl = chartAbort = new AbortController();
     el('aiPanel').innerHTML = '<div class="ai-note">加载中…</div>';  // 切换即清上一只结论
     updateAiTitle();
     setStatus('加载中… ' + state.code + ' ' + state.freq);
+    hideChartError();
     loadF10(state.code);  // F10/资金流与 /api/chart 并行，互不阻塞（内部有 300s TTL）
-    fetch('/api/chart?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq, { signal: chartAbort.signal })
+    loadAnalysis();       // 与 chart 并行：analysis 端点自带取数/缓存，不再等 chart 成功
+    var timer = setTimeout(function () {
+      ctl.abort(new Error('加载超时（25s）'));
+    }, CHART_TIMEOUT_MS);
+    fetch('/api/chart?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq, { signal: ctl.signal })
       .then(function (r) {
         if (!r.ok) return r.json().then(function (j) { throw new Error(j.detail || r.status); });
         return r.json();
@@ -1189,13 +1211,15 @@
         renderChart(data, { resetRange: true });
         renderEvidence(data.evidence);
         renderMeta(data.meta);
-        loadAnalysis();  // 完全分类面板跟随 code/freq 切换刷新
         setStatus('');
       })
       .catch(function (e) {
         if (e && e.name === 'AbortError') return;  // 被新请求中止，静默
+        if (ctl !== chartAbort) return;            // 旧请求（超时等）：已有新请求接管
         setStatus('加载失败：' + e.message);
-      });
+        showChartError(e.message);
+      })
+      .finally(function () { clearTimeout(timer); });
   }
 
   // ---------- 交易时段自动刷新（口径同 engine/session.py：cn 09:25–15:05，hk 09:30–16:05，周一至五） ----------

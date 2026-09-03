@@ -25,9 +25,11 @@ AI 完全分类：GET /api/analysis?code=&freq=（chanapp/api/analysis.py，
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -49,6 +51,17 @@ from chanapp.engine import evidence as engine_evidence  # noqa: E402
 from chanapp.engine import signals as engine_signals  # noqa: E402
 from chanapp.engine import structure as engine_structure  # noqa: E402
 from chanapp.engine import warmer  # noqa: E402
+
+log = logging.getLogger(__name__)
+
+# chanapp.* 的 INFO 日志（[timing] 等）在 uvicorn 默认配置下会被 root 吞掉，显式配置
+_chanapp_log = logging.getLogger("chanapp")
+if not _chanapp_log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    _chanapp_log.addHandler(_h)
+_chanapp_log.setLevel(logging.INFO)
+_chanapp_log.propagate = False  # root 日后若也配 handler，避免日志双写
 
 # 行情显示层 / 联想搜索为可选数据适配层（私有数据源模块）：
 # 未安装时对应路由返回 503，K 线/结构/信号主链路不受影响。
@@ -113,31 +126,34 @@ def _level_summary(code: str, freq: str) -> dict | None:
                                if sig["forming_signal"] else None),
         }
     except Exception:
+        log.warning("共振级别摘要失败 code=%s freq=%s", code, freq, exc_info=True)
         return None
 
 
 def _resonance(code: str) -> list[dict]:
-    out = []
-    for f in _RESONANCE_FREQS:
-        s = _level_summary(code, f)
-        if s is not None:
-            out.append(s)
-    return out
+    """三级别并行摘要（pool.map 保序）；单级失败返回 None → 该级缺省，不拖垮主响应。"""
+    with ThreadPoolExecutor(max_workers=len(_RESONANCE_FREQS),
+                            thread_name_prefix="resonance") as pool:
+        summaries = list(pool.map(lambda f: _level_summary(code, f), _RESONANCE_FREQS))
+    return [s for s in summaries if s is not None]
 
 
 @app.get("/api/chart")
 def api_chart(code: str = Query(..., min_length=2),
               freq: str = Query("day", pattern="^(day|m30|m60)$")):
+    t0 = time.monotonic()
     try:
         dataset = engine_data.get_bars(code, freq)
     except Exception as e:  # 数据层错误统一成 502
         raise HTTPException(status_code=502, detail=str(e)) from e
+    t_bars = time.monotonic()
 
     bars = dataset["bars"]
     structure = engine_structure.compute_structure(bars, code, freq)
     sig = engine_signals.compute_signals(bars, structure)
     evidence = engine_evidence.build_evidence(sig["signals"], structure)
     engine_compute_cache.put(code, freq, bars[-1]["dt"], structure, sig, evidence)
+    t_compute = time.monotonic()
 
     kline = [
         {"time": b["dt"], "open": b["open"], "high": b["high"], "low": b["low"],
@@ -175,6 +191,11 @@ def api_chart(code: str = Query(..., min_length=2),
         for ch in engine_channels.build(structure["bi"], structure["xd"])
     ]
 
+    resonance = _resonance(code)
+    t_res = time.monotonic()
+    log.info("[timing] chart code=%s freq=%s bars=%dms compute=%dms resonance=%dms total=%dms",
+             code, freq, int((t_bars - t0) * 1000), int((t_compute - t_bars) * 1000),
+             int((t_res - t_compute) * 1000), int((t_res - t0) * 1000))
     return {
         "kline": kline,
         "macd": {"rows": macd_rows, "beichi_links": beichi_links},
@@ -189,7 +210,7 @@ def api_chart(code: str = Query(..., min_length=2),
         "forming_signal": sig["forming_signal"],
         "evidence": evidence,
         "channels": channels,
-        "resonance": _resonance(code),
+        "resonance": resonance,
         "meta": meta,
     }
 

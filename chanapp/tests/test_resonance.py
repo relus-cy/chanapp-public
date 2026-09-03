@@ -80,6 +80,29 @@ class TestResonance(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual([x["freq"] for x in r.json()["resonance"]], ["day"])
 
+    def test_levels_run_in_parallel(self):
+        """三级别并行取数：并发峰值 ≥2（串行实现下恒为 1）。计时无关，防 flaky。"""
+        import threading
+        import time
+        cur = peak = 0
+        lk = threading.Lock()
+
+        def timed(code, freq="day"):
+            nonlocal cur, peak
+            with lk:
+                cur += 1
+                peak = max(peak, cur)
+            time.sleep(0.2)
+            with lk:
+                cur -= 1
+            return fake_dataset(code, freq)
+
+        with mock.patch("chanapp.api.main.engine_data.get_bars",
+                        side_effect=timed):
+            r = self.c.get("/api/chart?code=sh000001&freq=day")
+        self.assertEqual(r.status_code, 200)
+        self.assertGreaterEqual(peak, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -38,6 +39,8 @@ _PKG_ROOT = Path(__file__).resolve().parent.parent
 # LLM 失败条目（status="llm_error"）短 TTL：故障期内抑制重试，避免
 # 每分钟自动刷新都重调 LLM + 30s 超时挂起；过期后自动恢复重试。
 FAILURE_CACHE_TTL = 600
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -152,6 +155,7 @@ def _parse_llm_output(raw: str) -> dict | None:
 @router.get("/api/analysis")
 def api_analysis(code: str = Query(..., min_length=2),
                  freq: str = Query("day", pattern="^(day|m30|m60)$")):
+    t0 = time.monotonic()
     if not engine_llm.is_configured():
         return {"status": "unconfigured", "hash": None,
                 "current_state": None, "scenarios": [], "cached": False}
@@ -182,11 +186,14 @@ def api_analysis(code: str = Query(..., min_length=2),
                                     detail=cached.get("error", "LLM 调用失败"))
         else:
             cached["cached"] = True
+            log.info("[timing] analysis code=%s freq=%s cache=hit llm=0ms total=%dms",
+                     code, freq, int((time.monotonic() - t0) * 1000))
             return cached
 
     prompt = build_prompt(collect_prompt_data(code, freq, bars, structure,
                                               sig, evidence))
     try:
+        t_llm = time.monotonic()
         raw = engine_llm.analyze(prompt)
     except engine_llm.LLMError as e:
         # 失败也落短 TTL 缓存：故障期内后续请求直接 502，不再重复调 LLM
@@ -208,4 +215,7 @@ def api_analysis(code: str = Query(..., min_length=2),
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file.write_text(json.dumps(result, ensure_ascii=False, indent=2),
                           encoding="utf-8")
+    log.info("[timing] analysis code=%s freq=%s cache=miss llm=%dms total=%dms",
+             code, freq, int((time.monotonic() - t_llm) * 1000),
+             int((time.monotonic() - t0) * 1000))
     return result
