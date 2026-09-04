@@ -188,7 +188,18 @@
   function loadQuotes() {
     fetch('/api/quotes')
       .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) { if (j) { state.quotes = j.quotes || {}; renderWatchlist(); } })
+      .then(function (j) {
+        if (!j) return;
+        state.quotes = j.quotes || {};
+        var s = el('wlStale');  // degraded=回旧缓存：显示数据时间，fresh 时隐藏
+        if (j.degraded && j.fetch_time) {
+          s.textContent = '行情为 ' + hhmmss(j.fetch_time) + ' 缓存';
+          s.hidden = false;
+        } else {
+          s.hidden = true;
+        }
+        renderWatchlist();
+      })
       .catch(function () {});
   }
 
@@ -252,6 +263,21 @@
   var statusMsg = null;   // setStatus 的临时消息，空串/null 回落到常驻状态
   var lastMeta = null;    // 最近一次 /api/chart 的 meta（抓取时间/缓存标记）
 
+  // 新鲜度文案（v1.4.1）：stale=过期回旧 → 金色「缓存·N 分钟前」；TTL 内缓存 → 「（缓存）」；新鲜抓取 → 空
+  function cacheBadge(meta) {
+    if (!meta || !meta.from_cache) return '';
+    if (meta.stale) {
+      var n = meta.stale_age_s == null ? null : Math.max(1, Math.round(meta.stale_age_s / 60));
+      return '<span class="warn">（缓存·' + (n == null ? '旧' : n + ' 分钟前') + '）</span>';
+    }
+    return '（缓存）';
+  }
+
+  function hhmmss(ts) {
+    var m = String(ts || '').match(/(\d{2}:\d{2}:\d{2})/);
+    return m ? m[1] : (ts || '');
+  }
+
   function setStatus(msg) { statusMsg = msg || null; renderStatus(); }
 
   function showChartError(msg) {
@@ -272,8 +298,7 @@
     var html = '<span class="dot" style="color:' +
       (open ? 'var(--down)' : 'var(--faint)') + '">●</span> ' + (open ? '交易中' : '已收盘');
     if (lastMeta && lastMeta.fetch_time) {
-      var m = String(lastMeta.fetch_time).match(/(\d{2}:\d{2}:\d{2})/);
-      html += ' · 抓取 ' + (m ? m[1] : lastMeta.fetch_time) + (lastMeta.from_cache ? '（缓存）' : '');
+      html += ' · 抓取 ' + hhmmss(lastMeta.fetch_time) + cacheBadge(lastMeta);
     }
     s.innerHTML = html;
   }
@@ -724,7 +749,7 @@
 
   // ---------- 多级别共振角标 ----------
 
-  var FREQ_NAME = { day: '日线', m60: '60分', m30: '30分' };
+  var FREQ_NAME = { day: '日线', m60: '60分', m30: '30分', m15: '15分', m5: '5分' };
 
   function sigSide(label) {  // 'B1a' / '段:B3' / '~S1-d' → buy/sell
     return label.replace(/^~/, '').replace(/^段:/, '').charAt(0) === 'B' ? 'b' : 's';
@@ -979,7 +1004,7 @@
     var parts = [
       '数据源：' + meta.source,
       '复权口径：' + meta.fqf,
-      '抓取时间：' + meta.fetch_time + (meta.from_cache ? '（缓存）' : ''),
+      '抓取时间：' + meta.fetch_time + cacheBadge(meta),
       'K线：' + meta.bars + ' 根（' + meta.first_dt + ' ~ ' + meta.last_dt + '）',
     ];
     bar.innerHTML = parts.map(function (p) { return '<span>' + p + '</span>'; }).join('');
@@ -1037,6 +1062,13 @@
   function renderF10(j) {
     var f = j.f10 || {};
     el('f10Sec').style.display = '';
+    var stale = el('f10Stale');  // degraded=回旧缓存：卡内显示数据时间
+    if (j.degraded && j.fetch_time) {
+      stale.textContent = 'F10 数据为 ' + hhmmss(j.fetch_time) + ' 缓存';
+      stale.hidden = false;
+    } else {
+      stale.hidden = true;
+    }
     renderF10Header(f);
     var tags = '';
     if (f.industry) {

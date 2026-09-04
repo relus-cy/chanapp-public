@@ -154,7 +154,7 @@ def _parse_llm_output(raw: str) -> dict | None:
 
 @router.get("/api/analysis")
 def api_analysis(code: str = Query(..., min_length=2),
-                 freq: str = Query("day", pattern="^(day|m30|m60)$")):
+                 freq: str = Query("day", pattern="^(day|m30|m60|m15|m5)$")):
     t0 = time.monotonic()
     if not engine_llm.is_configured():
         return {"status": "unconfigured", "hash": None,

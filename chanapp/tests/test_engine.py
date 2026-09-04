@@ -12,6 +12,7 @@
 """
 import csv
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 from chanapp.engine import evidence, signals, structure
@@ -112,6 +113,29 @@ class TestGoldenSh000001Day(unittest.TestCase):
         self.assertEqual(len(m["dif"]), n)
         self.assertEqual(len(m["dea"]), n)
         self.assertEqual(len(m["hist"]), n)
+
+
+class TestMinuteFreqStructure(unittest.TestCase):
+    """v1.4.1 放开 m15/m5：结构计算接受新周期（FREQ_SECONDS 映射齐备）。"""
+
+    def _minute_bars(self, step_min):
+        """合成 200 根锯齿分钟 bar（足够出笔/线段）。"""
+        bars = []
+        base = datetime(2026, 9, 1, 9, 30).timestamp()
+        price = 100.0
+        for i in range(200):
+            price += 1.0 if (i // 5) % 2 == 0 else -1.0
+            dt = datetime.fromtimestamp(base + i * step_min * 60).strftime("%Y-%m-%d %H:%M")
+            bars.append({"dt": dt, "open": price - 0.2, "high": price + 0.5,
+                         "low": price - 0.6, "close": price, "volume": 1000.0})
+        return bars
+
+    def test_m15_m5_structure(self):
+        for freq, step in (("m15", 15), ("m5", 5)):
+            s = structure.compute_structure(self._minute_bars(step), "sh000001", freq)
+            self.assertIn("bi", s)
+            self.assertIn("zs", s)
+            self.assertGreater(len(s["bi"]), 0, f"{freq} 应能出笔")
 
 
 if __name__ == "__main__":

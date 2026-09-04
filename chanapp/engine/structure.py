@@ -14,7 +14,8 @@ from datetime import datetime
 
 from chanlun import 观察者, 缠论配置
 
-FREQ_SECONDS = {"day": 86400, "week": 7 * 86400, "m30": 1800, "m60": 3600}
+FREQ_SECONDS = {"day": 86400, "week": 7 * 86400, "m30": 1800, "m60": 3600,
+                "m15": 900, "m5": 300}  # m15/m5 于 v1.4.1 放开（week 已废弃，留映射无害）
 
 
 def _to_ts(dt: str) -> int:
