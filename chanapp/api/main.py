@@ -97,7 +97,7 @@ async def lifespan(app: FastAPI):
             supply_state.stop_runtime()
 
 
-app = FastAPI(title="chanapp", version="1.6.2", docs_url=None, redoc_url=None, lifespan=lifespan)
+app = FastAPI(title="chanapp", version="1.6.3", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 
 @app.middleware("http")

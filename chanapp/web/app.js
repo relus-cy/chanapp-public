@@ -1116,13 +1116,30 @@
   // fetch 失败或未配置 LLM 时回落到静态样例渲染，保证无 key 也能验收 UI
   var AI_SPIN_MIN = 500;  // 旋转反馈最短时长：缓存秒回时也要让用户感知「已刷新」
 
+  // 自动刷新与切换仅同步面板归属；AI 请求暂时只由刷新按钮触发。
+  function syncManualAnalysis() {
+    var identity = currentAnalysisIdentity();
+    if (identity === analysisIdentity) return;
+    if (analysisAbort) analysisAbort.abort();
+    analysisAbort = null;
+    analysisIdentity = identity;
+    analysisInFlight = false;
+    pendingAnalysis = null;
+    ruleSwitchNote = null;
+    el('aiPanel').innerHTML = '<div class="ai-note">点击刷新生成分析</div>';
+    el('aiDataStatus').hidden = true;
+    var btn = el('aiRefresh');
+    btn.classList.remove('spin');
+    btn.disabled = false;
+  }
+
   function loadAnalysis(options) {
-    if (supplyBusy) return;
+    if (!options || options.manual !== true || supplyBusy) return;
     var generation = supplyState.generation, epoch = supplyState.epoch, profile = state.ruleProfile, scope = state.signalScope;
     if (!state.code) { el('aiPanel').innerHTML = ''; return; }
     var identity = currentAnalysisIdentity();
     if (identity === analysisIdentity && (analysisInFlight || !(options && options.refresh))) return;
-    if (identity !== analysisIdentity) {
+    if (identity !== analysisIdentity || !pendingAnalysis) {
       pendingAnalysis = null;
       el('aiPanel').innerHTML = '<div class="ai-note">' + (ruleSwitchNote || '加载中…') + '</div>';
       ruleSwitchNote = null;
@@ -1428,7 +1445,7 @@
     setStatus('加载中… ' + state.code + ' ' + state.freq);
     hideChartError();
     loadF10(state.code);  // F10/资金流与 /api/chart 并行，互不阻塞（内部有 300s TTL）
-    loadAnalysis(options); // 与 chart 并行：analysis 端点自带取数/缓存，不再等 chart 成功
+    syncManualAnalysis(); // 切换与行情自动刷新不请求 AI
     var timer = setTimeout(function () {
       ctl.abort(new Error('加载超时（25s）'));
     }, CHART_TIMEOUT_MS);
@@ -1540,7 +1557,7 @@
     el('center').classList.add('supply-loading');
     load();
   }
-  el('aiRefresh').onclick = function () { loadAnalysis({refresh:true}); };
+  el('aiRefresh').onclick = function () { loadAnalysis({manual:true, refresh:true}); };
   wireMaSeg();
   wireSubSeg();
 
