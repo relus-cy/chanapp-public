@@ -16,4 +16,4 @@ class TestNativeEvidence(unittest.TestCase):
             self.assertEqual(card['status'],signal['status'])
             for retired in ('exhaustion_pct','anchor_price','area_pair','dif_pair','fallback'):
                 self.assertNotIn(retired,card['detail'])
-            self.assertIn('不要求 MACD',card['text'])
+            self.assertIn('力度仅作标注，不作硬过滤',card['text'])

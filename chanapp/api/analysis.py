@@ -51,7 +51,7 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 ANALYSIS_FREQS = ("day", "m60", "m30")
-ANALYSIS_SCOPE_VERSION = "multi_timeframe_chanpy_v1"
+ANALYSIS_SCOPE_VERSION = "multi_timeframe_chanpy_v2"
 _analysis_locks_guard = threading.Lock()
 _analysis_locks: dict[str, list] = {}
 
@@ -102,7 +102,9 @@ def collect_prompt_data(code: str, freq: str, bars: list[dict],
             {"dt": c["dt"], "type": c["type"], "price": c["price"],
              "side": c["side"], "text": _strip_pct(c["text"]),
              "status": c.get("status", "provisional"), "level": c.get("level"),
-             "types": c.get("types", [])}
+             "types": c.get("types", []),
+             "context": c.get("detail", {}).get("context"),
+             "strength": c.get("detail", {}).get("strength")}
             for c in cards
         ],
         "provisional_signals": [s for s in sig.get("signals", [])
@@ -122,7 +124,12 @@ def build_prompt(data: dict) -> str:
         "不同周期的中枢与信号不可混用。\n"
         "成笔标准只区分严格与宽松；原生点位是形态买卖点，不代表已通过背驰过滤。"
         "status=provisional 是形成中，不能表述为已确认；confirmed 也不是收益保证。"
-        "只能解释输入已有的类型、指标及关联结构，不能补造旧锚点或背驰条件。\n\n"
+        "只能解释输入已有的类型、指标及关联结构，不能补造旧锚点或背驰条件。\n"
+        "signal_scope=expanded 仅放开笔级中枢数量要求，不表示信号更确定。"
+        "context 说明自身或关联一类点的中枢上下文；缺失时不能补造。"
+        "strength 仅作信息：value 是力度比而非概率，peak 是 MACD 同向柱峰值，"
+        "slope 是价格变化斜率；weaker/equal/stronger 不等同于交易有效性。"
+        "unavailable 表示没有可用力度比，不从关联点借用或猜测。\n\n"
         "数据（JSON）：\n" + body + "\n\n"
         "输出要求：\n"
         "1. 只输出一个 JSON 对象：{\"current_state\": \"...\", \"scenarios\": "
@@ -193,10 +200,11 @@ def _parse_llm_output(raw: str) -> dict | None:
 @router.get("/api/analysis")
 def api_analysis(code: str = Query(..., min_length=2),
                  freq: str = Query("day", pattern="^(day|m30|m60|m15|m5)$"),
-                 rule_profile: Annotated[Literal["strict", "relaxed"], Query()] = "strict"):
+                 rule_profile: Annotated[Literal["strict", "relaxed"], Query()] = "strict",
+                 signal_scope: Annotated[Literal["standard", "expanded"], Query()] = "expanded"):
     t0 = time.monotonic()
     snapshot = supply.current()
-    rules = profile_identity(rule_profile)
+    rules = profile_identity(rule_profile, signal_scope)
     response_identity = {**rules, "scheme": snapshot.scheme, "generation": snapshot.generation, "epoch": snapshot.epoch,
                          "data_version": None, "data_versions": {},
                          "analysis_scope": "multi_timeframe", "freqs": list(ANALYSIS_FREQS)}
@@ -222,7 +230,7 @@ def api_analysis(code: str = Query(..., min_length=2),
             if hit is not None:
                 structure, sig, evidence = hit["structure"], hit["sig"], hit["evidence"]
             else:
-                structure = engine_structure.compute_structure(bars, code, frame, rule_profile=rule_profile)
+                structure = engine_structure.compute_structure(bars, code, frame, rule_profile=rule_profile, signal_scope=signal_scope)
                 sig = engine_signals.compute_signals(bars, structure)
                 evidence = engine_evidence.build_evidence(sig["signals"], structure)
                 engine_compute_cache.put(code, frame, data_version, structure, sig, evidence,
@@ -262,7 +270,8 @@ def _analyze_combined(code: str, h: str, prompt_frames: dict,
     prompt = build_prompt({"code": code, "analysis_scope": "multi_timeframe",
                            "timeframes": prompt_frames,
                            "rule_profile": response_identity["rule_profile"],
-                           "calculation_id": response_identity["calculation_id"]})
+                           "calculation_id": response_identity["calculation_id"],
+                           "signal_scope": response_identity["signal_scope"]})
     try:
         t_llm = time.monotonic()
         raw = engine_llm.analyze(prompt)

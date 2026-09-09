@@ -1,6 +1,6 @@
 # chanapp
 
-自用缠论分析 web app（公开版）。v1.6.0 内置固定版 chan.py 计算结构和原生形态买卖点，支持严格/宽松成笔标准，前端 lightweight-charts
+自用缠论分析 web app（公开版）。v1.6.1 内置固定版 chan.py 计算结构和原生形态买卖点，支持严格/宽松成笔标准，前端 lightweight-charts
 （本地 vendor，无构建）。
 
 功能全景：30分/60分/日线 × A股指数/个股；自选股 + 交易时段自动刷新 + 后台预热；
@@ -9,7 +9,7 @@ OHLC 图例；AI 完全分类面板（贝叶斯推理结构：先验/证据/后�
 配置 `LLM_API_KEY` 后启用，无 key 时回落静态样例）；日/夜双主题、多周期信号摘要、
 副图 MACD/KDJ/RSI/BOLL 切换、主图 MA 多选开关。
 
-成笔标准可切换严格/宽松并记忆；两者只改变 `bi_strict`，与形成中状态无关。全部原生点保留类型、笔/段级别及确认状态，图表与 AI 按规则身份隔离。
+成笔标准（严格/宽松）和提示范围（标准/扩展）独立切换并记忆，默认严格+扩展。扩展仅放开笔级中枢数量门槛；原生力度比作信息展示，不作硬过滤。全部点保留类型、笔/段级别及确认状态，图表与 AI 按四组合规则身份隔离。通道投影不参与价格轴自动缩放。
 
 ## 数据说明
 
@@ -46,7 +46,7 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ## 口径声明
 
 - MACD(12,26,9)，hist = 2×(DIF−DEA)（A股软件通行口径）。
-- 形态规则：chan.py 固定提交 `429d6ed3043e27c93a003ba2b10e70a05575e1f5`；strict/relaxed 仅改变 `bi_strict`。其余采用上游默认，默认不强制 MACD 力度比例过滤；形成中点可能移动或消失。图上端点时间不是首次可识别时间。
+- 形态规则：chan.py 固定提交 `429d6ed3043e27c93a003ba2b10e70a05575e1f5`；strict/relaxed 仅改变 `bi_strict`。标准提示其余采用上游默认，扩展提示将笔级 min_zs_cnt 设为 0；两者都不强制 MACD 力度比例过滤；形成中点可能移动或消失。图上端点时间不是首次可识别时间。
 - 用户可见术语与日期：中枢上沿/下沿；时间轴刻度 MM/DD（分钟级日界 MM/DD、日内
   HH:MM，年界 YYYY/MM/DD），十字线标签 YYYY/MM/DD（分钟级带 HH:MM）。
 - AI 面板：环境变量 `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_MODEL`（示例见 `.env.example`）。

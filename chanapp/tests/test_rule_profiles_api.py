@@ -66,3 +66,42 @@ class TestRuleProfilesAPI(unittest.TestCase):
         args = ("code", "day", [], {"signals": []})
         self.assertNotEqual(_structure_hash(*args, calculation_id="strict-id"),
                             _structure_hash(*args, calculation_id="relaxed-id"))
+
+    def test_scope_is_independent_and_roundtrip_cached(self):
+        dataset = {"bars": load_bars(), "data_version": "same-input"}
+        with patch("chanapp.engine.data.get_bars", return_value=dataset), \
+             patch("chanapp.engine.llm.analyze", return_value='{"current_state":"s","scenarios":[]}') as llm:
+            identities = {}
+            hashes = {}
+            for profile, scope in (("strict", "standard"), ("strict", "expanded"),
+                                   ("relaxed", "expanded"), ("relaxed", "standard"),
+                                   ("strict", "standard")):
+                query = f"code=sh000001&rule_profile={profile}&signal_scope={scope}"
+                chart = self.client.get('/api/chart?' + query)
+                self.assertEqual(chart.status_code, 200, chart.text)
+                body = chart.json()
+                self.assertEqual(body['signal_scope'], scope)
+                self.assertEqual(body['schema_version'], 'chanpy_v2')
+                self.assertTrue(all(f['signal_scope'] == scope for f in body['resonance']))
+                analysis = self.client.get('/api/analysis?' + query).json()
+                self.assertEqual(analysis['signal_scope'], scope)
+                self.assertEqual(analysis['calculation_id'], body['calculation_id'])
+                key = (profile, scope)
+                if key in hashes:
+                    self.assertEqual(analysis['hash'], hashes[key])
+                    self.assertTrue(analysis['cached'])
+                identities[key] = body['calculation_id']
+                hashes[key] = analysis['hash']
+            self.assertEqual(len(set(identities.values())), 4)
+            self.assertEqual(len(set(hashes.values())), 4)
+            self.assertEqual(llm.call_count, 4)
+            self.assertIn('signal_scope', llm.call_args.args[0])
+
+    def test_bad_scope_rejected_before_fetch_and_default_is_expanded(self):
+        with patch("chanapp.engine.data.get_bars") as fetch:
+            for route in ('chart', 'analysis'):
+                self.assertEqual(self.client.get(f'/api/{route}?code=sh000001&signal_scope=oops').status_code, 422)
+            fetch.assert_not_called()
+        with patch("chanapp.engine.llm.is_configured", return_value=False):
+            body = self.client.get('/api/analysis?code=sh000001').json()
+        self.assertEqual(body['signal_scope'], 'expanded')

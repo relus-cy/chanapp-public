@@ -5,8 +5,9 @@
   "sample": true,
   "rule_profile": "strict",
   "calculation_id": "sample-only",
-  "schema_version": "chanpy_v1",
-  "current_state": "静态示例，不对应当前股票或所选标准。严格与宽松仅改变成笔标准，原生形态点不代表已经通过力度过滤。",
+  "schema_version": "chanpy_v2",
+  "signal_scope": "expanded",
+  "current_state": "静态示例，不对应当前股票或所选成笔标准或提示范围。扩展不表示更确定。严格与宽松仅改变成笔标准，原生形态点不代表已经通过力度过滤。",
   "scenarios": [
     {
       "name": "中枢内延伸",

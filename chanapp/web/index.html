@@ -164,7 +164,10 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .legend .dim { color: var(--faint); }
 
   /* 多级别信号占独立一行，不覆盖图表或拦截十字线。 */
-  .resonance { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  .res-bar { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 5px 10px; border-bottom: 1px solid var(--line); }
+  .res-bar .rule-label { font-size: 11px; color: var(--faint); }
+  .res-bar .seg button { font-size: 11px; padding: 1px 10px; }
+  .resonance { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
   .resonance:empty { display: none; }
   .res-chip {
     display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--mono);
@@ -176,6 +179,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .res-chip .lv { color: var(--faint); }
   .res-chip .sig-b { color: var(--up); font-weight: 600; }
   .res-chip .sig-s { color: var(--down); font-weight: 600; }
+  .res-chip .prov { opacity: .55; }
   .res-chip .zs { color: var(--gold); }
 
   /* 轴左端绝对日期锚点（小药丸样式；置于图例下方，避免与刻度标签碰撞） */
@@ -302,9 +306,6 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     font-family: var(--mono);
   }
   footer .warn, #status .warn, .wl-head .warn { color: var(--gold); }
-  .rule-control { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 11px; }
-  .rule-control select { flex: 0 0 auto; }
-  #ruleNote { color: var(--faint); }
 </style>
 </head>
 <body>
@@ -342,12 +343,19 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     </section>
   </div>
   <div id="center">
-    <div class="rule-control supply-actions">
-      <label for="ruleProfile">成笔标准</label>
-      <select id="ruleProfile" aria-describedby="ruleNote"><option value="strict">严格</option><option value="relaxed">宽松</option></select>
-      <span id="ruleNote">仅指成笔标准，买卖点按上游形态规则计算</span>
+    <div class="res-bar">
+      <span class="rule-label">成笔标准</span>
+      <div class="seg" id="ruleProfile" role="group" aria-label="成笔标准" title="严格/宽松仅指成笔跨度，买卖点按上游形态规则计算">
+        <button data-profile="strict">严格</button>
+        <button data-profile="relaxed">宽松</button>
+      </div>
+      <span class="rule-label">提示范围</span>
+      <div class="seg" id="signalScope" role="group" aria-label="提示范围" title="扩展包含零中枢上下文提示，不表示更确定">
+        <button data-scope="standard">标准</button>
+        <button data-scope="expanded">扩展</button>
+      </div>
+      <div class="resonance" id="resonance" role="group" aria-label="多周期信号摘要"></div>
     </div>
-    <div class="resonance" id="resonance" role="group" aria-label="多周期信号摘要"></div>
     <div id="chartWrap">
       <div id="chart"></div>
       <div id="chartError" class="chart-error" hidden></div>
@@ -398,6 +406,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     </div>
     <div class="sec">
       <h3>信号依据卡</h3>
+      <p class="ai-note">扩展包含零中枢上下文提示，不表示更确定。力度仅供观察，不作硬过滤。</p>
       <div id="cards"></div>
     </div>
   </div>

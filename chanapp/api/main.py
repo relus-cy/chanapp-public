@@ -1,7 +1,7 @@
 """缠论分析自用 web app API。
 
-GET /api/chart?code=sh000001&freq=day|m30|m60
-返回 {kline, macd{rows, beichi_links}, structure{bi,xd,zs,forming}, signals,
+GET /api/chart?code=sh000001&freq=day|m30|m60&rule_profile=strict|relaxed&signal_scope=standard|expanded
+返回 {kline, macd{rows}, structure{bi,xd,zs,zs_xd,forming}, signals,
       rule_profile, calculation_id, evidence, channels, resonance, meta{source, fqf,
       fetch_time, degraded, degraded_note, from_cache, stale, stale_age_s, bars}}
 meta.stale：K 线缓存已过 TTL 但本次回的是旧数据（stale-while-revalidate，后台异步
@@ -97,7 +97,7 @@ async def lifespan(app: FastAPI):
             supply_state.stop_runtime()
 
 
-app = FastAPI(title="chanapp", version="1.6.0", docs_url=None, redoc_url=None, lifespan=lifespan)
+app = FastAPI(title="chanapp", version="1.6.1", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -127,7 +127,8 @@ app.include_router(supply_api.router)
 @app.get("/api/chart")
 def api_chart(code: str = Query(..., min_length=2),
               freq: str = Query("day", pattern="^(day|m30|m60|m15|m5)$"),
-              rule_profile: Annotated[Literal["strict", "relaxed"], Query()] = "strict"):
+              rule_profile: Annotated[Literal["strict", "relaxed"], Query()] = "strict",
+              signal_scope: Annotated[Literal["standard", "expanded"], Query()] = "expanded"):
     t0 = time.monotonic()
     try:
         dataset = engine_data.get_bars(code, freq)
@@ -138,7 +139,7 @@ def api_chart(code: str = Query(..., min_length=2),
     timings: dict = {}
     try:
         payload = engine_chart_payload.build_chart_payload(code, freq, dataset,
-                                                           timings=timings, rule_profile=rule_profile)
+                                                           timings=timings, rule_profile=rule_profile, signal_scope=signal_scope)
     except Exception as e:
         log.exception("chart calculation failed code=%s freq=%s profile=%s", code, freq, rule_profile)
         raise HTTPException(status_code=502, detail="结构计算暂不可用") from e

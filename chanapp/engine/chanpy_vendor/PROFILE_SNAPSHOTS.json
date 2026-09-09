@@ -1,367 +1,741 @@
 {
   "strict": {
-    "rule_profile": "strict",
-    "calculation_id": "2db69fbd3c199d8b052418f68f051ab2c49513a2a2cc26c75f3c2185904c4f92",
-    "schema_version": "chanpy_v1",
-    "effective_config": {
-      "auto_skip_illegal_sub_lv": false,
-      "bi_conf": {
-        "bi_algo": "normal",
-        "bi_allow_sub_peak": true,
-        "bi_end_is_peak": true,
-        "bi_fx_check": "STRICT",
-        "gap_as_kl": false,
-        "is_strict": true
-      },
-      "boll_n": 20,
-      "bs_point_conf": {
-        "b_conf": {
-          "bs1_peak": true,
-          "bsp1_only_multibi_zs": true,
-          "bsp2_follow_1": true,
-          "bsp2s_follow_2": false,
-          "bsp3_follow_1": true,
-          "bsp3_peak": false,
-          "bsp3a_max_zs_cnt": 1,
-          "divergence_rate": "inf",
-          "macd_algo": "PEAK",
-          "max_bs2_rate": 0.9999,
-          "max_bsp2s_lv": null,
-          "min_zs_cnt": 1,
-          "strict_bsp3": false,
-          "target_types": [
-            "T1",
-            "T1P",
-            "T2",
-            "T2S",
-            "T3A",
-            "T3B"
-          ],
-          "tmp_target_types": [
-            "1",
-            "1p",
-            "2",
-            "2s",
-            "3a",
-            "3b"
-          ]
+    "standard": {
+      "rule_profile": "strict",
+      "signal_scope": "standard",
+      "calculation_id": "5721813f242dcbb71971ec9ff3f1c550c1f98d26deed1481665c3ddfab19cfff",
+      "schema_version": "chanpy_v2",
+      "effective_config": {
+        "auto_skip_illegal_sub_lv": false,
+        "bi_conf": {
+          "bi_algo": "normal",
+          "bi_allow_sub_peak": true,
+          "bi_end_is_peak": true,
+          "bi_fx_check": "STRICT",
+          "gap_as_kl": false,
+          "is_strict": true
         },
-        "s_conf": {
-          "bs1_peak": true,
-          "bsp1_only_multibi_zs": true,
-          "bsp2_follow_1": true,
-          "bsp2s_follow_2": false,
-          "bsp3_follow_1": true,
-          "bsp3_peak": false,
-          "bsp3a_max_zs_cnt": 1,
-          "divergence_rate": "inf",
-          "macd_algo": "PEAK",
-          "max_bs2_rate": 0.9999,
-          "max_bsp2s_lv": null,
-          "min_zs_cnt": 1,
-          "strict_bsp3": false,
-          "target_types": [
-            "T1",
-            "T1P",
-            "T2",
-            "T2S",
-            "T3A",
-            "T3B"
-          ],
-          "tmp_target_types": [
-            "1",
-            "1p",
-            "2",
-            "2s",
-            "3a",
-            "3b"
-          ]
-        }
-      },
-      "cal_demark": false,
-      "cal_kdj": false,
-      "cal_rsi": false,
-      "demark_config": {
-        "countdown_bias": 2,
-        "countdown_cmp2close": true,
-        "demark_len": 9,
-        "max_countdown": 13,
-        "setup_bias": 4,
-        "setup_cmp2close": true,
-        "tiaokong_st": true
-      },
-      "kdj_cycle": 9,
-      "kl_data_check": true,
-      "macd_config": {
-        "fast": 12,
-        "signal": 9,
-        "slow": 26
-      },
-      "max_kl_inconsistent_cnt": 5,
-      "max_kl_misalgin_cnt": 2,
-      "mean_metrics": [],
-      "print_err_time": true,
-      "print_warning": true,
-      "rsi_cycle": 14,
-      "seg_bs_point_conf": {
-        "b_conf": {
-          "bs1_peak": true,
-          "bsp1_only_multibi_zs": false,
-          "bsp2_follow_1": true,
-          "bsp2s_follow_2": false,
-          "bsp3_follow_1": true,
-          "bsp3_peak": false,
-          "bsp3a_max_zs_cnt": 1,
-          "divergence_rate": "inf",
-          "macd_algo": "SLOPE",
-          "max_bs2_rate": 0.9999,
-          "max_bsp2s_lv": null,
-          "min_zs_cnt": 1,
-          "strict_bsp3": false,
-          "target_types": [
-            "T1",
-            "T1P",
-            "T2",
-            "T2S",
-            "T3A",
-            "T3B"
-          ],
-          "tmp_target_types": [
-            "1",
-            "1p",
-            "2",
-            "2s",
-            "3a",
-            "3b"
-          ]
+        "boll_n": 20,
+        "bs_point_conf": {
+          "b_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": true,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "PEAK",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 1,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          },
+          "s_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": true,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "PEAK",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 1,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          }
         },
-        "s_conf": {
-          "bs1_peak": true,
-          "bsp1_only_multibi_zs": false,
-          "bsp2_follow_1": true,
-          "bsp2s_follow_2": false,
-          "bsp3_follow_1": true,
-          "bsp3_peak": false,
-          "bsp3a_max_zs_cnt": 1,
-          "divergence_rate": "inf",
-          "macd_algo": "SLOPE",
-          "max_bs2_rate": 0.9999,
-          "max_bsp2s_lv": null,
-          "min_zs_cnt": 1,
-          "strict_bsp3": false,
-          "target_types": [
-            "T1",
-            "T1P",
-            "T2",
-            "T2S",
-            "T3A",
-            "T3B"
-          ],
-          "tmp_target_types": [
-            "1",
-            "1p",
-            "2",
-            "2s",
-            "3a",
-            "3b"
-          ]
+        "cal_demark": false,
+        "cal_kdj": false,
+        "cal_rsi": false,
+        "demark_config": {
+          "countdown_bias": 2,
+          "countdown_cmp2close": true,
+          "demark_len": 9,
+          "max_countdown": 13,
+          "setup_bias": 4,
+          "setup_cmp2close": true,
+          "tiaokong_st": true
+        },
+        "kdj_cycle": 9,
+        "kl_data_check": true,
+        "macd_config": {
+          "fast": 12,
+          "signal": 9,
+          "slow": 26
+        },
+        "max_kl_inconsistent_cnt": 5,
+        "max_kl_misalgin_cnt": 2,
+        "mean_metrics": [],
+        "print_err_time": true,
+        "print_warning": true,
+        "rsi_cycle": 14,
+        "seg_bs_point_conf": {
+          "b_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": false,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "SLOPE",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 1,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          },
+          "s_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": false,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "SLOPE",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 1,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          }
+        },
+        "seg_conf": {
+          "left_method": "PEAK",
+          "seg_algo": "chan"
+        },
+        "skip_step": 0,
+        "trend_metrics": [],
+        "trigger_step": true,
+        "zs_conf": {
+          "need_combine": true,
+          "one_bi_zs": false,
+          "zs_algo": "normal",
+          "zs_combine_mode": "zs"
         }
-      },
-      "seg_conf": {
-        "left_method": "PEAK",
-        "seg_algo": "chan"
-      },
-      "skip_step": 0,
-      "trend_metrics": [],
-      "trigger_step": true,
-      "zs_conf": {
-        "need_combine": true,
-        "one_bi_zs": false,
-        "zs_algo": "normal",
-        "zs_combine_mode": "zs"
+      }
+    },
+    "expanded": {
+      "rule_profile": "strict",
+      "signal_scope": "expanded",
+      "calculation_id": "3a020f6175eb2388d22a152b696244b2d1a170203b382badd514612bcdce0727",
+      "schema_version": "chanpy_v2",
+      "effective_config": {
+        "auto_skip_illegal_sub_lv": false,
+        "bi_conf": {
+          "bi_algo": "normal",
+          "bi_allow_sub_peak": true,
+          "bi_end_is_peak": true,
+          "bi_fx_check": "STRICT",
+          "gap_as_kl": false,
+          "is_strict": true
+        },
+        "boll_n": 20,
+        "bs_point_conf": {
+          "b_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": true,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "PEAK",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 0,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          },
+          "s_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": true,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "PEAK",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 0,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          }
+        },
+        "cal_demark": false,
+        "cal_kdj": false,
+        "cal_rsi": false,
+        "demark_config": {
+          "countdown_bias": 2,
+          "countdown_cmp2close": true,
+          "demark_len": 9,
+          "max_countdown": 13,
+          "setup_bias": 4,
+          "setup_cmp2close": true,
+          "tiaokong_st": true
+        },
+        "kdj_cycle": 9,
+        "kl_data_check": true,
+        "macd_config": {
+          "fast": 12,
+          "signal": 9,
+          "slow": 26
+        },
+        "max_kl_inconsistent_cnt": 5,
+        "max_kl_misalgin_cnt": 2,
+        "mean_metrics": [],
+        "print_err_time": true,
+        "print_warning": true,
+        "rsi_cycle": 14,
+        "seg_bs_point_conf": {
+          "b_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": false,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "SLOPE",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 1,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          },
+          "s_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": false,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "SLOPE",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 1,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          }
+        },
+        "seg_conf": {
+          "left_method": "PEAK",
+          "seg_algo": "chan"
+        },
+        "skip_step": 0,
+        "trend_metrics": [],
+        "trigger_step": true,
+        "zs_conf": {
+          "need_combine": true,
+          "one_bi_zs": false,
+          "zs_algo": "normal",
+          "zs_combine_mode": "zs"
+        }
       }
     }
   },
   "relaxed": {
-    "rule_profile": "relaxed",
-    "calculation_id": "9cf85df20b2030e130cf91f12dda9a36525568fb26190ffc708a2a1ec32b28fa",
-    "schema_version": "chanpy_v1",
-    "effective_config": {
-      "auto_skip_illegal_sub_lv": false,
-      "bi_conf": {
-        "bi_algo": "normal",
-        "bi_allow_sub_peak": true,
-        "bi_end_is_peak": true,
-        "bi_fx_check": "STRICT",
-        "gap_as_kl": false,
-        "is_strict": false
-      },
-      "boll_n": 20,
-      "bs_point_conf": {
-        "b_conf": {
-          "bs1_peak": true,
-          "bsp1_only_multibi_zs": true,
-          "bsp2_follow_1": true,
-          "bsp2s_follow_2": false,
-          "bsp3_follow_1": true,
-          "bsp3_peak": false,
-          "bsp3a_max_zs_cnt": 1,
-          "divergence_rate": "inf",
-          "macd_algo": "PEAK",
-          "max_bs2_rate": 0.9999,
-          "max_bsp2s_lv": null,
-          "min_zs_cnt": 1,
-          "strict_bsp3": false,
-          "target_types": [
-            "T1",
-            "T1P",
-            "T2",
-            "T2S",
-            "T3A",
-            "T3B"
-          ],
-          "tmp_target_types": [
-            "1",
-            "1p",
-            "2",
-            "2s",
-            "3a",
-            "3b"
-          ]
+    "standard": {
+      "rule_profile": "relaxed",
+      "signal_scope": "standard",
+      "calculation_id": "09eda5844f3039d3ec4654072cd7ee4621361154f98e3905b8b513372ec6aad4",
+      "schema_version": "chanpy_v2",
+      "effective_config": {
+        "auto_skip_illegal_sub_lv": false,
+        "bi_conf": {
+          "bi_algo": "normal",
+          "bi_allow_sub_peak": true,
+          "bi_end_is_peak": true,
+          "bi_fx_check": "STRICT",
+          "gap_as_kl": false,
+          "is_strict": false
         },
-        "s_conf": {
-          "bs1_peak": true,
-          "bsp1_only_multibi_zs": true,
-          "bsp2_follow_1": true,
-          "bsp2s_follow_2": false,
-          "bsp3_follow_1": true,
-          "bsp3_peak": false,
-          "bsp3a_max_zs_cnt": 1,
-          "divergence_rate": "inf",
-          "macd_algo": "PEAK",
-          "max_bs2_rate": 0.9999,
-          "max_bsp2s_lv": null,
-          "min_zs_cnt": 1,
-          "strict_bsp3": false,
-          "target_types": [
-            "T1",
-            "T1P",
-            "T2",
-            "T2S",
-            "T3A",
-            "T3B"
-          ],
-          "tmp_target_types": [
-            "1",
-            "1p",
-            "2",
-            "2s",
-            "3a",
-            "3b"
-          ]
-        }
-      },
-      "cal_demark": false,
-      "cal_kdj": false,
-      "cal_rsi": false,
-      "demark_config": {
-        "countdown_bias": 2,
-        "countdown_cmp2close": true,
-        "demark_len": 9,
-        "max_countdown": 13,
-        "setup_bias": 4,
-        "setup_cmp2close": true,
-        "tiaokong_st": true
-      },
-      "kdj_cycle": 9,
-      "kl_data_check": true,
-      "macd_config": {
-        "fast": 12,
-        "signal": 9,
-        "slow": 26
-      },
-      "max_kl_inconsistent_cnt": 5,
-      "max_kl_misalgin_cnt": 2,
-      "mean_metrics": [],
-      "print_err_time": true,
-      "print_warning": true,
-      "rsi_cycle": 14,
-      "seg_bs_point_conf": {
-        "b_conf": {
-          "bs1_peak": true,
-          "bsp1_only_multibi_zs": false,
-          "bsp2_follow_1": true,
-          "bsp2s_follow_2": false,
-          "bsp3_follow_1": true,
-          "bsp3_peak": false,
-          "bsp3a_max_zs_cnt": 1,
-          "divergence_rate": "inf",
-          "macd_algo": "SLOPE",
-          "max_bs2_rate": 0.9999,
-          "max_bsp2s_lv": null,
-          "min_zs_cnt": 1,
-          "strict_bsp3": false,
-          "target_types": [
-            "T1",
-            "T1P",
-            "T2",
-            "T2S",
-            "T3A",
-            "T3B"
-          ],
-          "tmp_target_types": [
-            "1",
-            "1p",
-            "2",
-            "2s",
-            "3a",
-            "3b"
-          ]
+        "boll_n": 20,
+        "bs_point_conf": {
+          "b_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": true,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "PEAK",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 1,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          },
+          "s_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": true,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "PEAK",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 1,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          }
         },
-        "s_conf": {
-          "bs1_peak": true,
-          "bsp1_only_multibi_zs": false,
-          "bsp2_follow_1": true,
-          "bsp2s_follow_2": false,
-          "bsp3_follow_1": true,
-          "bsp3_peak": false,
-          "bsp3a_max_zs_cnt": 1,
-          "divergence_rate": "inf",
-          "macd_algo": "SLOPE",
-          "max_bs2_rate": 0.9999,
-          "max_bsp2s_lv": null,
-          "min_zs_cnt": 1,
-          "strict_bsp3": false,
-          "target_types": [
-            "T1",
-            "T1P",
-            "T2",
-            "T2S",
-            "T3A",
-            "T3B"
-          ],
-          "tmp_target_types": [
-            "1",
-            "1p",
-            "2",
-            "2s",
-            "3a",
-            "3b"
-          ]
+        "cal_demark": false,
+        "cal_kdj": false,
+        "cal_rsi": false,
+        "demark_config": {
+          "countdown_bias": 2,
+          "countdown_cmp2close": true,
+          "demark_len": 9,
+          "max_countdown": 13,
+          "setup_bias": 4,
+          "setup_cmp2close": true,
+          "tiaokong_st": true
+        },
+        "kdj_cycle": 9,
+        "kl_data_check": true,
+        "macd_config": {
+          "fast": 12,
+          "signal": 9,
+          "slow": 26
+        },
+        "max_kl_inconsistent_cnt": 5,
+        "max_kl_misalgin_cnt": 2,
+        "mean_metrics": [],
+        "print_err_time": true,
+        "print_warning": true,
+        "rsi_cycle": 14,
+        "seg_bs_point_conf": {
+          "b_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": false,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "SLOPE",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 1,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          },
+          "s_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": false,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "SLOPE",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 1,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          }
+        },
+        "seg_conf": {
+          "left_method": "PEAK",
+          "seg_algo": "chan"
+        },
+        "skip_step": 0,
+        "trend_metrics": [],
+        "trigger_step": true,
+        "zs_conf": {
+          "need_combine": true,
+          "one_bi_zs": false,
+          "zs_algo": "normal",
+          "zs_combine_mode": "zs"
         }
-      },
-      "seg_conf": {
-        "left_method": "PEAK",
-        "seg_algo": "chan"
-      },
-      "skip_step": 0,
-      "trend_metrics": [],
-      "trigger_step": true,
-      "zs_conf": {
-        "need_combine": true,
-        "one_bi_zs": false,
-        "zs_algo": "normal",
-        "zs_combine_mode": "zs"
+      }
+    },
+    "expanded": {
+      "rule_profile": "relaxed",
+      "signal_scope": "expanded",
+      "calculation_id": "61651b6bff65bf80497222f3f9cd0b0fe23f5eefd351b4fb553462261e414b28",
+      "schema_version": "chanpy_v2",
+      "effective_config": {
+        "auto_skip_illegal_sub_lv": false,
+        "bi_conf": {
+          "bi_algo": "normal",
+          "bi_allow_sub_peak": true,
+          "bi_end_is_peak": true,
+          "bi_fx_check": "STRICT",
+          "gap_as_kl": false,
+          "is_strict": false
+        },
+        "boll_n": 20,
+        "bs_point_conf": {
+          "b_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": true,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "PEAK",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 0,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          },
+          "s_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": true,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "PEAK",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 0,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          }
+        },
+        "cal_demark": false,
+        "cal_kdj": false,
+        "cal_rsi": false,
+        "demark_config": {
+          "countdown_bias": 2,
+          "countdown_cmp2close": true,
+          "demark_len": 9,
+          "max_countdown": 13,
+          "setup_bias": 4,
+          "setup_cmp2close": true,
+          "tiaokong_st": true
+        },
+        "kdj_cycle": 9,
+        "kl_data_check": true,
+        "macd_config": {
+          "fast": 12,
+          "signal": 9,
+          "slow": 26
+        },
+        "max_kl_inconsistent_cnt": 5,
+        "max_kl_misalgin_cnt": 2,
+        "mean_metrics": [],
+        "print_err_time": true,
+        "print_warning": true,
+        "rsi_cycle": 14,
+        "seg_bs_point_conf": {
+          "b_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": false,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "SLOPE",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 1,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          },
+          "s_conf": {
+            "bs1_peak": true,
+            "bsp1_only_multibi_zs": false,
+            "bsp2_follow_1": true,
+            "bsp2s_follow_2": false,
+            "bsp3_follow_1": true,
+            "bsp3_peak": false,
+            "bsp3a_max_zs_cnt": 1,
+            "divergence_rate": "inf",
+            "macd_algo": "SLOPE",
+            "max_bs2_rate": 0.9999,
+            "max_bsp2s_lv": null,
+            "min_zs_cnt": 1,
+            "strict_bsp3": false,
+            "target_types": [
+              "T1",
+              "T1P",
+              "T2",
+              "T2S",
+              "T3A",
+              "T3B"
+            ],
+            "tmp_target_types": [
+              "1",
+              "1p",
+              "2",
+              "2s",
+              "3a",
+              "3b"
+            ]
+          }
+        },
+        "seg_conf": {
+          "left_method": "PEAK",
+          "seg_algo": "chan"
+        },
+        "skip_step": 0,
+        "trend_metrics": [],
+        "trigger_step": true,
+        "zs_conf": {
+          "need_combine": true,
+          "one_bi_zs": false,
+          "zs_algo": "normal",
+          "zs_combine_mode": "zs"
+        }
       }
     }
   }

@@ -186,8 +186,9 @@
     return Date.parse(dt.replace(' ', 'T') + 'Z') / 1000;
   }
 
-  var state = { code: null, freq: 'day', ruleProfile: 'strict', watchlist: [], quotes: {} };
+  var state = { code: null, freq: 'day', ruleProfile: 'strict', signalScope: 'expanded', watchlist: [], quotes: {} };
   try { if (localStorage.getItem('chanapp-rule-profile') === 'relaxed') state.ruleProfile = 'relaxed'; } catch (_) {}
+  try { if (localStorage.getItem('chanapp-signal-scope') === 'standard') state.signalScope = 'standard'; } catch (_) {}
   (function () {
     var qs = new URLSearchParams(location.search);
     if (qs.get('code')) state.code = qs.get('code');
@@ -649,14 +650,8 @@
       color: P.gold, lineWidth: 2, crosshairMarkerVisible: false,
       lastValueVisible: false, priceLineVisible: false,
     });
-    var formingSeries = main.addSeries(LW.LineSeries, {
-      color: P.biForming, lineWidth: 1, lineStyle: LW.LineStyle.Dashed,
-      crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
-    });
-    var formingXdSeries = main.addSeries(LW.LineSeries, {
-      color: P.goldA, lineWidth: 2, lineStyle: LW.LineStyle.Dashed,
-      crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
-    });
+    // forming 笔/段互不相交，逐条独立 series（renderChart 里按数据重建），
+    // 不能像确认结构那样拼成单条折线——否则不相交的段之间会被直线连接。
 
     var zsOverlay = makeZsOverlay(el('chart'), main, candleSeries);
 
@@ -686,7 +681,7 @@
     charts = {
       main: main, macdChart: macdChart, candleSeries: candleSeries,
       volumeSeries: volumeSeries, biSeries: biSeries, xdSeries: xdSeries,
-      formingSeries: formingSeries, formingXdSeries: formingXdSeries,
+      formingBiSegs: [], formingXdSegs: [],
       zsOverlay: zsOverlay, markers: markers, channelSeries: [],
     };
     return charts;
@@ -704,8 +699,8 @@
     charts.candleSeries.applyOptions({ upColor: P.up, downColor: P.down, wickUpColor: P.up, wickDownColor: P.down });
     charts.biSeries.applyOptions({ color: P.bi });
     charts.xdSeries.applyOptions({ color: P.gold });
-    charts.formingSeries.applyOptions({ color: P.biForming });
-    charts.formingXdSeries.applyOptions({ color: P.goldA });
+    charts.formingBiSegs.forEach(function (s) { s.applyOptions({ color: P.biForming }); });
+    charts.formingXdSegs.forEach(function (s) { s.applyOptions({ color: P.goldA }); });
     Object.keys(maSeries).forEach(function (n) { maSeries[n].applyOptions({ color: P['ma' + n] }); });
     // 成交量/信号箭头/中枢/通道/背驰线/副图：走同一渲染路径换色，不重置可视区间
     if (lastChartData) renderChart(lastChartData, { resetRange: false });
@@ -895,7 +890,8 @@
     (list || []).forEach(function (lv) {
       var html = '<span class="lv">' + esc(FREQ_NAME[lv.freq] || lv.freq) + '</span>';
       (lv.signals || []).forEach(function (s) {
-        html += '<span class="sig-' + (s.side === 'buy' ? 'b' : 's') + '">' +
+        html += '<span class="sig-' + (s.side === 'buy' ? 'b' : 's') +
+          (s.status === 'provisional' ? ' prov' : '') + '">' +
           esc((s.level === 'seg' ? '' : '笔 ') + signalLabel(s)) + '</span> ' + esc(fmtBarTime(s.dt));
       });
       if (!(lv.signals || []).length) {
@@ -917,6 +913,13 @@
       (s.status === 'provisional' ? ' · 形成中' : '');
   }
 
+  // 图上标记用短文本（~ 前缀表形成中），长文案留给共振条和依据卡
+  function signalMarkerText(s) {
+    var prefix = s.side === 'buy' ? 'B' : 'S';
+    return (s.level === 'seg' ? '段 ' : '') + (s.status === 'provisional' ? '~' : '') +
+      (s.types || []).map(function (t) { return prefix + t; }).join('/');
+  }
+
   function signalColor(s) {
     var color = s.level === 'seg' ? P.gold : (s.side === 'buy' ? P.up : P.down);
     return s.status === 'provisional' ? hexA(color, 0.45) : color;
@@ -930,7 +933,7 @@
         position: buy ? 'belowBar' : 'aboveBar',
         shape: buy ? 'arrowUp' : 'arrowDown',
         color: signalColor(s),
-        text: signalLabel(s),
+        text: signalMarkerText(s),
         size: s.level === 'seg' ? 2 : 1,
       };
     }).sort(function (a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
@@ -1064,12 +1067,14 @@
 
   var pendingAnalysis = null, activeChartVersion = null;
   var analysisIdentity = null, analysisInFlight = false;
-  function acceptsRule(body, profile) {
+  var ruleSwitchNote = null;  // 成笔标准刚切换时的面板提示，由下一次 loadAnalysis 消费
+  function acceptsRule(body, profile, scope) {
     return profile === state.ruleProfile && body.rule_profile === profile &&
-      body.schema_version === 'chanpy_v1' && typeof body.calculation_id === 'string' && !!body.calculation_id;
+      scope === state.signalScope && body.signal_scope === scope &&
+      body.schema_version === 'chanpy_v2' && typeof body.calculation_id === 'string' && !!body.calculation_id;
   }
   function currentAnalysisIdentity() {
-    return JSON.stringify([state.code, state.ruleProfile, supplyState.scheme || '', supplyState.epoch || '', supplyState.generation]);
+    return JSON.stringify([state.code, state.ruleProfile, state.signalScope, supplyState.scheme || '', supplyState.epoch || '', supplyState.generation]);
   }
   function updateAnalysisFreshness() {
     var note = el('aiDataStatus'), chart = activeChartVersion;
@@ -1104,13 +1109,14 @@
 
   function loadAnalysis(options) {
     if (supplyBusy) return;
-    var generation = supplyState.generation, epoch = supplyState.epoch, profile = state.ruleProfile;
+    var generation = supplyState.generation, epoch = supplyState.epoch, profile = state.ruleProfile, scope = state.signalScope;
     if (!state.code) { el('aiPanel').innerHTML = ''; return; }
     var identity = currentAnalysisIdentity();
     if (identity === analysisIdentity && (analysisInFlight || !(options && options.refresh))) return;
     if (identity !== analysisIdentity) {
       pendingAnalysis = null;
-      el('aiPanel').innerHTML = '<div class="ai-note">加载中…</div>';
+      el('aiPanel').innerHTML = '<div class="ai-note">' + (ruleSwitchNote || '加载中…') + '</div>';
+      ruleSwitchNote = null;
     }
     analysisIdentity = identity;
     analysisInFlight = true;
@@ -1123,13 +1129,19 @@
     var timer = setTimeout(function () {
       ctl.abort(new Error('analysis timeout'));
     }, ANALYSIS_TIMEOUT_MS);
-    fetch('/api/analysis?code=' + encodeURIComponent(state.code) + '&freq=day&rule_profile=' + encodeURIComponent(profile), { signal: ctl.signal })
+    fetch('/api/analysis?code=' + encodeURIComponent(state.code) + '&freq=day&rule_profile=' + encodeURIComponent(profile) + '&signal_scope=' + encodeURIComponent(scope), { signal: ctl.signal })
       .then(function (r) {
         if (!r.ok) throw new Error('analysis ' + r.status);
         return r.json();
       })
       .then(function (j) {
-        if (ctl !== analysisAbort || identity !== currentAnalysisIdentity() || !acceptsRule(j, profile) || !eligible(generation, j, epoch)) return;
+        if (ctl !== analysisAbort || identity !== currentAnalysisIdentity()) return;
+        if (!acceptsRule(j, profile, scope)) {  // 规则身份不匹配：显式提示，不静默停在加载态
+          analysisIdentity = null;
+          el('aiPanel').innerHTML = '<div class="ai-note">分析响应与当前成笔标准或提示范围不一致，请刷新</div>';
+          return;
+        }
+        if (!eligible(generation, j, epoch)) return;
         if (j.status === 'ok') { queueAnalysis(j); return; }
         return fetchAnalysisSample().then(function (s) { if (ctl === analysisAbort && identity === currentAnalysisIdentity()) renderAnalysis(s, 'unconfigured'); });
       })
@@ -1169,6 +1181,8 @@
       '复权口径：' + meta.fqf,
       '抓取时间：' + meta.fetch_time + cacheBadge(meta),
       'K线：' + meta.bars + ' 根（' + meta.first_dt + ' ~ ' + meta.last_dt + '）',
+      '成笔标准：' + (state.ruleProfile === 'relaxed' ? '宽松' : '严格') + '（买卖点按上游形态规则计算）',
+      '提示范围：' + (state.signalScope === 'standard' ? '标准' : '扩展'),
     ];
     bar.innerHTML = parts.map(function (p) { return '<span>' + p + '</span>'; }).join('');
     if (meta.degraded) {
@@ -1330,13 +1344,23 @@
       return { time: toTime(b.time), value: b.volume, color: b.close >= b.open ? P.upA : P.downA };
     }));
 
-    // 笔：端点连续（zigzag），单线即可；雏形笔虚线
+    // 笔：端点连续（zigzag），单线即可；forming 笔/段逐条独立虚线 series
     c.biSeries.setData(segsToPoints(data.structure.bi.filter(function (s) { return !s.forming; })));
     var xdConfirmed = data.structure.xd.filter(function (s) { return !s.forming; });
-    var xdForming = data.structure.xd.filter(function (s) { return s.forming; });
     c.xdSeries.setData(segsToPoints(xdConfirmed));
-    c.formingXdSeries.setData(segsToPoints(xdForming));
-    c.formingSeries.setData(segsToPoints(data.structure.bi.filter(function (s) { return s.forming; })));
+    function setFormingSegs(key, segs, color, width) {
+      c[key].forEach(function (s) { c.main.removeSeries(s); });
+      c[key] = segs.map(function (b) {
+        var s = c.main.addSeries(LightweightCharts.LineSeries, {
+          color: color, lineWidth: width, lineStyle: LightweightCharts.LineStyle.Dashed,
+          crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+        });
+        s.setData([{ time: toTime(b.dt0), value: b.y0 }, { time: toTime(b.dt1), value: b.y1 }]);
+        return s;
+      });
+    }
+    setFormingSegs('formingXdSegs', data.structure.xd.filter(function (s) { return s.forming; }), P.goldA, 2);
+    setFormingSegs('formingBiSegs', data.structure.bi.filter(function (s) { return s.forming; }), P.biForming, 1);
 
     c.zsOverlay.setBoxes(data.structure.zs.map(function (z) {
       return { t0: toTime(z.dt0), t1: toTime(z.dt1), zg: z.zg, zd: z.zd };
@@ -1352,6 +1376,8 @@
       ['upper', 'lower'].forEach(function (k) {
         var r = ch[k];
         var s = c.main.addSeries(LightweightCharts.LineSeries, {
+          // 延长轨只作几何参考，不让投影端点挤压实际价格范围。
+          autoscaleInfoProvider: function () { return null; },
           color: P.goldA,
           lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed,
           crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
@@ -1385,7 +1411,7 @@
 
   function load(options) {
     if (supplyBusy || !state.code) return;
-    var generation = supplyState.generation, epoch = supplyState.epoch, profile = state.ruleProfile;
+    var generation = supplyState.generation, epoch = supplyState.epoch, profile = state.ruleProfile, scope = state.signalScope;
     activeChartVersion = null;
     updateAnalysisFreshness();
     ensureCharts();
@@ -1399,13 +1425,20 @@
     var timer = setTimeout(function () {
       ctl.abort(new Error('加载超时（25s）'));
     }, CHART_TIMEOUT_MS);
-    fetch('/api/chart?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq + '&rule_profile=' + encodeURIComponent(profile), { signal: ctl.signal })
+    fetch('/api/chart?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq + '&rule_profile=' + encodeURIComponent(profile) + '&signal_scope=' + encodeURIComponent(scope), { signal: ctl.signal })
       .then(function (r) {
         if (!r.ok) return r.json().then(function (j) { throw new Error(j.detail || r.status); });
         return r.json();
       })
       .then(function (data) {
-        if (ctl !== chartAbort || !acceptsRule(data, profile) || !eligible(generation, data, epoch)) return;
+        if (ctl !== chartAbort) return;
+        if (!acceptsRule(data, profile, scope)) {  // 规则身份不匹配：显式报错并解除遮罩，不静默停在加载态
+          el('center').classList.remove('supply-loading');
+          setStatus('加载失败');
+          showChartError('响应与当前成笔标准或提示范围不一致，请刷新');
+          return;
+        }
+        if (!eligible(generation, data, epoch)) return;
         var saved = supplyRange && supplyRange.code === state.code && supplyRange.freq === state.freq && supplyRange.range;
         renderChart(data, { resetRange: !saved });
         if (saved) {
@@ -1423,6 +1456,7 @@
       .catch(function (e) {
         if (e && e.name === 'AbortError') return;  // 被新请求中止，静默
         if (ctl !== chartAbort) return;            // 旧请求（超时等）：已有新请求接管
+        el('center').classList.remove('supply-loading');  // 失败也要解除遮罩，露出错误条
         setStatus('加载失败：' + e.message);
         showChartError(e.message);
       })
@@ -1459,21 +1493,46 @@
   el('themeBtn').addEventListener('click', function () {
     applyTheme(theme === 'light' ? 'dark' : 'light');
   });
-  el('ruleProfile').value = state.ruleProfile;
-  el('ruleProfile').onchange = function () {
-    var profile = el('ruleProfile').value;
+  function syncRuleControl() {
+    Array.prototype.forEach.call(el('ruleProfile').querySelectorAll('button'), function (b) {
+      b.classList.toggle('active', b.dataset.profile === state.ruleProfile);
+    });
+    Array.prototype.forEach.call(el('signalScope').querySelectorAll('button'), function (b) {
+      b.classList.toggle('active', b.dataset.scope === state.signalScope);
+    });
+  }
+  syncRuleControl();
+  el('ruleProfile').addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (!b) return;
+    var profile = b.dataset.profile;
     if (profile !== 'strict' && profile !== 'relaxed' || profile === state.ruleProfile) return;
-    supplyRange = charts ? {code: state.code, freq: state.freq, range: charts.main.timeScale().getVisibleRange()} : null;
     state.ruleProfile = profile;
     try { localStorage.setItem('chanapp-rule-profile', profile); } catch (_) {}
+    reloadRuleSelection('成笔标准');
+  });
+  el('signalScope').addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (!b) return;
+    var scope = b.dataset.scope;
+    if (scope !== 'standard' && scope !== 'expanded' || scope === state.signalScope) return;
+    state.signalScope = scope;
+    try { localStorage.setItem('chanapp-signal-scope', scope); } catch (_) {}
+    reloadRuleSelection('提示范围');
+  });
+  function reloadRuleSelection(label) {
+    supplyRange = charts ? {code: state.code, freq: state.freq, range: charts.main.timeScale().getVisibleRange()} : null;
     if (analysisAbort) analysisAbort.abort();
     analysisAbort = null; analysisIdentity = null; analysisInFlight = false;
     pendingAnalysis = null; activeChartVersion = null; lastChartData = null;
-    renderEvidence([]); el('resonance').innerHTML = '';
-    el('aiPanel').innerHTML = '<div class="ai-note">成笔标准已切换，分析待更新…</div>';
+    syncRuleControl();
+    el('cards').innerHTML = '<div class="card"><span class="text">加载中…</span></div>';
+    el('resonance').innerHTML = '';
+    ruleSwitchNote = label + '已切换，分析待更新…';
+    el('aiPanel').innerHTML = '<div class="ai-note">' + ruleSwitchNote + '</div>';
     el('center').classList.add('supply-loading');
     load();
-  };
+  }
   el('aiRefresh').onclick = function () { loadAnalysis({refresh:true}); };
   wireMaSeg();
   wireSubSeg();

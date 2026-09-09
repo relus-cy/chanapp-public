@@ -21,13 +21,13 @@ RESONANCE_FREQS = ("day", "m60", "m30")
 
 
 def _level_summary(code: str, freq: str,
-                   get_bars_fn: Callable | None = None, rule_profile: str = "strict") -> dict | None:
+                   get_bars_fn: Callable | None = None, rule_profile: str = "strict", signal_scope: str = "expanded") -> dict | None:
     """单周期摘要：最新笔/段原生点位及状态、最新中枢。
 
     优先复用 compute_cache（完整数据版本一致才命中），否则现算并回填；
     取数或计算失败返回 None（该级角标缺省）。
     """
-    identity = profile_identity(rule_profile)
+    identity = profile_identity(rule_profile, signal_scope)
     try:
         dataset = (get_bars_fn or engine_data.get_bars)(code, freq)
         bars = dataset["bars"]
@@ -38,7 +38,7 @@ def _level_summary(code: str, freq: str,
         if cached is not None:
             structure, sig = cached["structure"], cached["sig"]
         else:
-            structure = engine_structure.compute_structure(bars, code, freq, rule_profile=rule_profile)
+            structure = engine_structure.compute_structure(bars, code, freq, rule_profile=rule_profile, signal_scope=signal_scope)
             sig = engine_signals.compute_signals(bars, structure)
             # evidence 必须一并算好：/api/analysis 命中同一缓存时直接复用
             evidence = engine_evidence.build_evidence(sig["signals"], structure)
@@ -59,14 +59,14 @@ def _level_summary(code: str, freq: str,
         return None
 
 
-def _resonance(code: str, get_bars_fn: Callable | None = None, rule_profile: str = "strict") -> list[dict]:
+def _resonance(code: str, get_bars_fn: Callable | None = None, rule_profile: str = "strict", signal_scope: str = "expanded") -> list[dict]:
     """三级别并行摘要（pool.map 保序）；单级失败返回 None → 该级缺省，不拖垮主响应。"""
     snapshot = supply.current()
     permit = supply.capture_write_permit()
 
     def summarize(freq):
         with supply.use(snapshot, permit):
-            return _level_summary(code, freq, get_bars_fn, rule_profile)
+            return _level_summary(code, freq, get_bars_fn, rule_profile, signal_scope)
 
     with ThreadPoolExecutor(max_workers=len(RESONANCE_FREQS),
                             thread_name_prefix="resonance") as pool:
@@ -77,13 +77,13 @@ def _resonance(code: str, get_bars_fn: Callable | None = None, rule_profile: str
 
 def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
                         get_bars_fn: Callable | None = None,
-                        timings: dict | None = None, rule_profile: str = "strict") -> dict:
+                        timings: dict | None = None, rule_profile: str = "strict", signal_scope: str = "expanded") -> dict:
     """组装 chart 响应体（与 /api/chart 返回逐字段一致）。
 
     dataset 为 None 时调 get_bars_fn（未给则 engine.data.get_bars）现取；
     异常不捕获，由调用方处理。timings 给 dict 时回填 compute_ms/resonance_ms。
     """
-    identity = profile_identity(rule_profile)
+    identity = profile_identity(rule_profile, signal_scope)
     snapshot = supply.current()
     if dataset is None:
         with supply.use(snapshot):
@@ -95,7 +95,7 @@ def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
         data_version = engine_compute_cache.dataset_version(dataset)
     cached = engine_compute_cache.get(code, freq, data_version, identity["calculation_id"])
     if cached is None:
-        structure = engine_structure.compute_structure(bars, code, freq, rule_profile=rule_profile)
+        structure = engine_structure.compute_structure(bars, code, freq, rule_profile=rule_profile, signal_scope=signal_scope)
         sig = engine_signals.compute_signals(bars, structure)
         evidence = engine_evidence.build_evidence(sig["signals"], structure)
         engine_compute_cache.put(code, freq, data_version, structure, sig, evidence,
@@ -115,8 +115,6 @@ def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
          "dea": round(macd["dea"][i], 4), "hist": round(macd["hist"][i], 4)}
         for i, b in enumerate(bars)
     ]
-    # No synthetic links for native morphology points.
-    beichi_links = []
 
     meta = {k: v for k, v in dataset.items() if k not in ("bars",)}
     meta.update(scheme=snapshot.scheme, generation=snapshot.generation, epoch=snapshot.epoch, data_version=data_version)
@@ -136,7 +134,7 @@ def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
     ]
 
     with supply.use(snapshot):
-        resonance = _resonance(code, get_bars_fn, rule_profile)
+        resonance = _resonance(code, get_bars_fn, rule_profile, signal_scope)
     t_res = time.monotonic()
     if timings is not None:
         timings["compute_ms"] = int((t_compute - t0) * 1000)
@@ -146,7 +144,7 @@ def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
         "scheme": snapshot.scheme,
         "generation": snapshot.generation, "epoch": snapshot.epoch,
         "kline": kline,
-        "macd": {"rows": macd_rows, "beichi_links": beichi_links},
+        "macd": {"rows": macd_rows},
         "structure": {
             "bi": structure["bi"],
             "xd": structure["xd"],

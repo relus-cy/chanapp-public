@@ -42,7 +42,8 @@ class CoreContractTest(unittest.TestCase):
         from chanapp.engine.chanpy_profiles import effective_config, profile_identity
         snapshots=json.loads((Path(__file__).parents[1]/'engine/chanpy_vendor/PROFILE_SNAPSHOTS.json').read_text())
         for mode in ('strict','relaxed'):
-            self.assertEqual(snapshots[mode],{**profile_identity(mode),'effective_config':effective_config(mode)})
+            for scope in ('standard', 'expanded'):
+                self.assertEqual(snapshots[mode][scope], {**profile_identity(mode, scope), 'effective_config':effective_config(mode, scope)})
 
     def test_inclusion_equal_extremes_gaps_and_mirror(self):
         from datetime import datetime, timedelta
