@@ -44,12 +44,15 @@ class TestResonance(unittest.TestCase):
         res = r.json()["resonance"]
         self.assertEqual([x["freq"] for x in res], ["day", "m60", "m30"])
         for lv in res:
-            self.assertIn("signal", lv)
+            self.assertIn("signals", lv)
             self.assertIn("zs", lv)
-            self.assertIn("forming_signal", lv)
-            if lv["signal"] is not None:
-                self.assertIn("label", lv["signal"])
-                self.assertIn("dt", lv["signal"])
+            self.assertIn("calculation_id", lv)
+            self.assertLessEqual(len(lv["signals"]), 2)
+            for point in lv["signals"]:
+                self.assertIn("label", point)
+                self.assertIn("dt", point)
+                self.assertIn(point["level"], ("bi", "seg"))
+                self.assertIn(point["status"], ("confirmed", "provisional"))
             if lv["zs"] is not None:
                 self.assertIsInstance(lv["zs"]["inside"], bool)
                 self.assertGreater(lv["zs"]["zg"], lv["zs"]["zd"])

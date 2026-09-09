@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from chanapp.engine import warmer
+from chanapp.engine import supply, warmer
 
 
 class TestWarmOnce(unittest.TestCase):
@@ -32,6 +32,22 @@ class TestWarmOnce(unittest.TestCase):
         self.assertEqual(len(self.calls), 6)
         self.assertIn(("hk00700", "m30"), self.calls)
 
+    def test_round_keeps_snapshot_when_global_scheme_changes(self):
+        manager = supply.Manager(Path(self._tmp.name) / 'supply.json')
+        observed = []
+
+        def get_bars(code, freq):
+            observed.append(supply.current())
+            if len(observed) == 1:
+                supply.switch('primary_candidate', 0, lambda _: {})
+
+        with mock.patch.object(supply, '_default_manager', manager):
+            result = warmer.warm_once(now=datetime(2026, 8, 25, 10, 30),
+                                      get_bars_fn=get_bars)
+            self.assertEqual(result['ok'], 6)
+            self.assertEqual(observed, [supply.Snapshot('baseline', 0)] * 6)
+            self.assertEqual(supply.current(), supply.Snapshot('primary_candidate', 1))
+
     def test_outside_session_skips(self):
         r = warmer.warm_once(now=datetime(2026, 8, 23, 10, 30),  # 周日
                              get_bars_fn=self._gb)
@@ -47,6 +63,29 @@ class TestWarmOnce(unittest.TestCase):
         r = warmer.warm_once(now=datetime(2026, 8, 25, 10, 30), get_bars_fn=gb)
         self.assertEqual(r["ok"], 4)
         self.assertEqual(len(r["errors"]), 2)
+
+    def test_obsolete_round_stops_early(self):
+        try:
+            from chanapp.engine import cache_store
+        except ImportError:
+            self.skipTest('versioned cache store is not installed (public demo)')
+        def gb(code, freq):
+            if self.calls:
+                raise cache_store.ObsoletePublication()
+            self.calls.append((code, freq))
+
+        r = warmer.warm_once(now=datetime(2026, 8, 25, 10, 30), get_bars_fn=gb)
+        self.assertTrue(r["obsolete"])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_cache_retention_runs_at_most_once_a_day(self):
+        calls = []
+        self.addCleanup(setattr, warmer, '_last_gc', warmer._last_gc)
+        warmer._last_gc = -100000.0
+        self.assertTrue(warmer._maybe_collect(1000.0, lambda: calls.append(1)))
+        self.assertFalse(warmer._maybe_collect(1000.0 + 3600, lambda: calls.append(1)))
+        self.assertTrue(warmer._maybe_collect(1000.0 + 90000, lambda: calls.append(1)))
+        self.assertEqual(len(calls), 2)
 
 
 class TestStartGuard(unittest.TestCase):

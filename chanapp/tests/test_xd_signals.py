@@ -1,80 +1,33 @@
-"""段级（线段级）信号金标准回归（离线 fixture 驱动，不打外网）。
-
-金标准数值来自 tmp/chan-validation/chanlun_*_m30_beichi_summary.json 的
-xd_strict_json_only 段（已验证事实）：xd 当 bi 走 v2 背驰判定（无上级线段，
-锚点即相邻同向线段），label 加 "段:" 前缀。
-
-structure 输出新增 zs_xd（观察者「中枢序列」，即线段中枢）；
-signals 返回 dict 新增分组键 xd_beichi / xd_b23，同时段级信号并入合并
-signals 列表（label 形如 段:S1 / 段:B1a / 段:B2 ...）。
-"""
-import csv
+"""Multi-type native points remain one point and retain their level."""
 import unittest
-from pathlib import Path
+from types import SimpleNamespace
+from chanapp.engine.chanpy_adapter import normalize_points
+from chanapp.engine.chanpy_profiles import make_config
+from chanapp.engine.chanpy_vendor.Common.CEnum import BSP_TYPE
 
-from chanapp.engine.signals import compute_signals
-from chanapp.engine.structure import compute_structure
+class TestNativePointMapping(unittest.TestCase):
+    def test_multitype_both_levels_and_sides(self):
+        for level in ('bi','seg'):
+            for buy in (True,False):
+                line=SimpleNamespace(idx=4,is_sure=True,get_end_val=lambda:12.)
+                point=SimpleNamespace(klu=SimpleNamespace(idx=0),bi=line,is_buy=buy,
+                    type=[BSP_TYPE.T1P,BSP_TYPE.T2],relate_bsp1=None,features={'native_value':2.})
+                points=SimpleNamespace(last_sure_pos=0,getSortedBspList=lambda:[point])
+                config=make_config()
+                result=normalize_points(points,[{'dt':'2026-01-01'}],level,
+                    config.bs_point_conf if level=='bi' else config.seg_bs_point_conf)
+                self.assertEqual(len(result),1)
+                self.assertEqual(result[0]['types'],['1p','2'])
+                self.assertEqual(result[0]['level'],level)
+                self.assertEqual(result[0]['side'],'buy' if buy else 'sell')
+                self.assertEqual(result[0]['macd_algo'],'peak' if level=='bi' else 'slope')
+                self.assertEqual(result[0]['status'],'confirmed')
 
-FIX_DIR = Path(__file__).parent / "fixtures"
-
-
-def _load(name: str) -> dict:
-    with open(FIX_DIR / name, encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    bars = [
-        {"dt": r["dt"], "open": float(r["open"]), "close": float(r["close"]),
-         "high": float(r["high"]), "low": float(r["low"]),
-         "volume": float(r["volume"])}
-        for r in rows
-    ]
-    code = name.split("_")[0]
-    structure = compute_structure(bars, code, "m30")
-    sig = compute_signals(bars, structure)
-    return {"structure": structure, "sig": sig}
-
-
-class TestXdSignals(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.s1 = _load("sh000688_m30.csv")   # 科创50
-        cls.s2 = _load("sz399006_m30.csv")   # 创业板指
-
-    def test_structure_has_zs_xd(self):
-        for s in (self.s1, self.s2):
-            zs_xd = s["structure"]["zs_xd"]
-            self.assertIsInstance(zs_xd, list)
-            for z in zs_xd:
-                for k in ("x0", "x1", "dt0", "dt1", "zg", "zd", "gg", "dd"):
-                    self.assertIn(k, z)
-                self.assertGreaterEqual(z["zg"], z["zd"])
-
-    def test_kc50_xd_beichi_s1(self):
-        hits = [(s["dt"], s["label"]) for s in self.s1["sig"]["xd_beichi"]]
-        self.assertIn(("2026-07-01 10:30", "段:S1"), hits)   # 面积 877.02 vs 1128.04（已验证）
-        hit = next(s for s in self.s1["sig"]["xd_beichi"]
-                   if s["dt"] == "2026-07-01 10:30")
-        self.assertAlmostEqual(hit["area_cur"], 877.02, places=2)
-        self.assertAlmostEqual(hit["area_prev"], 1128.04, places=2)
-        self.assertEqual(hit["side"], "sell")
-
-    def test_cyb_xd_beichi_s1(self):
-        hits = [(s["dt"], s["label"]) for s in self.s2["sig"]["xd_beichi"]]
-        self.assertIn(("2026-06-25 15:00", "段:S1"), hits)   # 面积 916.89 vs 1999.88（已验证）
-        hit = next(s for s in self.s2["sig"]["xd_beichi"]
-                   if s["dt"] == "2026-06-25 15:00")
-        self.assertAlmostEqual(hit["area_cur"], 916.89, places=2)
-        self.assertAlmostEqual(hit["area_prev"], 1999.88, places=2)
-
-    def test_xd_signals_prefixed_and_merged(self):
-        sig = self.s1["sig"]
-        for key in ("xd_beichi", "xd_b23"):
-            for s in sig[key]:
-                self.assertTrue(s["label"].startswith("段:"), s["label"])
-        merged = [(s["dt"], s["label"]) for s in sig["signals"]
-                  if s["label"].startswith("段:")]
-        for s in sig["xd_beichi"] + sig["xd_b23"]:
-            self.assertIn((s["dt"], s["label"]), merged)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_confirmation_requires_both_native_conditions(self):
+        for sure,boundary,expected in ((True,0,'confirmed'),(True,-1,'provisional'),(False,0,'provisional')):
+            line=SimpleNamespace(idx=0,is_sure=sure,get_end_val=lambda:10.)
+            point=SimpleNamespace(klu=SimpleNamespace(idx=0),bi=line,is_buy=True,
+                type=[BSP_TYPE.T1],relate_bsp1=None,features={})
+            points=SimpleNamespace(last_sure_pos=boundary,getSortedBspList=lambda:[point])
+            result=normalize_points(points,[{'dt':'2026-01-01'}],'bi',make_config().bs_point_conf)
+            self.assertEqual(result[0]['status'],expected)

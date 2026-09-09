@@ -3,6 +3,150 @@
 (function () {
   'use strict';
 
+  var supplyState = { epoch: '', generation: null, scheme: 'baseline', options: [], csrf_token: null };
+  var supplyBusy = false, supplyRange = null, supplySync = null, supplySyncAt = 0;
+  var supplyRevision = 0, supplySyncSequence = 0;
+  function eligible(generation, body, epoch) {
+    var received = body && (body.generation != null ? body.generation : body.meta && body.meta.generation);
+    var receivedEpoch = body && (body.epoch || (body.meta && body.meta.epoch)) || '';
+    if (supplyState.generation == null && !receivedEpoch && Number.isInteger(received) && received >= 0) {
+      // A demo may expose versioned business data while its supply endpoint is unavailable.
+      applySupply({generation: received, scheme: body.scheme || (body.meta && body.meta.scheme) || 'baseline'});
+      return false; // Restart all initial requests under the established identity.
+    }
+    if (Number.isInteger(received) && (received !== supplyState.generation || receivedEpoch !== (supplyState.epoch || ''))) syncSupply({force:true});
+    return SupplyUI.accepts({epoch:supplyState.epoch || '',generation:supplyState.generation},
+      {epoch:epoch || '',generation:generation}, body) ||
+      (supplyState.generation == null && generation == null && received == null && !receivedEpoch);
+
+  }
+  function syncSupply(options) {
+    if (supplySync) return supplySync;
+    var force = options && options.force;
+    if (!force && (supplyBusy || Date.now() - supplySyncAt < 5000)) return Promise.resolve();
+    supplySyncAt = Date.now();
+    var startedRevision = supplyRevision, sequence = ++supplySyncSequence, retry = false;
+    supplySync = fetch('/api/supply').then(function (r) {
+      if (!r.ok) throw new Error('状态同步暂不可用');
+      return r.json();
+    }).then(function (j) {
+      if (sequence !== supplySyncSequence || startedRevision !== supplyRevision) { retry = true; return; }
+      el('supplyControl').hidden = false;
+      var sameEpoch = (j.epoch || '') === (supplyState.epoch || '');
+      if (sameEpoch && supplyState.generation != null && j.generation < supplyState.generation) {
+        el('supplyStatus').textContent = '方案状态回退异常，请停止服务并检查恢复状态';
+        return;
+      }
+      if (!sameEpoch || supplyState.generation == null || j.generation > supplyState.generation) {
+        applySupply(j);
+      } else {
+        supplyRevision++;
+        supplyState.options = j.options || [];
+        supplyState.csrf_token = j.csrf_token;
+      }
+    }).catch(function () {
+      el('supplyStatus').textContent = '方案状态同步失败，稍后重试';
+    }).finally(function () {
+      supplySync = null;
+      renderSupply();
+      if (retry) syncSupply({force:true});
+    });
+    return supplySync;
+  }
+  function supplyLabel(scheme) { return scheme === 'baseline' ? '现有方案' : '候选方案'; }
+  function renderSupply() {
+    el('supplyCurrent').textContent = '正在使用：' + supplyLabel(supplyState.scheme);
+    var candidate = supplyState.options.find(function (o) { return o.id === 'primary_candidate'; });
+    el('supplySelect').options[1].disabled = !candidate || !candidate.ready;
+    el('supplySelect').disabled = supplyBusy;
+    el('supplySwitch').disabled = supplyBusy || el('supplySelect').value === supplyState.scheme || !SupplyUI.canSwitch(el('supplySelect').value, supplyState.options);
+    el('supplySwitch').textContent = supplyBusy ? '准备中…' : '切换';
+    el('supplyReasons').textContent = !candidate || !candidate.ready ? '候选方案暂不可用' : '';
+  }
+  function initSupply() {
+    var startedRevision = supplyRevision;
+    return fetch('/api/supply').then(function (r) {
+      if (!r.ok) {
+        var rawGeneration = r.headers && r.headers.get('X-Supply-Generation');
+        var scheme = r.headers && r.headers.get('X-Supply-Scheme');
+        var generation = rawGeneration == null ? null : Number(rawGeneration);
+        if (Number.isInteger(generation) && generation >= 0 && (scheme === 'baseline' || scheme === 'primary_candidate')) {
+          supplyState.generation = generation;
+          supplyState.epoch = r.headers.get('X-Supply-Epoch') || '';
+          supplyRevision++;
+          supplyState.scheme = scheme;
+        }
+        throw new Error('supply unavailable');
+      }
+      return r.json();
+    }).then(function (j) {
+      if (startedRevision !== supplyRevision) { syncSupply({force:true}); return; }
+      supplyState = j;
+      supplyState.epoch = j.epoch || '';
+      supplyRevision++;
+      el('supplyControl').hidden = false;
+      el('supplySelect').value = j.scheme;
+      renderSupply();
+    }).catch(function () { el('supplyControl').hidden = true; });
+  }
+  function applySupply(j) {
+    supplyRange = charts ? {code: state.code, freq: state.freq, range: charts.main.timeScale().getVisibleRange()} : null;
+    if (j.options) supplyState.options = j.options;
+    if (j.csrf_token) supplyState.csrf_token = j.csrf_token;
+    supplyRevision++;
+    supplyState.epoch = j.epoch || '';
+    supplyState.scheme = j.scheme;
+    supplyState.generation = j.generation;
+    if (chartAbort) chartAbort.abort();
+    if (analysisAbort) analysisAbort.abort();
+    chartAbort = analysisAbort = null;
+    state.quotes = {}; f10Last = {code: null, ts: 0}; lastF10 = null;
+    lastChartData = null; lastMeta = null;
+    pendingAnalysis = null; activeChartVersion = null;
+    hideF10Cards(); renderWatchlist(); renderEvidence([]);
+    el('wlStale').hidden = true;
+    el('metaBar').innerHTML = ''; el('resonance').innerHTML = ''; el('ohlc').innerHTML = '';
+    el('aiPanel').innerHTML = '<div class="ai-note">加载中…</div>';
+    el('center').classList.add('supply-loading');
+    supplyBusy = false;
+    el('supplySelect').value = j.scheme;
+    var missing = j.prepared && j.prepared.unavailable || [];
+    el('supplyStatus').textContent = j.durability_warning ? '方案已提交，持久化检查异常，请检查恢复状态' :
+      missing.length ? '已切回现有方案，' + (j.prepared.available ? '部分数据暂不可用' : '当前无可用数据') + '：' +
+        missing.map(function (item) { return item.code + '/' + (item.freq || item.kind); }).join('、') :
+        '已切换至' + supplyLabel(j.scheme);
+    load(); loadQuotes();
+  }
+  function switchSupply() {
+    if (supplyBusy) return;
+    var target = el('supplySelect').value;
+    var requestedEpoch = supplyState.epoch || '';
+    if (!SupplyUI.canSwitch(target, supplyState.options)) return;
+    supplyBusy = true;
+    renderSupply();
+    el('supplyStatus').textContent = '正在准备数据，当前图表继续保留…';
+    fetch('/api/supply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Supply-CSRF': supplyState.csrf_token },
+      body: JSON.stringify({scheme: target, expected_generation: supplyState.generation, expected_epoch: supplyState.epoch, code: state.code, freq: state.freq})
+    }).then(function (r) { return r.json().then(function (j) {
+      if (!r.ok) {
+        var error = new Error(SupplyUI.errorText(r.status));
+        error.conflict = r.status === 409; error.status = r.status; throw error;
+      }
+      return j;
+    }); })
+      .then(function (j) {
+        if ((j.epoch || '') !== requestedEpoch || (supplyState.epoch || '') !== requestedEpoch ||
+            j.generation < supplyState.generation) { return syncSupply({force:true}); }
+        applySupply(j);
+      }).catch(function (e) {
+        el('supplyStatus').textContent = SupplyUI.errorText(e.status);
+        // 409 身份冲突与服务重启后 CSRF 轮换（403）都先做一次权威状态同步
+        if (e.conflict || e.status === 403) return syncSupply({force:true});
+      })
+      .finally(function () { supplyBusy = false; renderSupply(); });
+  }
+
   // ---------- 主题调色板（图表内无法走 CSS 变量，双份维护，数值同 index.html tokens） ----------
 
   var PAL = {
@@ -42,7 +186,8 @@
     return Date.parse(dt.replace(' ', 'T') + 'Z') / 1000;
   }
 
-  var state = { code: null, freq: 'day', watchlist: [], quotes: {} };
+  var state = { code: null, freq: 'day', ruleProfile: 'strict', watchlist: [], quotes: {} };
+  try { if (localStorage.getItem('chanapp-rule-profile') === 'relaxed') state.ruleProfile = 'relaxed'; } catch (_) {}
   (function () {
     var qs = new URLSearchParams(location.search);
     if (qs.get('code')) state.code = qs.get('code');
@@ -51,11 +196,10 @@
   var charts = null; // {main, macdChart, candleSeries, ...}
   var chartAbort = null, analysisAbort = null;
   var CHART_TIMEOUT_MS = 25000;     // 冷取数正常 ~8s；25s 在病理性兜底链前切断
-  var ANALYSIS_TIMEOUT_MS = 35000;  // 盖过后端 LLM 30s 上限
+  var ANALYSIS_TIMEOUT_MS = 150000; // 覆盖可配置的 LLM 最长 120s 及联合数据准备
   var klineData = [];    // 当前 K 线原始数据（time 为原始字符串，供图例/指标计算）
   var klineByTime = {};  // toTime(time) → {bar, prev}，十字光标定位用
   var macdRowsRaw = [];  // 后端 MACD 行（原始 dt 字符串）
-  var beichiLinksRaw = [];
   var lastChartData = null;  // 最近一次 /api/chart 响应，主题切换时原路径重渲染
   var legendEl = null;
 
@@ -185,19 +329,27 @@
   }
 
   // 左栏行情快照：静默失败（价格只是增强，失败保留旧值）
+  function displayDataNote(j) {
+    var notes = [], meta = j.meta || {};
+    if (j.degraded && j.fetch_time) notes.push(hhmmss(j.fetch_time) + ' 缓存');
+    if ((meta.sources || []).indexOf('baseline_backup') >= 0) notes.push('备用行情');
+    if (meta.source_stale || meta.source_time_unknown) {
+      notes.push(meta.source_stale && meta.source_ts ? '源时间较早：' + new Date(meta.source_ts * 1000).toLocaleString('zh-CN', {hour12:false}) : '源时间未确认');
+    }
+    if ((j.missing_codes || []).length || (meta.unavailable || []).length) notes.push('部分数据缺失');
+    return notes.join(' · ');
+  }
+
   function loadQuotes() {
+    var generation = supplyState.generation, epoch = supplyState.epoch;
     fetch('/api/quotes')
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) {
-        if (!j) return;
+        if (!j || !eligible(generation, j, epoch)) return;
         state.quotes = j.quotes || {};
         var s = el('wlStale');  // degraded=回旧缓存：显示数据时间，fresh 时隐藏
-        if (j.degraded && j.fetch_time) {
-          s.textContent = '行情为 ' + hhmmss(j.fetch_time) + ' 缓存';
-          s.hidden = false;
-        } else {
-          s.hidden = true;
-        }
+        s.textContent = displayDataNote(j);
+        s.hidden = !s.textContent;
         renderWatchlist();
       })
       .catch(function () {});
@@ -615,7 +767,7 @@
   var subSeries = [];
   var curInd = 'macd';
   var SUB_NOTES = {
-    macd: '背驰信号骨架 · hist=2×(DIF−DEA)',
+    macd: 'MACD 指标 · hist=2×(DIF−DEA)',
     kdj: 'KDJ(9,3,3) · 显示用，不参与信号',
     rsi: 'RSI(14) · 显示用，不参与信号',
     boll: 'BOLL(20,2) · 显示用，不参与信号',
@@ -697,20 +849,6 @@
       var d2 = sub.addSeries(LW.LineSeries, subLine(P.bi));
       d2.setData(macdRowsRaw.map(function (m) { return { time: toTime(m.time), value: m.dea }; }));
       subSeries = [h, d1, d2];
-      // 背驰虚线：锚点 bar → 信号 bar 的 DIF 连线（买点红、卖点青，与信号配色一致）
-      beichiLinksRaw.forEach(function (lk) {
-        if (lk.x0 >= macdRowsRaw.length || lk.x1 >= macdRowsRaw.length) return;
-        var s = sub.addSeries(LW.LineSeries, {
-          color: lk.label.indexOf('B1a') >= 0 ? hexA(P.up, 0.9) : hexA(P.down, 0.9),
-          lineWidth: 1, lineStyle: LW.LineStyle.Dashed,
-          crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
-        });
-        s.setData([
-          { time: toTime(macdRowsRaw[lk.x0].time), value: lk.dif0 },
-          { time: toTime(macdRowsRaw[lk.x1].time), value: lk.dif1 },
-        ]);
-        subSeries.push(s);
-      });
     } else if (name === 'kdj') {
       var kdj = kdjArr();
       var k = sub.addSeries(LW.LineSeries, subLine(P.gold)); k.setData(toPt(kdj.k));
@@ -751,27 +889,18 @@
 
   var FREQ_NAME = { day: '日线', m60: '60分', m30: '30分', m15: '15分', m5: '5分' };
 
-  function sigSide(label) {  // 'B1a' / '段:B3' / '~S1-d' → buy/sell
-    return label.replace(/^~/, '').replace(/^段:/, '').charAt(0) === 'B' ? 'b' : 's';
-  }
-
   function renderResonance(list) {
     var box = el('resonance');
     box.innerHTML = '';
     (list || []).forEach(function (lv) {
-      var html = '<span class="lv">' + (FREQ_NAME[lv.freq] || lv.freq) + '</span>';
-      if (lv.forming_signal) {
-        html += '<span class="sig-' + sigSide(lv.forming_signal.label) + '">' +
-          esc(lv.forming_signal.label) + '</span> 雏形';
-      } else if (lv.signal) {
-        var d = String(lv.signal.dt).split(' ')[0].slice(5).replace('-', '/');
-        html += '<span class="sig-' + sigSide(lv.signal.label) + '">' +
-          esc(lv.signal.label) + '</span> ' + d;
-      } else if (lv.zs) {
-        html += '<span class="zs">' + (lv.zs.inside ? '中枢内 ' : '中枢外 ') +
-          lv.zs.zd + '–' + lv.zs.zg + '</span>';
-      } else {
-        html += '<span class="lv">—</span>';
+      var html = '<span class="lv">' + esc(FREQ_NAME[lv.freq] || lv.freq) + '</span>';
+      (lv.signals || []).forEach(function (s) {
+        html += '<span class="sig-' + (s.side === 'buy' ? 'b' : 's') + '">' +
+          esc((s.level === 'seg' ? '' : '笔 ') + signalLabel(s)) + '</span> ' + esc(fmtBarTime(s.dt));
+      });
+      if (!(lv.signals || []).length) {
+        html += lv.zs ? '<span class="zs">' + (lv.zs.inside ? '中枢内 ' : '中枢外 ') +
+          lv.zs.zd + '–' + lv.zs.zg + '</span>' : '<span class="lv">暂无点位</span>';
       }
       var chip = document.createElement('span');
       chip.className = 'res-chip';
@@ -780,48 +909,31 @@
     });
   }
 
-  // ---------- 信号标注 ----------
-
-  // 信号配色：段级金色粗箭头；笔级 B/S 用涨跌色，B2/S2 降饱和，B3/S3 加深
-  function signalColor(s) {
-    if (s.label.indexOf('段:') === 0) return P.gold;
-    switch (s.label) {
-      case 'B1a': case 'B1a-d': return P.up;
-      case 'S1': case 'S1-d': return P.down;
-      case 'B2': return hexA(P.up, 0.6);
-      case 'S2': return hexA(P.down, 0.6);
-      case 'B3': return P.upD;
-      case 'S3': return P.downD;
-    }
-    return s.side === 'buy' ? P.up : P.down;
+  // ---------- 原生信号标注 ----------
+  function signalLabel(s) {
+    var prefix = s.side === 'buy' ? 'B' : 'S';
+    return (s.level === 'seg' ? '段 ' : '') +
+      (s.types || []).map(function (t) { return prefix + t; }).join('/') +
+      (s.status === 'provisional' ? ' · 形成中' : '');
   }
 
-  function buildMarkers(signals, formingSignal) {
-    var ms = signals.map(function (s) {
+  function signalColor(s) {
+    var color = s.level === 'seg' ? P.gold : (s.side === 'buy' ? P.up : P.down);
+    return s.status === 'provisional' ? hexA(color, 0.45) : color;
+  }
+
+  function buildMarkers(signals) {
+    return (signals || []).map(function (s) {
       var buy = s.side === 'buy';
-      var seg = s.label.indexOf('段:') === 0;   // 段级信号：金色粗箭头
       return {
         time: toTime(s.dt),
         position: buy ? 'belowBar' : 'aboveBar',
         shape: buy ? 'arrowUp' : 'arrowDown',
         color: signalColor(s),
-        text: s.label,
-        size: seg ? 2 : 1,
+        text: signalLabel(s),
+        size: s.level === 'seg' ? 2 : 1,
       };
-    });
-    // 雏形买卖点预判：半透明箭头 + "~" 前缀标签（未确认，区别于实色确认信号）
-    if (formingSignal) {
-      var fbuy = formingSignal.side === 'buy';
-      ms.push({
-        time: toTime(formingSignal.dt),
-        position: fbuy ? 'belowBar' : 'aboveBar',
-        shape: fbuy ? 'arrowUp' : 'arrowDown',
-        color: fbuy ? P.upA : P.downA,
-        text: formingSignal.label,
-        size: 1,
-      });
-    }
-    return ms.sort(function (a, b) { return a.time < b.time ? -1 : 1; });
+    }).sort(function (a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
   }
 
   // ---------- 依据卡 ----------
@@ -839,7 +951,7 @@
       div.className = 'card';
       var sideCls = c.side === 'buy' ? 'lbl-buy' : 'lbl-sell';
       div.innerHTML =
-        '<div class="head"><span class="' + sideCls + '">' + c.type + '</span>' +
+        '<div class="head"><span class="' + sideCls + '">' + esc(signalLabel(c)) + '</span>' +
         '<span class="price">' + c.price.toFixed(2) + '</span></div>' +
         '<div class="text">' + fmtBarTime(c.dt) + '</div>' +
         '<div class="text">' + c.text + '</div>';
@@ -876,14 +988,19 @@
   // noteMode: null（真实结果）| 'unconfigured'（未配置 LLM）| 'fallback'（接口失败回落样例）
   function renderAnalysis(j, noteMode) {
     var box = el('aiPanel');
+    if (noteMode) pendingAnalysis = null;
+    el('aiDataStatus').hidden = true;
     var html = '';
+    if (!noteMode && j.analysis_scope === 'multi_timeframe') {
+      html += '<div class="ai-note">联合分析 · 日线 / 60分 / 30分</div>';
+    }
     if (noteMode === 'unconfigured') {
       html += '<div class="ai-note">未配置 LLM，仅显示依据卡（以下为静态样例）</div>';
     } else if (noteMode === 'fallback') {
       html += '<div class="ai-note">完全分类接口不可用，以下为静态样例</div>';
     } else if (j.cached) {
       html += '<div class="ai-note">缓存结果（' +
-        (j.ref_bar_dt ? fmtRefDt(j.ref_bar_dt) + '后结构未变化' : '结构未变化') +
+        (j.analysis_scope === 'multi_timeframe' ? '三周期数据未变化' : (j.ref_bar_dt ? fmtRefDt(j.ref_bar_dt) + '后结构未变化' : '结构未变化')) +
         '）</div>';
     }
     if (j.current_state) {
@@ -945,6 +1062,36 @@
       '</div>';
   }
 
+  var pendingAnalysis = null, activeChartVersion = null;
+  var analysisIdentity = null, analysisInFlight = false;
+  function acceptsRule(body, profile) {
+    return profile === state.ruleProfile && body.rule_profile === profile &&
+      body.schema_version === 'chanpy_v1' && typeof body.calculation_id === 'string' && !!body.calculation_id;
+  }
+  function currentAnalysisIdentity() {
+    return JSON.stringify([state.code, state.ruleProfile, supplyState.scheme || '', supplyState.epoch || '', supplyState.generation]);
+  }
+  function updateAnalysisFreshness() {
+    var note = el('aiDataStatus'), chart = activeChartVersion;
+    var versions = pendingAnalysis && pendingAnalysis.body.data_versions;
+    var mismatch = pendingAnalysis && pendingAnalysis.identity === currentAnalysisIdentity() &&
+      chart && ((chart.calculation_id && pendingAnalysis.body.calculation_id !== chart.calculation_id) ||
+      (versions && versions[chart.freq] && versions[chart.freq] !== chart.data_version));
+    note.textContent = mismatch ? '图表与联合分析数据不同步，可刷新' : '';
+    note.hidden = !mismatch;
+  }
+  function queueAnalysis(body) {
+    pendingAnalysis = {body: body, identity: currentAnalysisIdentity()};
+    showMatchingAnalysis();
+    updateAnalysisFreshness();
+  }
+  function showMatchingAnalysis() {
+    // 联合版本属于固定三周期数据集，不与当前单张图表的版本比较。
+    if (pendingAnalysis && pendingAnalysis.identity === currentAnalysisIdentity()) {
+      renderAnalysis(pendingAnalysis.body, null);
+    }
+  }
+
   function fetchAnalysisSample() {
     return fetch('/analysis.sample.json').then(function (r) {
       if (!r.ok) throw new Error('sample ' + r.status);
@@ -955,8 +1102,18 @@
   // fetch 失败或未配置 LLM 时回落到静态样例渲染，保证无 key 也能验收 UI
   var AI_SPIN_MIN = 500;  // 旋转反馈最短时长：缓存秒回时也要让用户感知「已刷新」
 
-  function loadAnalysis() {
+  function loadAnalysis(options) {
+    if (supplyBusy) return;
+    var generation = supplyState.generation, epoch = supplyState.epoch, profile = state.ruleProfile;
     if (!state.code) { el('aiPanel').innerHTML = ''; return; }
+    var identity = currentAnalysisIdentity();
+    if (identity === analysisIdentity && (analysisInFlight || !(options && options.refresh))) return;
+    if (identity !== analysisIdentity) {
+      pendingAnalysis = null;
+      el('aiPanel').innerHTML = '<div class="ai-note">加载中…</div>';
+    }
+    analysisIdentity = identity;
+    analysisInFlight = true;
     if (analysisAbort) analysisAbort.abort();
     var ctl = analysisAbort = new AbortController();
     var btn = el('aiRefresh');
@@ -966,20 +1123,23 @@
     var timer = setTimeout(function () {
       ctl.abort(new Error('analysis timeout'));
     }, ANALYSIS_TIMEOUT_MS);
-    fetch('/api/analysis?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq, { signal: ctl.signal })
+    fetch('/api/analysis?code=' + encodeURIComponent(state.code) + '&freq=day&rule_profile=' + encodeURIComponent(profile), { signal: ctl.signal })
       .then(function (r) {
         if (!r.ok) throw new Error('analysis ' + r.status);
         return r.json();
       })
       .then(function (j) {
-        if (j.status === 'ok') { renderAnalysis(j, null); return; }
-        return fetchAnalysisSample().then(function (s) { renderAnalysis(s, 'unconfigured'); });
+        if (ctl !== analysisAbort || identity !== currentAnalysisIdentity() || !acceptsRule(j, profile) || !eligible(generation, j, epoch)) return;
+        if (j.status === 'ok') { queueAnalysis(j); return; }
+        return fetchAnalysisSample().then(function (s) { if (ctl === analysisAbort && identity === currentAnalysisIdentity()) renderAnalysis(s, 'unconfigured'); });
       })
       .catch(function (e) {
+        if (ctl !== analysisAbort || identity !== currentAnalysisIdentity()) return;
         if (e && e.name === 'AbortError') return;  // 被新请求中止，静默
         return fetchAnalysisSample()
-          .then(function (s) { renderAnalysis(s, 'fallback'); })
+          .then(function (s) { if (ctl === analysisAbort && identity === currentAnalysisIdentity()) renderAnalysis(s, 'fallback'); })
           .catch(function () {
+            if (ctl !== analysisAbort || identity !== currentAnalysisIdentity()) return;
             el('aiPanel').innerHTML = '<div class="ai-note">完全分类不可用</div>';
           });
       })
@@ -992,7 +1152,10 @@
           btn.disabled = false;
         }, wait);
       })
-      .finally(function () { clearTimeout(timer); });
+      .finally(function () {
+        clearTimeout(timer);
+        if (ctl === analysisAbort) analysisInFlight = false;
+      });
   }
 
   // ---------- 数据口径条 ----------
@@ -1042,6 +1205,8 @@
   function hideF10Cards() {
     el('f10Sec').style.display = 'none';
     el('flowSec').style.display = 'none';
+    el('flowNote').textContent = '';
+    el('flowNote').hidden = true;
   }
 
   // 卡头：名称取自选股（查不到回落 code）；价/涨幅优先用 state.quotes，缺失用 f.price
@@ -1063,12 +1228,8 @@
     var f = j.f10 || {};
     el('f10Sec').style.display = '';
     var stale = el('f10Stale');  // degraded=回旧缓存：卡内显示数据时间
-    if (j.degraded && j.fetch_time) {
-      stale.textContent = 'F10 数据为 ' + hhmmss(j.fetch_time) + ' 缓存';
-      stale.hidden = false;
-    } else {
-      stale.hidden = true;
-    }
+    stale.textContent = displayDataNote(j);
+    stale.hidden = !stale.textContent;
     renderF10Header(f);
     var tags = '';
     if (f.industry) {
@@ -1092,6 +1253,9 @@
   }
 
   function renderFlow(j) {
+    var note = j.meta && j.meta.flow_note;
+    el('flowNote').textContent = note || '';
+    el('flowNote').hidden = !note;
     var fl = j.flow || {};
     el('flowSec').style.display = '';
     var m = fl.main;
@@ -1112,6 +1276,7 @@
 
   // 与 /api/chart 并行调用；失败（含 502/退避）→ 两卡整卡隐藏，不显示报错
   function loadF10(code) {
+    var generation = supplyState.generation, epoch = supplyState.epoch;
     if (!code) return;
     var now = Date.now();
     if (f10Last.code === code && now - f10Last.ts < F10_TTL) return;
@@ -1120,12 +1285,13 @@
     fetch('/api/f10?code=' + encodeURIComponent(code))
       .then(function (r) { if (!r.ok) throw new Error('f10 ' + r.status); return r.json(); })
       .then(function (j) {
-        if (code !== state.code) return;  // 响应期间已切走，丢弃
+        if (code !== state.code || !eligible(generation, j, epoch)) return;  // 响应期间已切走，丢弃
         lastF10 = { code: code, json: j };
         renderF10(j);
         renderFlow(j);
       })
       .catch(function () {
+        if ((generation !== supplyState.generation || epoch !== supplyState.epoch)) return;
         if (f10Last.code === code) f10Last.ts = 0;  // 失败不计入 TTL，下次 load 重试（仅当未已切走）
         if (code !== state.code) return;
         lastF10 = null;
@@ -1155,7 +1321,6 @@
       klineByTime[toTime(b.time)] = { bar: b, prev: i > 0 ? kline[i - 1] : null, i: i };
     });
     macdRowsRaw = data.macd.rows;
-    beichiLinksRaw = data.macd.beichi_links;
     lastChartData = data;
 
     c.candleSeries.setData(kline.map(function (b) {
@@ -1166,15 +1331,12 @@
     }));
 
     // 笔：端点连续（zigzag），单线即可；雏形笔虚线
-    c.biSeries.setData(segsToPoints(data.structure.bi));
+    c.biSeries.setData(segsToPoints(data.structure.bi.filter(function (s) { return !s.forming; })));
     var xdConfirmed = data.structure.xd.filter(function (s) { return !s.forming; });
     var xdForming = data.structure.xd.filter(function (s) { return s.forming; });
     c.xdSeries.setData(segsToPoints(xdConfirmed));
-    c.formingXdSeries.setData(xdForming.map(function (s) {
-      return [{ time: toTime(s.dt0), value: s.y0 }, { time: toTime(s.dt1), value: s.y1 }];
-    }).reduce(function (acc, p) { return acc.concat(p); }, []));
-    var f = data.structure.forming;
-    c.formingSeries.setData(f ? [{ time: toTime(f.dt0), value: f.y0 }, { time: toTime(f.dt1), value: f.y1 }] : []);
+    c.formingXdSeries.setData(segsToPoints(xdForming));
+    c.formingSeries.setData(segsToPoints(data.structure.bi.filter(function (s) { return s.forming; })));
 
     c.zsOverlay.setBoxes(data.structure.zs.map(function (z) {
       return { t0: toTime(z.dt0), t1: toTime(z.dt1), zg: z.zg, zd: z.zd };
@@ -1214,35 +1376,48 @@
     // 信号箭头必须在同一任务内所有 series 更新（K线/MA/通道/可视区间）之后设置：
     // lightweight-charts 5.0.9 markers 插件对其后的 series setData 敏感（上游 issue #1990），
     // 否则新 bar 到达时箭头按旧索引落位并持续错位，直到下一次重绘才跳回
-    c.markers.setMarkers(buildMarkers(data.signals, data.forming_signal));
+    c.markers.setMarkers(buildMarkers(data.signals));
 
     legendLatest();
     renderResonance(data.resonance);
     updateAxisAnchor();
   }
 
-  function load() {
+  function load(options) {
+    if (supplyBusy || !state.code) return;
+    var generation = supplyState.generation, epoch = supplyState.epoch, profile = state.ruleProfile;
+    activeChartVersion = null;
+    updateAnalysisFreshness();
     ensureCharts();
     if (chartAbort) chartAbort.abort();
     var ctl = chartAbort = new AbortController();
-    el('aiPanel').innerHTML = '<div class="ai-note">加载中…</div>';  // 切换即清上一只结论
     updateAiTitle();
     setStatus('加载中… ' + state.code + ' ' + state.freq);
     hideChartError();
     loadF10(state.code);  // F10/资金流与 /api/chart 并行，互不阻塞（内部有 300s TTL）
-    loadAnalysis();       // 与 chart 并行：analysis 端点自带取数/缓存，不再等 chart 成功
+    loadAnalysis(options); // 与 chart 并行：analysis 端点自带取数/缓存，不再等 chart 成功
     var timer = setTimeout(function () {
       ctl.abort(new Error('加载超时（25s）'));
     }, CHART_TIMEOUT_MS);
-    fetch('/api/chart?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq, { signal: ctl.signal })
+    fetch('/api/chart?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq + '&rule_profile=' + encodeURIComponent(profile), { signal: ctl.signal })
       .then(function (r) {
         if (!r.ok) return r.json().then(function (j) { throw new Error(j.detail || r.status); });
         return r.json();
       })
       .then(function (data) {
-        renderChart(data, { resetRange: true });
+        if (ctl !== chartAbort || !acceptsRule(data, profile) || !eligible(generation, data, epoch)) return;
+        var saved = supplyRange && supplyRange.code === state.code && supplyRange.freq === state.freq && supplyRange.range;
+        renderChart(data, { resetRange: !saved });
+        if (saved) {
+          charts.main.timeScale().setVisibleRange(saved);
+          charts.macdChart.timeScale().setVisibleRange(saved);
+        }
+        supplyRange = null;
+        el('center').classList.remove('supply-loading');
         renderEvidence(data.evidence);
         renderMeta(data.meta);
+        activeChartVersion = {code: state.code, freq: state.freq, epoch: epoch || '', generation: generation, calculation_id: data.calculation_id, data_version: data.data_version || data.meta.data_version};
+        updateAnalysisFreshness();
         setStatus('');
       })
       .catch(function (e) {
@@ -1268,23 +1443,44 @@
 
   setInterval(function () {
     renderStatus();  // 交易时段点/分钟级状态保鲜
-    if (!state.code) return;
+    if (el('supplyControl').hidden) {
+      syncSupply().then(function () { if (state.code && isSessionOpen(new Date(), marketOf(state.code))) { load({refresh:true}); loadQuotes(); } });
+      return;
+    }
+    if (!state.code || supplyBusy) return;
     if (!isSessionOpen(new Date(), marketOf(state.code))) return;
-    load();
+    load({refresh:true});
     loadQuotes();
   }, 60000);
 
   // ---------- 初始化 ----------
 
+  window.addEventListener('focus', function () { syncSupply(); });
   el('themeBtn').addEventListener('click', function () {
     applyTheme(theme === 'light' ? 'dark' : 'light');
   });
-  el('aiRefresh').onclick = function () { loadAnalysis(); };
+  el('ruleProfile').value = state.ruleProfile;
+  el('ruleProfile').onchange = function () {
+    var profile = el('ruleProfile').value;
+    if (profile !== 'strict' && profile !== 'relaxed' || profile === state.ruleProfile) return;
+    supplyRange = charts ? {code: state.code, freq: state.freq, range: charts.main.timeScale().getVisibleRange()} : null;
+    state.ruleProfile = profile;
+    try { localStorage.setItem('chanapp-rule-profile', profile); } catch (_) {}
+    if (analysisAbort) analysisAbort.abort();
+    analysisAbort = null; analysisIdentity = null; analysisInFlight = false;
+    pendingAnalysis = null; activeChartVersion = null; lastChartData = null;
+    renderEvidence([]); el('resonance').innerHTML = '';
+    el('aiPanel').innerHTML = '<div class="ai-note">成笔标准已切换，分析待更新…</div>';
+    el('center').classList.add('supply-loading');
+    load();
+  };
+  el('aiRefresh').onclick = function () { loadAnalysis({refresh:true}); };
   wireMaSeg();
   wireSubSeg();
 
   renderTabs();
   renderStatus();
-  loadWatchlist();
-  loadQuotes();
+  el('supplySelect').onchange = renderSupply;
+  el('supplySwitch').onclick = switchSupply;
+  initSupply().then(function () { loadWatchlist(); loadQuotes(); });
 })();

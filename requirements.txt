@@ -2,6 +2,5 @@ fastapi==0.141.1
 starlette==1.6.0
 uvicorn==0.52.4
 requests==2.34.2
-chanlun==2606.73
 # 测试用 TestClient 需要 HTTP 客户端
 httpx==0.28.1

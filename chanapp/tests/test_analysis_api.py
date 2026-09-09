@@ -168,8 +168,9 @@ class TestAnalysisApi(unittest.TestCase):
         data = analysis.collect_prompt_data("sh000001", "day", bars, st, sig, ev)
         p = analysis.build_prompt(data)
 
-        # 来自结构数据的可追溯价位（fixture 金标准：B1a 3741.11、中枢上沿/下沿、末bar）
-        for token in ["3741.11", "4025.7", "3922.58", "3905.2", "2026-08-21"]:
+        # Prompt serialization preserves supplied prices, independently of signal algorithm.
+        for token in [str(bars[-1]["close"]), bars[-1]["dt"],
+                      str(data["latest_zs"]["中枢上沿"]), str(data["latest_zs"]["中枢下沿"])]:
             self.assertIn(token, p)
         # 中枢键名用白话术语，不出 ZG/ZD 缩写
         self.assertIn("中枢上沿", data["latest_zs"])
@@ -233,19 +234,18 @@ class TestAnalysisApi(unittest.TestCase):
         self.assertEqual(s1["evidence_for"], ["末bar 收 3905.2 破中枢下沿"])  # str → list
         self.assertEqual(s1["evidence_against"], ["B1a 3741.11 未破"])   # 非字符串剔除
 
-    def test_prompt_includes_forming_signal(self):
-        """forming 信号存在时进入 prompt 数据。"""
+    def test_prompt_includes_all_provisional_signals(self):
         from chanapp.api import analysis
         bars = load_bars()
-        forming = {"dt": "2026-08-21", "price": 3905.2, "side": "sell",
-                   "label": "~S1-d", "cond": "dif", "forming": True,
-                   "anchor": {"dt": "2026-07-20", "price": 3741.11},
-                   "area_pair": [1.0, 2.0], "dif_pair": [0.1, 0.2], "note": "雏形"}
+        points = [{"dt": "2026-08-21", "price": 3905.2, "side": "sell",
+                   "label": label, "level": level, "types": ["1p"],
+                   "status": "provisional", "forming": True}
+                  for label, level in [("S1p", "bi"), ("段:S1p", "seg")]]
         data = analysis.collect_prompt_data(
-            "sh000001", "day", bars, {"zs": []},
-            {"signals": [], "forming_signal": forming}, [])
-        p = analysis.build_prompt(data)
-        self.assertIn("~S1-d", p)
+            "sh000001", "day", bars, {"zs": []}, {"signals": points}, [])
+        self.assertEqual(data["provisional_signals"], points)
+        self.assertNotIn("forming_signal", data)
+        self.assertIn("不能表述为已确认", analysis.build_prompt(data))
 
 
 if __name__ == "__main__":

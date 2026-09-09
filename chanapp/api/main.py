@@ -2,11 +2,11 @@
 
 GET /api/chart?code=sh000001&freq=day|m30|m60
 返回 {kline, macd{rows, beichi_links}, structure{bi,xd,zs,forming}, signals,
-      forming_signal, evidence, channels, resonance, meta{source, fqf,
+      rule_profile, calculation_id, evidence, channels, resonance, meta{source, fqf,
       fetch_time, degraded, degraded_note, from_cache, stale, stale_age_s, bars}}
 meta.stale：K 线缓存已过 TTL 但本次回的是旧数据（stale-while-revalidate，后台异步
 刷新中），stale_age_s 为距缓存写入的秒数；新鲜数据 stale=False 且无 stale_age_s。
-resonance：多级别共振角标（日/60/30 三级各取最新确认信号、最新中枢、雏形信号），
+resonance：多周期摘要（日/60/30 分别列出最新笔/段点位、状态及中枢），
 纯计算零新数据，复用 compute_cache；某级取数/计算失败则该级缺省，不影响主响应。
 
 自选股：GET/POST /api/watchlist，DELETE /api/watchlist/{code}，
@@ -28,6 +28,8 @@ AI 完全分类：GET /api/analysis?code=&freq=（chanapp/api/analysis.py，
 """
 from __future__ import annotations
 
+from typing import Annotated, Literal
+
 import json
 import logging
 import os
@@ -37,7 +39,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -50,6 +52,8 @@ from chanapp.api import analysis as api_analysis  # noqa: E402
 from chanapp.engine import chart_payload as engine_chart_payload  # noqa: E402
 from chanapp.engine import data as engine_data  # noqa: E402
 from chanapp.engine import warmer  # noqa: E402
+from chanapp.engine import supply as supply_state
+from chanapp.api import supply as supply_api
 
 log = logging.getLogger(__name__)
 
@@ -76,11 +80,45 @@ except ImportError:  # 适配层未安装
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    warmer.start()
-    yield
+    owned = supply_api.candidate is not None
+    try:
+        if owned:
+            try:
+                supply_state.start_runtime()
+            except supply_state.StateUnavailable as exc:
+                if exc.reason == "runtime_already_running":
+                    raise
+                log.error("Supply recovery required: %s", exc.reason)
+            else:
+                warmer.start()
+        yield
+    finally:
+        if owned:
+            supply_state.stop_runtime()
 
 
-app = FastAPI(title="chanapp", docs_url=None, redoc_url=None, lifespan=lifespan)
+app = FastAPI(title="chanapp", version="1.6.0", docs_url=None, redoc_url=None, lifespan=lifespan)
+
+
+@app.middleware("http")
+async def bind_supply(request, call_next):
+    # Static resources and the diagnostic endpoint must survive state damage.
+    if not request.url.path.startswith("/api/") or request.url.path == "/api/supply":
+        return await call_next(request)
+    try:
+        captured = supply_state.snapshot()
+    except supply_state.StateUnavailable:
+        return JSONResponse(status_code=503, content={
+            "error_code": "state_unavailable", "recovery_required": True})
+    with supply_state.use(captured):
+        response = await call_next(request)
+        response.headers["X-Supply-Scheme"] = captured.scheme
+        response.headers["X-Supply-Generation"] = str(captured.generation)
+        response.headers["X-Supply-Epoch"] = captured.epoch
+        return response
+
+
+app.include_router(supply_api.router)
 
 
 # ---------- /api/chart（组装逻辑在 engine/chart_payload.py，Pages 推送平面共用） ----------
@@ -88,17 +126,22 @@ app = FastAPI(title="chanapp", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 @app.get("/api/chart")
 def api_chart(code: str = Query(..., min_length=2),
-              freq: str = Query("day", pattern="^(day|m30|m60|m15|m5)$")):
+              freq: str = Query("day", pattern="^(day|m30|m60|m15|m5)$"),
+              rule_profile: Annotated[Literal["strict", "relaxed"], Query()] = "strict"):
     t0 = time.monotonic()
     try:
         dataset = engine_data.get_bars(code, freq)
     except Exception as e:  # 数据层错误统一成 502
-        raise HTTPException(status_code=502, detail=str(e)) from e
+        raise HTTPException(status_code=502, detail="行情暂不可用") from e
     t_bars = time.monotonic()
 
     timings: dict = {}
-    payload = engine_chart_payload.build_chart_payload(code, freq, dataset,
-                                                       timings=timings)
+    try:
+        payload = engine_chart_payload.build_chart_payload(code, freq, dataset,
+                                                           timings=timings, rule_profile=rule_profile)
+    except Exception as e:
+        log.exception("chart calculation failed code=%s freq=%s profile=%s", code, freq, rule_profile)
+        raise HTTPException(status_code=502, detail="结构计算暂不可用") from e
     t_end = time.monotonic()
     log.info("[timing] chart code=%s freq=%s bars=%dms compute=%dms resonance=%dms total=%dms",
              code, freq, int((t_bars - t0) * 1000), timings["compute_ms"],
@@ -203,8 +246,11 @@ def api_quotes():
     try:
         r = engine_feed.get_quotes([it["code"] for it in items])
     except Exception as e:  # 数据层错误统一成 502
-        raise HTTPException(status_code=502, detail=f"快照失败：{e}") from e
-    return {"quotes": r["quotes"], "degraded": r["degraded"],
+        raise HTTPException(status_code=502, detail="快照失败，暂不可用") from e
+    return {"scheme": supply_state.current().scheme, "generation": supply_state.current().generation,
+            "epoch": supply_state.current().epoch,
+            "missing_codes": r.get("missing_codes", []), "invalid_codes": r.get("invalid_codes", []),
+            "data_version": r.get("data_version"), "meta": r.get("meta", {}), "quotes": r["quotes"], "degraded": r["degraded"],
             "fetch_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"]))}
 
 
@@ -215,8 +261,11 @@ def api_f10(code: str = Query(..., pattern="^(sh|sz|hk)\\d+$")):
     try:
         r = engine_feed.get_f10(code)
     except Exception as e:  # 数据层错误统一成 502
-        raise HTTPException(status_code=502, detail=f"F10 失败：{e}") from e
-    return {"f10": r["f10"], "flow": r["flow"], "industry_pct": r["industry_pct"],
+        raise HTTPException(status_code=502, detail="基本资料暂不可用") from e
+    return {"scheme": supply_state.current().scheme, "generation": supply_state.current().generation,
+            "epoch": supply_state.current().epoch,
+            "data_version": r.get("data_version"), "meta": r.get("meta", {}),
+            "f10": r["f10"], "flow": r["flow"], "industry_pct": r["industry_pct"],
             "degraded": r["degraded"],
             "fetch_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"]))}
 

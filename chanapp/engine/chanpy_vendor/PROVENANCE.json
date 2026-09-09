@@ -1,0 +1,208 @@
+{
+  "repository": "https://github.com/Vespa314/chan.py",
+  "commit": "429d6ed3043e27c93a003ba2b10e70a05575e1f5",
+  "files": {
+    "KLine/KLine_List.py": {
+      "sha256": "ab518c1664e2dc8f3e359ac344eac3fc7c5d0758f13976d7b337fb4275d7d0fc",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Seg/SegListDef.py": {
+      "sha256": "1cf3f8e5aabc24e459b24eadd0f1ac62057b4f283d53fc3e6ba9c6fa9eafb991",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Seg/SegListComm.py": {
+      "sha256": "fa89e9f9f1161192c9adce4b76b4103f12e7ffbdaf029a5ca247394666b7e482",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Seg/SegConfig.py": {
+      "sha256": "4ffa9974f01c4801c6083784205b3ef973e3d88cbf34d236fa327d4f7ddac94e",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Common/ChanException.py": {
+      "sha256": "a135bf74a795ca59f342f5793771dab3abe977c2ada9ef56c0b3c1fa0dad59bd",
+      "changes": []
+    },
+    "Common/CEnum.py": {
+      "sha256": "f08c6a321c6b52b9156761f7aac59b287f800a5094b32a416f1d50ad419afbab",
+      "changes": [
+        "unused DATA_SRC declaration removed"
+      ]
+    },
+    "Seg/Seg.py": {
+      "sha256": "d54059efdc64e29baea9bfee6e2dbac6057d93e87d2fc6bbdf4c4a6a475b28ef",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "BuySellPoint/BS_Point.py": {
+      "sha256": "7b9eb6e6c0ab3a2a6f2e862a37cfdea0d862713371950c968406d16d5ba811a7",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "ChanModel/Features.py": {
+      "sha256": "457ed7e581b36b8be7ba497143ba41c973d15f199456e5a16f642681896f71bf",
+      "changes": []
+    },
+    "Bi/Bi.py": {
+      "sha256": "9e7231c7376df8c29edd9616b1fde99928064b24031cda84daaa7329dcc70ad4",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "KLine/KLine_Unit.py": {
+      "sha256": "b46ee1e61286059696b13d09cdae2a78d6ff563a113a64e01a890a4688fe9838",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "KLine/KLine.py": {
+      "sha256": "ff2be1d0311d33154efac817facdb1f6e9eb864afb42b0ec048169019417d93e",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Common/func_util.py": {
+      "sha256": "a3440f16ce8e1ded8e973f568a331969c8e54922e411fd8928425e0949d30740",
+      "changes": []
+    },
+    "Combiner/KLine_Combiner.py": {
+      "sha256": "260b1ca210a81fbd0cf1acd9cbbf3eb14be7972652bbfe0c19a4eda3e0895bbb",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Combiner/Combine_Item.py": {
+      "sha256": "d25ae4ca8fc6545ef457a0aeb0597915e818981f818e6bb149eccdd6f69d70b9",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Common/cache.py": {
+      "sha256": "608e151adfebaa5a6c75439be0d0a0f169100c72b7ee4aebfefb2e68666431bf",
+      "changes": []
+    },
+    "KLine/TradeInfo.py": {
+      "sha256": "bd0bf8015d3369a6021c5f00c419f29708f0b53a88a695931b1304802cc85325",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Math/TrendModel.py": {
+      "sha256": "10dd50d7a552a57a72ada55fb0a8a8c35356a1b73d2eb58517724b48387f4c88",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Math/RSI.py": {
+      "sha256": "8f0aaa54634ebcd2e3d24f1aace04d9221dfa28e07391865e64bf2b975ac12bc",
+      "changes": []
+    },
+    "Math/MACD.py": {
+      "sha256": "7f303f2b686deaa1d7f0d0bbbf3593f817ea355e2427d569fc43b2bdccddf268",
+      "changes": []
+    },
+    "Math/KDJ.py": {
+      "sha256": "e80574b46986861de8ca3bc047f9cc163b575fde67a0025a314d2b20fcbf8df6",
+      "changes": []
+    },
+    "Math/Demark.py": {
+      "sha256": "7c042c2d18de68866f3629d622f517c4d8cc87e474e7c12d7a0dd0f79a821d88",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Math/BOLL.py": {
+      "sha256": "79cbdf1fe94ec04c012edebacc37dd2ac8a841fc827b6a6e2358fe9f9ddce57d",
+      "changes": []
+    },
+    "Common/CTime.py": {
+      "sha256": "1219b484bf269d70fd9ce612dd2dc5f7553745cac6af044e3113c934f548955a",
+      "changes": []
+    },
+    "ZS/ZS.py": {
+      "sha256": "c08a6c1f1be038c8f77703678dd5c62f0e91a3c66ba210c7e3e4d8c6fe2d7e9b",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "BuySellPoint/BSPointConfig.py": {
+      "sha256": "d30580f5aefa8b2abe9f7a92ce73bbbf914e2338317ec9cf13ddd2ef5b75e824",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Seg/EigenFX.py": {
+      "sha256": "f98f87f8cdf5ce59b059e7a8ed6406f6f5be5e68fd9f4b66fca9c6f860ede06f",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Seg/Eigen.py": {
+      "sha256": "3b45589347fe1e4369597dde9919df059a4ee3b0b90eeb126179caf015fb595d",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Bi/BiList.py": {
+      "sha256": "d8386099f71a27fb86b4ee17a5f6b4f6dd805a9f4ad4ec29e9fcc76594114a65",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Bi/BiConfig.py": {
+      "sha256": "14ac8f13578207acf2681d0ccf5c1a3deb4bc230332cba2db8cfc9e4c72c18ca",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Math/TrendLine.py": {
+      "sha256": "8b862ef26eaf29796b1076c82e553e60b0b8265be49b22e490e447b8fde62235",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Seg/SegListDYH.py": {
+      "sha256": "688cf070b38d76e89dd428b8d2c5cbeaf0985102c8faa3741b6571e14b3bed1d",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "Seg/SegListChan.py": {
+      "sha256": "49719e6843d424768ae6295c87617c2c72f22c478deac74067ef40aaf531c5c9",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "ZS/ZSList.py": {
+      "sha256": "e0cba975e6a3b73c2e09102c80d8daca26adb3c8f0bc742f6c0fc526703a86ee",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "ZS/ZSConfig.py": {
+      "sha256": "592c3a1c22a4f873e25270a22e28d11bd0b42a42bdefc24d7dc114d03ae2984e",
+      "changes": []
+    },
+    "ChanConfig.py": {
+      "sha256": "bff01933dae1420548e4b5b9f65e8aa385c69d01d09aea6a6caa545f0564b2e2",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    },
+    "BuySellPoint/BSPointList.py": {
+      "sha256": "71a7047ada743f91493c6d6f71eeda6fbc275099dc4cb01d29531b4abdc2461e",
+      "changes": [
+        "absolute imports namespaced"
+      ]
+    }
+  }
+}

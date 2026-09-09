@@ -10,4 +10,6 @@
   `get_bars(code, freq)` 的签名与返回结构是冻结契约；接入自有数据源时保持契约不动。
 - `engine/display_feed.py`、`engine/search.py` 为可选适配层：api 层做可选导入，
   模块不存在时对应路由返回 503，不得改成硬依赖。
+- `api/supply.py` 的供数管理适配层也是可选；公开演示返回受控 503，静态界面和演示行情仍可访问。
+- 公开演示不含版本化缓存层（无 `engine/cache_store.py`）：不启动后台预热与保留清理。
 - `.cache/` 是本地数据缓存（已 gitignore）。

@@ -44,6 +44,10 @@ def analyze(prompt: str) -> str:
         raise LLMError("LLM_API_KEY not configured")
     model = os.environ.get("LLM_MODEL") or conf["default_model"]
     try:
+        timeout = min(120, max(1, int(os.environ.get("LLM_TIMEOUT_SECONDS") or _TIMEOUT)))
+    except ValueError:
+        raise LLMError("LLM_TIMEOUT_SECONDS must be an integer") from None
+    try:
         resp = requests.post(
             conf["url"],
             headers={"Authorization": f"Bearer {api_key}"},
@@ -51,7 +55,7 @@ def analyze(prompt: str) -> str:
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
             },
-            timeout=_TIMEOUT,
+            timeout=timeout,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]

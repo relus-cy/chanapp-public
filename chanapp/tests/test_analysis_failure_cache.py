@@ -65,7 +65,7 @@ class TestAnalysisFailureCache(unittest.TestCase):
                         side_effect=engine_llm.LLMError("deepseek down")) as an:
             r1 = c.get("/api/analysis?code=sh000001&freq=day")
             self.assertEqual(r1.status_code, 502)
-            r2 = c.get("/api/analysis?code=sh000001&freq=day")
+            r2 = c.get("/api/analysis?code=sh000001&freq=m30")
             self.assertEqual(r2.status_code, 502)
             self.assertEqual(an.call_count, 1)  # 第二次未重试
 

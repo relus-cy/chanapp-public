@@ -157,19 +157,20 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     position: absolute; left: 10px; top: 8px; z-index: 6; pointer-events: none;
     font-size: 12px; white-space: nowrap; font-family: var(--mono);
     color: var(--dim);
-    /* 右侧为共振角标预留 ~180px + 66px 偏移，窄窗宁可省略号也不与角标重叠 */
-    max-width: calc(100% - 260px); overflow: hidden; text-overflow: ellipsis;
+    /* 信号摘要已移出绘图区；仅为右侧价格轴保留空间。 */
+    max-width: calc(100% - 90px); overflow: hidden; text-overflow: ellipsis;
   }
   .legend b { color: var(--fg); font-weight: 600; }
   .legend .dim { color: var(--faint); }
 
-  /* 多级别共振角标 */
-  .resonance { position: absolute; right: 66px; top: 8px; z-index: 6; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+  /* 多级别信号占独立一行，不覆盖图表或拦截十字线。 */
+  .resonance { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  .resonance:empty { display: none; }
   .res-chip {
     display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--mono);
     background: var(--overlay); border: 1px solid var(--line2); border-radius: var(--radius-s);
     padding: 2px 8px; color: var(--dim);
-    white-space: nowrap; max-width: 180px;  /* 上限与 .legend 的右侧预留联动 */
+    white-space: nowrap; max-width: 100%; box-sizing: border-box;
   }
   .res-chip .zs { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .res-chip .lv { color: var(--faint); }
@@ -227,6 +228,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #flowSec .main { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
   #flowSec .main .k { color: var(--dim); font-size: 12px; }
   #flowSec .main .v { font-family: var(--mono); font-size: 15px; font-weight: 600; }
+  #flowNote { margin: 8px 0 0; color: var(--dim); font-size: 11px; }
   #flowSec .bars { display: flex; flex-direction: column; gap: 4px; }
   #flowSec .frow { display: grid; grid-template-columns: 44px 1fr 64px; align-items: center; gap: 8px; font-size: 11px; }
   #flowSec .frow .k { color: var(--faint); }
@@ -284,6 +286,15 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .card .price { font-family: var(--mono); font-weight: 400; }
   .card .text { color: var(--dim); margin-top: 2px; font-size: 12px; line-height: 1.45; }
 
+  .supply-control { padding: 10px; border-top: 1px solid var(--line); font-size: 12px; }
+  .supply-actions { display: flex; gap: 6px; margin: 6px 0; }
+  .supply-actions select, .supply-actions button { min-width: 0; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line2); border-radius: var(--radius-s); padding: 3px 6px; }
+  .supply-actions select { flex: 1; }
+  .supply-actions button:active { transform: scale(.96); }
+  .supply-actions :disabled { opacity: .5; }
+  .supply-control p { margin: 0; color: var(--dim); overflow-wrap: anywhere; }
+  .supply-actions select:focus-visible { outline: 1px solid var(--gold); }
+  #center.supply-loading #chart, #center.supply-loading #sub, #center.supply-loading #axisAnchor { visibility: hidden; }
   /* ---------- footer ---------- */
   footer {
     padding: 4px 14px; border-top: 1px solid var(--line); background: var(--panel);
@@ -291,6 +302,9 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     font-family: var(--mono);
   }
   footer .warn, #status .warn, .wl-head .warn { color: var(--gold); }
+  .rule-control { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 11px; }
+  .rule-control select { flex: 0 0 auto; }
+  #ruleNote { color: var(--faint); }
 </style>
 </head>
 <body>
@@ -314,13 +328,30 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     <div class="wl-head">自选股 WATCHLIST <span id="wlStale" class="warn" hidden></span></div>
     <div id="wlItems"></div>
     <div id="wlForm"></div>
+    <section id="supplyControl" class="supply-control" aria-label="供数方案" hidden>
+      <div id="supplyCurrent"></div>
+      <div class="supply-actions">
+        <select id="supplySelect" aria-label="选择供数方案" aria-describedby="supplyReasons">
+          <option value="baseline">现有方案</option>
+          <option value="primary_candidate">候选方案</option>
+        </select>
+        <button id="supplySwitch" type="button">切换</button>
+      </div>
+      <p id="supplyReasons"></p>
+      <p id="supplyStatus" role="status" aria-live="polite"></p>
+    </section>
   </div>
   <div id="center">
+    <div class="rule-control supply-actions">
+      <label for="ruleProfile">成笔标准</label>
+      <select id="ruleProfile" aria-describedby="ruleNote"><option value="strict">严格</option><option value="relaxed">宽松</option></select>
+      <span id="ruleNote">仅指成笔标准，买卖点按上游形态规则计算</span>
+    </div>
+    <div class="resonance" id="resonance" role="group" aria-label="多周期信号摘要"></div>
     <div id="chartWrap">
       <div id="chart"></div>
       <div id="chartError" class="chart-error" hidden></div>
       <div class="legend" id="ohlc"></div>
-      <div class="resonance" id="resonance"></div>
       <div id="axisAnchor"></div>
     </div>
     <div id="subWrap">
@@ -358,9 +389,11 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
       <h3>当日资金流</h3>
       <div class="main"><span class="k">主力净流入</span><span class="v" id="flowMain"></span></div>
       <div class="bars" id="flowBars"></div>
+      <p id="flowNote" hidden></p>
     </div>
     <div class="sec">
       <div class="ai-head"><h3 id="aiTitle">AI 完全分类</h3><button id="aiRefresh" title="刷新完全分类"><span class="ic"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 12C4 16.4183 7.58172 20 12 20C14.7485 20 17.1746 18.6137 18.6152 16.5H16V14.5H22V20.5H20V18.001C18.1762 20.4286 15.2723 22 12 22C6.47715 22 2 17.5228 2 12H4ZM11.5293 8.31934C11.7059 7.8935 12.2943 7.89349 12.4707 8.31934L12.7236 8.93066C13.1556 9.97346 13.9615 10.8062 14.9746 11.2568L15.6924 11.5762C16.1026 11.759 16.1026 12.3562 15.6924 12.5391L14.9326 12.877C13.9449 13.3162 13.1534 14.1194 12.7139 15.1279L12.4668 15.6934C12.2864 16.1075 11.7137 16.1075 11.5332 15.6934L11.2871 15.1279C10.8476 14.1193 10.0552 13.3163 9.06738 12.877L8.30762 12.5391C7.89744 12.3562 7.89741 11.759 8.30762 11.5762L9.02539 11.2568C10.0385 10.8062 10.8445 9.97348 11.2764 8.93066L11.5293 8.31934ZM12 2C17.5228 2 22 6.47715 22 12H20C20 7.58172 16.4183 4 12 4C9.25151 4 6.82543 5.38634 5.38477 7.5H8V9.5H2V3.5H4V5.99902C5.82382 3.57144 8.72774 2 12 2Z"/></svg></span></button></div>
+      <div class="ai-note" id="aiDataStatus" hidden></div>
       <div id="aiPanel"></div>
     </div>
     <div class="sec">
@@ -371,6 +404,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
 </main>
 <footer id="metaBar"></footer>
 <script src="/vendor/lightweight-charts.standalone.production.js"></script>
+<script src="/supply.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

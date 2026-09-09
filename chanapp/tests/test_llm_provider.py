@@ -67,6 +67,13 @@ class TestLLMProvider(_EnvMixin, unittest.TestCase):
         self.assertEqual(sent["auth"], "Bearer k")
         self.assertEqual(sent["timeout"], 30)
 
+    def test_configurable_response_timeout(self):
+        self._set_env(LLM_API_KEY="k")
+        from chanapp.engine import llm
+        with mock.patch.dict(os.environ, {"LLM_TIMEOUT_SECONDS": "120"}), mock.patch("requests.post", return_value=_FakeResp({"choices": [{"message": {"content": "ok"}}]})) as post:
+            llm.analyze("p")
+        self.assertEqual(post.call_args.kwargs["timeout"], 120)
+
     def test_default_model_and_provider(self):
         self._set_env(LLM_API_KEY="k")  # 不设 LLM_PROVIDER / LLM_MODEL
         sent = {}
