@@ -887,20 +887,29 @@
   function renderResonance(list) {
     var box = el('resonance');
     box.innerHTML = '';
-    (list || []).forEach(function (lv) {
-      var html = '<span class="lv">' + esc(FREQ_NAME[lv.freq] || lv.freq) + '</span>';
-      (lv.signals || []).forEach(function (s) {
-        html += '<span class="sig-' + (s.side === 'buy' ? 'b' : 's') +
-          (s.status === 'provisional' ? ' prov' : '') + '">' +
-          esc((s.level === 'seg' ? '' : '笔 ') + signalLabel(s)) + '</span> ' + esc(fmtBarTime(s.dt));
-      });
-      if (!(lv.signals || []).length) {
-        html += lv.zs ? '<span class="zs">' + (lv.zs.inside ? '中枢内 ' : '中枢外 ') +
-          lv.zs.zd + '–' + lv.zs.zg + '</span>' : '<span class="lv">暂无点位</span>';
+    ['day', 'm60', 'm30'].forEach(function (freq) {
+      var found = (list || []).find(function (item) { return item.freq === freq; });
+      var lv = found || { freq: freq };
+      var signals = lv.signals || [], details = [], forming = false;
+      var html = signals.map(function (signal) {
+        var label = (signal.level === 'seg' ? '' : '笔 ') + signalLabel(signal);
+        var time = fmtBarTime(signal.dt);
+        details.push(label + ' ' + time);
+        forming = forming || signal.status === 'provisional';
+        return '<span class="sig-' + (signal.side === 'buy' ? 'b' : 's') +
+          (signal.status === 'provisional' ? ' prov' : '') + '">' +
+          esc(label.replace(' · 形成中', '')) + '</span> ' + esc(time);
+      }).join(' / ');
+      if (!signals.length) {
+        var text = lv.zs ? (lv.zs.inside ? '中枢内 ' : '中枢外 ') + lv.zs.zd + '–' + lv.zs.zg : (found ? '暂无点位' : '摘要不可用');
+        details.push(text);
+        html = '<span class="' + (lv.zs ? 'zs' : 'lv') + '">' + esc(text) + '</span>';
       }
       var chip = document.createElement('span');
       chip.className = 'res-chip';
-      chip.innerHTML = html;
+      chip.title = FREQ_NAME[freq] + '：' + details.join(' / ');
+      chip.innerHTML = '<span class="lv">' + FREQ_NAME[freq] + '</span><span class="res-detail">' + html + '</span>' +
+        (forming ? '<span class="res-state">形成中</span>' : '');
       box.appendChild(chip);
     });
   }
@@ -1177,20 +1186,15 @@
     renderStatus();
     var bar = el('metaBar');
     var parts = [
-      '数据源：' + meta.source,
-      '复权口径：' + meta.fqf,
-      '抓取时间：' + meta.fetch_time + cacheBadge(meta),
-      'K线：' + meta.bars + ' 根（' + meta.first_dt + ' ~ ' + meta.last_dt + '）',
-      '成笔标准：' + (state.ruleProfile === 'relaxed' ? '宽松' : '严格') + '（买卖点按上游形态规则计算）',
-      '提示范围：' + (state.signalScope === 'standard' ? '标准' : '扩展'),
+      {text: '数据源：' + meta.source},
+      {text: '复权：' + meta.fqf},
+      {text: '抓取：' + meta.fetch_time, badge: cacheBadge(meta)},
+      {text: 'K线：' + meta.bars + ' 根', title: meta.first_dt + ' ~ ' + meta.last_dt},
     ];
-    bar.innerHTML = parts.map(function (p) { return '<span>' + p + '</span>'; }).join('');
-    if (meta.degraded) {
-      var warn = document.createElement('span');
-      warn.className = 'warn';
-      warn.textContent = meta.degraded_note;
-      bar.appendChild(warn);
-    }
+    bar.innerHTML = parts.map(function (part) {
+      return '<span title="' + esc(part.title || part.text) + '">' + esc(part.text) + (part.badge || '') + '</span>';
+    }).join('');
+    bar.title = meta.degraded && meta.degraded_note ? meta.degraded_note : '';
   }
 
   // ---------- F10 摘要 + 当日资金流（行情显示层，右栏顶部两卡） ----------
@@ -1241,9 +1245,12 @@
   function renderF10(j) {
     var f = j.f10 || {};
     el('f10Sec').style.display = '';
-    var stale = el('f10Stale');  // degraded=回旧缓存：卡内显示数据时间
-    stale.textContent = displayDataNote(j);
-    stale.hidden = !stale.textContent;
+    var stale = el('f10Stale');
+    var dataNote = displayDataNote(j);
+    stale.textContent = dataNote ? (j.degraded ? '缓存' : '数据') : '';
+    stale.title = dataNote;
+    stale.setAttribute('aria-label', dataNote);
+    stale.hidden = !dataNote;
     renderF10Header(f);
     var tags = '';
     if (f.industry) {

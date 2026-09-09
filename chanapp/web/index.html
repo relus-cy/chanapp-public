@@ -71,7 +71,12 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .freq button:active { transform: scale(.96); }
   @media (hover:hover) { .freq button:hover { color: var(--fg); } }
   .freq button.active { color: var(--gold); background: var(--raise); }
-  #status { margin-left: auto; color: var(--dim); font-size: 12px; font-family: var(--mono); }
+  .brand, .freq, .header-settings { flex-shrink: 0; }
+  .header-settings { display: flex; align-items: center; gap: 12px; }
+  .header-setting { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .header-setting .rule-label { color: var(--faint); font-size: 11px; }
+  .header-setting .seg button { font-size: 11px; padding: 1px 8px; }
+  #status { min-width: 0; overflow: hidden; white-space: nowrap; margin-left: auto; color: var(--dim); font-size: 12px; font-family: var(--mono); }
   #themeBtn {
     position: relative; width: 30px; height: 24px; padding: 0;
     background: transparent; border: 1px solid var(--line2); border-radius: var(--radius-s);
@@ -164,18 +169,16 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .legend .dim { color: var(--faint); }
 
   /* 多级别信号占独立一行，不覆盖图表或拦截十字线。 */
-  .res-bar { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 5px 10px; border-bottom: 1px solid var(--line); }
-  .res-bar .rule-label { font-size: 11px; color: var(--faint); }
-  .res-bar .seg button { font-size: 11px; padding: 1px 10px; }
-  .resonance { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
-  .resonance:empty { display: none; }
+  .res-bar { flex: 0 0 36px; height: 36px; padding: 5px 10px; border-bottom: 1px solid var(--line); }
+  .resonance { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; min-width: 0; height: 25px; }
   .res-chip {
     display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--mono);
     background: var(--overlay); border: 1px solid var(--line2); border-radius: var(--radius-s);
-    padding: 2px 8px; color: var(--dim);
-    white-space: nowrap; max-width: 100%; box-sizing: border-box;
+    height: 25px; min-width: 0; padding: 2px 8px; color: var(--dim); white-space: nowrap; overflow: hidden;
   }
-  .res-chip .zs { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .res-chip .lv, .res-chip .res-state { flex-shrink: 0; }
+  .res-chip .res-detail { min-width: 0; overflow: hidden; white-space: nowrap; }
+  .res-chip .res-state { margin-left: auto; color: var(--faint); }
   .res-chip .lv { color: var(--faint); }
   .res-chip .sig-b { color: var(--up); font-weight: 600; }
   .res-chip .sig-s { color: var(--down); font-weight: 600; }
@@ -302,9 +305,13 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   /* ---------- footer ---------- */
   footer {
     padding: 4px 14px; border-top: 1px solid var(--line); background: var(--panel);
-    color: var(--faint); font-size: 11px; display: flex; gap: 18px; flex-wrap: wrap; flex-shrink: 0;
+    color: var(--faint); font-size: 11px; display: flex; gap: 18px; flex-wrap: nowrap; flex-shrink: 0; overflow: hidden; white-space: nowrap;
     font-family: var(--mono);
   }
+  footer > span { min-width: 0; overflow: hidden; }
+  .data-status { display: inline-block; margin-left: 6px; color: var(--faint); font-size: 10px; font-weight: 400; cursor: help; }
+  .data-status[hidden] { display: none; }
+  .data-status:focus-visible { outline: 1px solid var(--gold); outline-offset: 2px; }
   footer .warn, #status .warn, .wl-head .warn { color: var(--gold); }
 </style>
 </head>
@@ -317,6 +324,20 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     <button data-freq="m30">30分</button>
     <button data-freq="m15">15分</button>
     <button data-freq="m5">5分</button>
+  </div>
+  <div class="header-settings">
+    <div class="header-setting"><span class="rule-label">成笔标准</span>
+      <div class="seg" id="ruleProfile" role="group" aria-label="成笔标准" title="严格/宽松仅指成笔跨度，买卖点按上游形态规则计算">
+        <button data-profile="strict">严格</button>
+        <button data-profile="relaxed">宽松</button>
+      </div>
+    </div>
+    <div class="header-setting"><span class="rule-label">提示范围</span>
+      <div class="seg" id="signalScope" role="group" aria-label="提示范围" title="扩展包含零中枢上下文提示，不表示更确定">
+        <button data-scope="standard">标准</button>
+        <button data-scope="expanded">扩展</button>
+      </div>
+    </div>
   </div>
   <span id="status"></span>
   <button id="themeBtn" aria-label="切换日间/夜间主题">
@@ -344,16 +365,6 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   </div>
   <div id="center">
     <div class="res-bar">
-      <span class="rule-label">成笔标准</span>
-      <div class="seg" id="ruleProfile" role="group" aria-label="成笔标准" title="严格/宽松仅指成笔跨度，买卖点按上游形态规则计算">
-        <button data-profile="strict">严格</button>
-        <button data-profile="relaxed">宽松</button>
-      </div>
-      <span class="rule-label">提示范围</span>
-      <div class="seg" id="signalScope" role="group" aria-label="提示范围" title="扩展包含零中枢上下文提示，不表示更确定">
-        <button data-scope="standard">标准</button>
-        <button data-scope="expanded">扩展</button>
-      </div>
       <div class="resonance" id="resonance" role="group" aria-label="多周期信号摘要"></div>
     </div>
     <div id="chartWrap">
@@ -386,11 +397,10 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   <div id="rail">
     <div class="sec" id="f10Sec" style="display:none">
       <div class="f10-top">
-        <div><span class="nm" id="f10Name"></span><span class="cd" id="f10Code"></span></div>
+        <div><span class="nm" id="f10Name"></span><span class="cd" id="f10Code"></span><span id="f10Stale" class="data-status" tabindex="0" hidden></span></div>
         <div><span class="px" id="f10Px"></span><span class="chg" id="f10Chg"></span></div>
       </div>
       <div class="tags" id="f10Tags"></div>
-      <div class="warn" id="f10Stale" style="font-size:11px" hidden></div>
       <div class="grid" id="f10Grid"></div>
     </div>
     <div class="sec" id="flowSec" style="display:none">
@@ -406,7 +416,6 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     </div>
     <div class="sec">
       <h3>信号依据卡</h3>
-      <p class="ai-note">扩展包含零中枢上下文提示，不表示更确定。力度仅供观察，不作硬过滤。</p>
       <div id="cards"></div>
     </div>
   </div>
