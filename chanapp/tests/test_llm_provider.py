@@ -85,7 +85,7 @@ class TestLLMProvider(_EnvMixin, unittest.TestCase):
         with mock.patch("requests.post", side_effect=fake_post):
             from chanapp.engine import llm
             self.assertEqual(llm.analyze("p"), "ok")
-        self.assertEqual(sent["model"], "deepseek-chat")  # 缺省 provider/model
+        self.assertEqual(sent["model"], "deepseek-flash")  # 缺省 provider/model
 
     def test_is_configured(self):
         self._set_env()  # 无 LLM_API_KEY

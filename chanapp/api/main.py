@@ -10,7 +10,8 @@ resonance：多周期摘要（日/60/30 分别列出最新笔/段点位、状态
 纯计算零新数据，复用 compute_cache；某级取数/计算失败则该级缺省，不影响主响应。
 
 自选股：GET/POST /api/watchlist，DELETE /api/watchlist/{code}，
-POST /api/watchlist/{code}/star（星标置顶；文件保持 append 序，响应星标在前）
+POST /api/watchlist/{code}/star（星标置顶；文件保持 append 序，响应星标在前），
+PUT /api/watchlist/{code}/tags（自定义标签：strip/去空/保序去重/每条≤12 字符/≤8 条）
 持久化到 WATCHLIST_PATH（env，默认 chanapp/watchlist.json）。
 
 联想搜索：GET /api/search?q=（外部联想接口，返回 [{code,name,type}]，仅 sh/sz/hk；
@@ -34,6 +35,8 @@ import json
 import logging
 import os
 import sys
+import tempfile
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -97,7 +100,7 @@ async def lifespan(app: FastAPI):
             supply_state.stop_runtime()
 
 
-app = FastAPI(title="chanapp", version="1.6.3", docs_url=None, redoc_url=None, lifespan=lifespan)
+app = FastAPI(title="chanapp", version="1.6.5", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -167,6 +170,7 @@ def api_search(q: str = Query("")) -> list[dict]:
 # ---------- 自选股 CRUD ----------
 
 _WATCHLIST_SEED = _PKG_ROOT / "watchlist.json"
+_WATCHLIST_LOCK = threading.RLock()
 
 
 def _watchlist_path() -> Path:
@@ -175,14 +179,22 @@ def _watchlist_path() -> Path:
 
 
 def _read_watchlist_raw() -> list[dict]:
-    # 文件保持 append 序；旧数据无 starred 字段，归一化为 False
-    p = _watchlist_path()
-    if not p.exists() and p != _WATCHLIST_SEED:
-        p = _WATCHLIST_SEED
-    if not p.exists():
+    # 文件保持 append 序；旧数据无 starred/tags 字段，归一化为 False / []
+    with _WATCHLIST_LOCK:
+        p = _watchlist_path()
+        if not p.exists() and p != _WATCHLIST_SEED:
+            p = _WATCHLIST_SEED
+        if not p.exists():
+            return []
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        return [dict(w, starred=bool(w.get("starred")), tags=_norm_tags(w.get("tags"))) for w in raw]
+
+
+def _norm_tags(v) -> list[str]:
+    # 仅接受 list，元素只保留 strip 后非空的 str
+    if not isinstance(v, list):
         return []
-    raw = json.loads(p.read_text(encoding="utf-8"))
-    return [dict(w, starred=bool(w.get("starred"))) for w in raw]
+    return [t.strip() for t in v if isinstance(t, str) and t.strip()]
 
 
 def _ordered(items: list[dict]) -> list[dict]:
@@ -191,8 +203,18 @@ def _ordered(items: list[dict]) -> list[dict]:
 
 
 def _save_watchlist(items: list[dict]) -> None:
-    _watchlist_path().write_text(
-        json.dumps(items, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with _WATCHLIST_LOCK:
+        path = _watchlist_path()
+        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps(items, ensure_ascii=False, indent=2) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
 
 class WatchItem(BaseModel):
@@ -202,38 +224,63 @@ class WatchItem(BaseModel):
 
 @app.get("/api/watchlist")
 def list_watchlist() -> list[dict]:
-    return _ordered(_read_watchlist_raw())
+    with _WATCHLIST_LOCK:
+        return _ordered(_read_watchlist_raw())
 
 
 @app.post("/api/watchlist")
 def add_watch(item: WatchItem) -> list[dict]:
-    items = _read_watchlist_raw()
-    if any(w["code"] == item.code for w in items):
-        raise HTTPException(status_code=409, detail=f"{item.code} 已在自选中")
-    items.append({"code": item.code, "name": item.name, "starred": False})
-    _save_watchlist(items)
-    return _ordered(items)
+    with _WATCHLIST_LOCK:
+        items = _read_watchlist_raw()
+        if any(w["code"] == item.code for w in items):
+            raise HTTPException(status_code=409, detail=f"{item.code} 已在自选中")
+        items.append({"code": item.code, "name": item.name, "starred": False, "tags": []})
+        _save_watchlist(items)
+        return _ordered(items)
 
 
 @app.delete("/api/watchlist/{code}")
 def remove_watch(code: str) -> list[dict]:
-    items = _read_watchlist_raw()
-    kept = [w for w in items if w["code"] != code]
-    if len(kept) == len(items):
-        raise HTTPException(status_code=404, detail=f"{code} 不在自选中")
-    _save_watchlist(kept)
-    return _ordered(kept)
+    with _WATCHLIST_LOCK:
+        items = _read_watchlist_raw()
+        kept = [w for w in items if w["code"] != code]
+        if len(kept) == len(items):
+            raise HTTPException(status_code=404, detail=f"{code} 不在自选中")
+        _save_watchlist(kept)
+        return _ordered(kept)
 
 
 @app.post("/api/watchlist/{code}/star")
 def toggle_star(code: str) -> list[dict]:
-    items = _read_watchlist_raw()
-    hit = next((w for w in items if w["code"] == code), None)
-    if hit is None:
-        raise HTTPException(status_code=404, detail=f"{code} 不在自选中")
-    hit["starred"] = not hit["starred"]
-    _save_watchlist(items)
-    return _ordered(items)
+    with _WATCHLIST_LOCK:
+        items = _read_watchlist_raw()
+        hit = next((w for w in items if w["code"] == code), None)
+        if hit is None:
+            raise HTTPException(status_code=404, detail=f"{code} 不在自选中")
+        hit["starred"] = not hit["starred"]
+        _save_watchlist(items)
+        return _ordered(items)
+
+
+class WatchTags(BaseModel):
+    tags: list[str]
+
+
+@app.put("/api/watchlist/{code}/tags")
+def set_tags(code: str, body: WatchTags) -> list[dict]:
+    with _WATCHLIST_LOCK:
+        items = _read_watchlist_raw()
+        hit = next((w for w in items if w["code"] == code), None)
+        if hit is None:
+            raise HTTPException(status_code=404, detail=f"{code} 不在自选中")
+        tags: list[str] = []
+        for raw in body.tags:
+            t = raw.strip()[:12]
+            if t and t not in tags:
+                tags.append(t)
+        hit["tags"] = tags[:8]
+        _save_watchlist(items)
+        return _ordered(items)
 
 
 # ---------- 行情显示层（快照 / F10，适配层可选） ----------

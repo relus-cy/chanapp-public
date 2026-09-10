@@ -56,6 +56,7 @@
   function supplyLabel(scheme) { return scheme === 'baseline' ? '现有方案' : '候选方案'; }
   function renderSupply() {
     el('supplyCurrent').textContent = '正在使用：' + supplyLabel(supplyState.scheme);
+    el('supplyScheme').textContent = supplyLabel(supplyState.scheme);
     var candidate = supplyState.options.find(function (o) { return o.id === 'primary_candidate'; });
     el('supplySelect').options[1].disabled = !candidate || !candidate.ready;
     el('supplySelect').disabled = supplyBusy;
@@ -101,12 +102,12 @@
     if (analysisAbort) analysisAbort.abort();
     chartAbort = analysisAbort = null;
     state.quotes = {}; f10Last = {code: null, ts: 0}; lastF10 = null;
-    lastChartData = null; lastMeta = null;
+    lastChartData = null; lastMeta = null; loadedTarget = null;
     pendingAnalysis = null; activeChartVersion = null;
     hideF10Cards(); renderWatchlist(); renderEvidence([]);
-    el('wlStale').hidden = true;
     el('metaBar').innerHTML = ''; el('resonance').innerHTML = ''; el('ohlc').innerHTML = '';
     el('aiPanel').innerHTML = '<div class="ai-note">加载中…</div>';
+    if (typeof closeAiPopup === 'function') closeAiPopup();
     el('center').classList.add('supply-loading');
     supplyBusy = false;
     el('supplySelect').value = j.scheme;
@@ -151,16 +152,16 @@
 
   var PAL = {
     light: {
-      bg: '#ffffff', text: '#686e78', grid: 'rgba(0,0,12,.05)', border: 'rgba(0,0,12,.14)',
+      bg: '#ffffff', text: '#565c66', grid: 'rgba(0,0,12,.05)', border: 'rgba(0,0,12,.14)',
       up: '#d63f33', down: '#2e8ca3', upA: 'rgba(214,63,51,.45)', downA: 'rgba(46,140,163,.45)',
       upD: '#b23228', downD: '#226b78',
-      gold: '#96700f', goldA: 'rgba(150,112,15,.55)',
-      zsFill: 'rgba(150,112,15,.07)', zsLine: 'rgba(150,112,15,.45)',
+      gold: '#7d5f0c', goldA: 'rgba(125,95,12,.55)',
+      zsFill: 'rgba(125,95,12,.07)', zsLine: 'rgba(125,95,12,.45)',
       bi: 'rgba(90,98,110,.6)', biForming: 'rgba(90,98,110,.45)',
-      ma5: '#6a7079', ma13: '#96700f', ma20: '#2e8ca3', ma60: '#d63f33', ma144: '#8a72b8', ma250: '#4f7fb8'
+      ma5: '#6a7079', ma13: '#7d5f0c', ma20: '#2e8ca3', ma60: '#d63f33', ma144: '#8a72b8', ma250: '#4f7fb8'
     },
     dark: {
-      bg: '#0b0c0e', text: '#84898f', grid: 'rgba(255,255,255,.04)', border: 'rgba(255,255,255,.1)',
+      bg: '#0b0c0e', text: '#959aa1', grid: 'rgba(255,255,255,.04)', border: 'rgba(255,255,255,.1)',
       up: '#df4b3e', down: '#3aa6b9', upA: 'rgba(223,75,62,.45)', downA: 'rgba(58,166,185,.45)',
       upD: '#b23c33', downD: '#2e8494',
       gold: '#c9a24d', goldA: 'rgba(201,162,77,.55)',
@@ -202,28 +203,38 @@
   var klineByTime = {};  // toTime(time) → {bar, prev}，十字光标定位用
   var macdRowsRaw = [];  // 后端 MACD 行（原始 dt 字符串）
   var lastChartData = null;  // 最近一次 /api/chart 响应，主题切换时原路径重渲染
+  var loadedTarget = null;   // 当前图表内容归属 {code, freq}，后台刷新据此判定是否保留可视区间
   var legendEl = null;
 
   // ---------- UI 骨架 ----------
+
+  var SVG_STAR = '<svg class="ic-star" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5l2.6 5.3 5.9.9-4.2 4.1 1 5.8-5.3-2.8-5.3 2.8 1-5.8L3.5 9.7l5.9-.9z"/></svg>';
+  var SVG_X = '<svg class="ic-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
   function el(id) { return document.getElementById(id); }
 
   function renderWatchlist() {
     var box = el('wlItems');
+    var focused = document.activeElement;
+    var focusedRow = focused && focused.closest('.item');
+    var focusedCode = focusedRow && focusedRow.dataset.code;
+    var focusedAction = focusedRow && (focused.classList.contains('star') ? 'star' : focused.classList.contains('del') ? 'del' : null);
+    var restoreRow = null;
     box.innerHTML = '';
     state.watchlist.forEach(function (w) {
       var q = (state.quotes || {})[w.code] || {};
       var noPx = q.price == null;  // 上游零值/缺失行：价格与涨跌幅一并显空（v1.3.0）
       var pctCls = q.pct > 0 ? 'up' : (q.pct < 0 ? 'down' : 'flat');
       var div = document.createElement('div');
+      div.dataset.code = w.code;
       div.className = 'item' + (w.code === state.code ? ' active' : '');
-      div.innerHTML = '<div class="row"><span>' + (w.starred ? '★ ' : '') + esc(w.name) +
+      div.innerHTML = '<div class="row"><span>' + esc(w.name) +
         (q.limit_up ? '<span class="tag-limit">涨停</span>' : '') + '</span>' +
         '<span class="chg ' + pctCls + '">' +
         (noPx || q.pct == null ? '' : (q.pct > 0 ? '+' : '') + q.pct.toFixed(2) + '%') + '</span>' +
         '<span class="btns">' +
-        '<button class="star' + (w.starred ? ' on' : '') + '" title="置顶">★</button>' +
-        '<button class="del" title="删除">×</button></span></div>' +
+        '<button class="star' + (w.starred ? ' on' : '') + '" title="置顶" aria-label="置顶">' + SVG_STAR + '</button>' +
+        '<button class="del" title="删除" aria-label="删除">' + SVG_X + '</button></span></div>' +
         '<div class="row2"><span class="code">' + esc(w.code) + '</span>' +
         '<span class="px ' + pctCls + '">' + (noPx ? '' : q.price.toFixed(2)) + '</span></div>';
       div.querySelector('.star').onclick = function (ev) {
@@ -234,77 +245,154 @@
         ev.stopPropagation();
         removeWatch(w.code);
       };
-      div.onclick = function () { state.code = w.code; renderWatchlist(); load(); };
+      div.onclick = function () {
+        state.code = w.code; renderWatchlist(); load();
+        if (sbMode() === 'open') setSidebar('rail');  /* 浮动展开选中后收回窄栏，露出图表 */
+      };
+      div.tabIndex = 0;
+      div.onkeydown = function (ev) {
+        if (ev.target !== div) return;
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); div.onclick(); }
+      };
       box.appendChild(div);
+      if (w.code === focusedCode) restoreRow = div;
     });
+    if (restoreRow) {
+      restoreRow.focus({preventScroll: true});
+      if (focusedAction) restoreRow.querySelector('.' + focusedAction).focus({preventScroll: true});
+    }
 
     var formBox = el('wlForm');
-    formBox.innerHTML = '';
-    var form = document.createElement('form');
-    form.className = 'wl-add';
-    form.innerHTML = '<input name="q" placeholder="代码 / 名称，回车添加" autocomplete="off" required>' +
-      '<div class="wl-drop" hidden></div>';
-    wireSearch(form);
-    formBox.appendChild(form);
+    if (!formBox.firstChild) {  // 表单只建一次：行情刷新重建会清空输入、夺走焦点
+      var form = document.createElement('form');
+      form.className = 'wl-add';
+      form.innerHTML = '<input name="q" placeholder="代码 / 名称，回车添加" autocomplete="off" required>' +
+        '<div class="wl-drop" hidden></div>';
+      wireSearch(form);
+      formBox.appendChild(form);
+    }
     updateAiTitle();  // watchlist 晚于首次 load() 返回时修正标题
-    if (lastF10 && lastF10.code === state.code) renderF10Header(lastF10.json.f10 || {});  // 同上，修正 F10 卡头
+    if (lastF10 && lastF10.code === state.code) {
+      renderF10Header(lastF10.json.f10 || {});  // 同上，修正 F10 卡头
+      renderTags();
+    }
   }
 
   // ---------- 搜索式添加（防抖 300ms → /api/search，点击候选即添加） ----------
 
-  var searchTimer = null;
+  var searchTimer = null, searchRequest = 0;
 
   function wireSearch(form) {
     var input = form.q;
     var drop = form.querySelector('.wl-drop');
+    var cands = [], activeIdx = -1;
+    input.id = 'watchSearch';
+    drop.id = 'watchSearchListbox';
+    drop.setAttribute('role', 'listbox');
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-expanded', 'false');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-controls', drop.id);
+    input.setAttribute('aria-label', '搜索自选股');
 
-    function hideDrop() { drop.hidden = true; drop.innerHTML = ''; }
+    function hideDrop() {
+      drop.hidden = true; drop.innerHTML = ''; cands = []; activeIdx = -1;
+      input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+    }
+
+    function cancelSearch() {
+      searchRequest += 1;
+      if (searchTimer) clearTimeout(searchTimer);
+      searchTimer = null;
+      hideDrop();
+    }
+
+    function markActive() {
+      Array.prototype.forEach.call(drop.children, function (div, i) {
+        div.classList.toggle('active', i === activeIdx);
+        div.setAttribute('aria-selected', i === activeIdx ? 'true' : 'false');
+      });
+      if (activeIdx >= 0 && drop.children[activeIdx]) {
+        input.setAttribute('aria-activedescendant', drop.children[activeIdx].id);
+      } else {
+        input.removeAttribute('aria-activedescendant');
+      }
+    }
+
+    function pick(i) {
+      var c = cands[i];
+      if (!c) return;
+      cancelSearch();
+      input.value = '';
+      addWatch(c.code, c.name, null);
+    }
 
     function showCandidates(list) {
       drop.innerHTML = '';
+      cands = list; activeIdx = -1;
       if (!list.length) {
         drop.innerHTML = '<div class="cand none">无匹配结果</div>';
         drop.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
         return;
       }
-      list.forEach(function (c) {
+      list.forEach(function (c, i) {
         var div = document.createElement('div');
         div.className = 'cand';
+        div.id = 'wl-cand-' + i;
+        div.setAttribute('role', 'option');
+        div.setAttribute('aria-selected', 'false');
         div.innerHTML = '<span class="c-name">' + esc(c.name) + '</span>' +
           '<span class="c-code">' + esc(c.code) + '</span>';
         div.onmousedown = function (ev) {  // mousedown 先于 input blur
           ev.preventDefault();
-          hideDrop();
-          input.value = '';
-          addWatch(c.code, c.name, null);
+          pick(i);
         };
         drop.appendChild(div);
       });
       drop.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
     }
 
     input.oninput = function () {
       var q = input.value.trim();
-      if (searchTimer) clearTimeout(searchTimer);
-      if (!q) { hideDrop(); return; }
+      cancelSearch();
+      if (!q) return;
+      var request = searchRequest;
       searchTimer = setTimeout(function () {
+        searchTimer = null;
         fetch('/api/search?q=' + encodeURIComponent(q))
           .then(function (r) {
             if (!r.ok) throw new Error('搜索失败 ' + r.status);
             return r.json();
           })
           .then(function (list) {
-            if (input.value.trim() === q) showCandidates(list);
+            if (request === searchRequest && input.value.trim() === q) showCandidates(list);
           })
-          .catch(function (e) { setStatus(e.message); });
+          .catch(function (e) { if (request === searchRequest) setStatus(e.message); });
       }, 300);
     };
 
     input.onkeydown = function (ev) {
-      if (ev.key === 'Escape') { hideDrop(); input.blur(); }
+      if (ev.key === 'Escape') { cancelSearch(); input.blur(); return; }
+      if (ev.key === 'Enter' && (ev.isComposing || ev.keyCode === 229)) return;
+      if (drop.hidden || !cands.length) return;
+      if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        activeIdx = Math.min(activeIdx + 1, cands.length - 1);
+        markActive();
+      } else if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        activeIdx = Math.max(activeIdx - 1, 0);
+        markActive();
+      } else if (ev.key === 'Enter') {
+        ev.preventDefault();
+        pick(activeIdx >= 0 ? activeIdx : 0);
+      }
     };
-    input.onblur = function () { hideDrop(); };
-    form.onsubmit = function (ev) { ev.preventDefault(); };  // 回车不提交，只点候选
+    input.onblur = cancelSearch;
+    form.onsubmit = function (ev) { ev.preventDefault(); };  // 添加只走候选（点击/回车），不整表提交
   }
 
   // 点搜索区外部收起下拉
@@ -315,17 +403,26 @@
     }
   });
 
+  var watchlistQueue = Promise.resolve();
+  function queueWatchlist(operation) {
+    var result = watchlistQueue.then(operation);
+    watchlistQueue = result.catch(function () {});
+    return result;
+  }
+
   function loadWatchlist() {
-    return fetch('/api/watchlist')
-      .then(function (r) { return r.json(); })
-      .then(function (items) {
-        state.watchlist = items;
-        if (!items.some(function (w) { return w.code === state.code; })) {
-          state.code = items.length ? items[0].code : null;
-        }
-        renderWatchlist();
-        if (state.code) load();
-      })
+    return queueWatchlist(function () {
+      return fetch('/api/watchlist')
+        .then(function (r) { if (!r.ok) throw new Error('加载失败 ' + r.status); return r.json(); })
+        .then(function (items) {
+          state.watchlist = items;
+          if (!items.some(function (w) { return w.code === state.code; })) {
+            state.code = items.length ? items[0].code : null;
+          }
+          renderWatchlist();
+          if (state.code) load();
+        });
+    })
       .catch(function (e) { setStatus('自选股加载失败：' + e.message); });
   }
 
@@ -348,59 +445,65 @@
       .then(function (j) {
         if (!j || !eligible(generation, j, epoch)) return;
         state.quotes = j.quotes || {};
-        var s = el('wlStale');  // degraded=回旧缓存：显示数据时间，fresh 时隐藏
-        s.textContent = displayDataNote(j);
-        s.hidden = !s.textContent;
         renderWatchlist();
       })
       .catch(function () {});
   }
 
   function addWatch(code, name, form) {
-    fetch('/api/watchlist', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: code, name: name }),
-    }).then(function (r) {
-      if (r.status === 409) throw new Error(code + ' 已在自选中');
-      if (!r.ok) throw new Error('添加失败 ' + r.status);
-      return r.json();
-    }).then(function (items) {
-      state.watchlist = items;
-      if (form) form.reset();
-      renderWatchlist();
-      setStatus('');
+    return queueWatchlist(function () {
+      return fetch('/api/watchlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code, name: name }),
+      }).then(function (r) {
+        if (r.status === 409) throw new Error(code + ' 已在自选中');
+        if (!r.ok) throw new Error('添加失败 ' + r.status);
+        return r.json();
+      }).then(function (items) {
+        var selectFirst = !state.code && items.length;
+        state.watchlist = items;
+        if (selectFirst) state.code = items[0].code;
+        if (form) form.reset();
+        renderWatchlist();
+        if (selectFirst) load();
+        setStatus('');
+      });
     }).catch(function (e) { setStatus(e.message); });
   }
 
   function removeWatch(code) {
-    fetch('/api/watchlist/' + encodeURIComponent(code), { method: 'DELETE' })
-      .then(function (r) {
-        if (!r.ok) throw new Error('删除失败 ' + r.status);
-        return r.json();
-      })
-      .then(function (items) {
-        state.watchlist = items;
-        if (state.code === code) {
-          state.code = items.length ? items[0].code : null;
-          if (state.code) load();
-        }
-        renderWatchlist();
-      })
-      .catch(function (e) { setStatus(e.message); });
+    return queueWatchlist(function () {
+      return fetch('/api/watchlist/' + encodeURIComponent(code), { method: 'DELETE' })
+        .then(function (r) {
+          if (!r.ok) throw new Error('删除失败 ' + r.status);
+          return r.json();
+        })
+        .then(function (items) {
+          var removedCurrent = state.code === code;
+          state.watchlist = items;
+          if (removedCurrent) state.code = items.length ? items[0].code : null;
+          renderWatchlist();
+          if (removedCurrent) {
+            if (state.code) load();
+            else clearSelection();
+          }
+        });
+    }).catch(function (e) { setStatus(e.message); });
   }
 
   function toggleStar(code) {
-    fetch('/api/watchlist/' + encodeURIComponent(code) + '/star', { method: 'POST' })
-      .then(function (r) {
-        if (!r.ok) throw new Error('置顶失败 ' + r.status);
-        return r.json();
-      })
-      .then(function (items) {
-        state.watchlist = items;
-        renderWatchlist();
-      })
-      .catch(function (e) { setStatus(e.message); });
+    return queueWatchlist(function () {
+      return fetch('/api/watchlist/' + encodeURIComponent(code) + '/star', { method: 'POST' })
+        .then(function (r) {
+          if (!r.ok) throw new Error('置顶失败 ' + r.status);
+          return r.json();
+        })
+        .then(function (items) {
+          state.watchlist = items;
+          renderWatchlist();
+        });
+    }).catch(function (e) { setStatus(e.message); });
   }
 
   function renderTabs() {
@@ -416,12 +519,12 @@
   var statusMsg = null;   // setStatus 的临时消息，空串/null 回落到常驻状态
   var lastMeta = null;    // 最近一次 /api/chart 的 meta（抓取时间/缓存标记）
 
-  // 新鲜度文案（v1.4.1）：stale=过期回旧 → 金色「缓存·N 分钟前」；TTL 内缓存 → 「（缓存）」；新鲜抓取 → 空
+  // 新鲜度文案（v1.6.5 终审口径）：stale=过期回旧 → 金色「缓存·HH:MM:SS」（缓存内容的抓取时点 = fetch_time 本身；取不到 HH:MM:SS 则「缓存·旧」）；TTL 内 → 「（缓存）」；新鲜 → 空
   function cacheBadge(meta) {
     if (!meta || !meta.from_cache) return '';
     if (meta.stale) {
-      var n = meta.stale_age_s == null ? null : Math.max(1, Math.round(meta.stale_age_s / 60));
-      return '<span class="warn">（缓存·' + (n == null ? '旧' : n + ' 分钟前') + '）</span>';
+      var t = /(\d{2}:\d{2}:\d{2})/.test(String(meta.fetch_time || '')) ? hhmmss(meta.fetch_time) : '旧';
+      return '<span class="warn">（缓存·' + t + '）</span>';
     }
     return '（缓存）';
   }
@@ -435,7 +538,13 @@
 
   function showChartError(msg) {
     var e = el('chartError');
-    e.textContent = '图表数据加载失败：' + msg + '（点击自选股或周期重试）';
+    e.innerHTML = '';
+    e.appendChild(document.createTextNode('图表数据加载失败：' + msg + ' '));
+    var retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = '重试';
+    retry.onclick = function () { load(); };
+    e.appendChild(retry);
     e.hidden = false;
   }
 
@@ -614,7 +723,7 @@
       crosshair: { mode: 0,
         vertLine: { color: P.goldA, labelBackgroundColor: P.gold },
         horzLine: { color: P.goldA, labelBackgroundColor: P.gold } },
-      rightPriceScale: { borderColor: P.border },
+      rightPriceScale: { borderColor: P.border, minimumWidth: 72 },
       timeScale: { borderColor: P.border, rightOffset: 3, timeVisible: true, secondsVisible: false },
     };
   }
@@ -665,11 +774,12 @@
 
     var markers = LW.createSeriesMarkers(candleSeries, []);
 
-    // 同步时间轴（双向，防回环）
+    // 同步时间轴（双向，防回环）；showInd 重建副图 series 期间（subRebuild）库会
+    // 触发 时间轴 null→自动适配 瞬变，必须抑制同步，否则主图可视区间被拖走
     var syncing = false;
     function sync(src, dst) {
       src.timeScale().subscribeVisibleLogicalRangeChange(function (range) {
-        if (syncing || !range) return;
+        if (syncing || subRebuild || !range) return;
         syncing = true;
         dst.timeScale().setVisibleLogicalRange(range);
         syncing = false;
@@ -761,6 +871,7 @@
 
   var subSeries = [];
   var curInd = 'macd';
+  var subRebuild = false;  // showInd 重建副图期间抑制主副图时间轴同步（ensureCharts 的 sync 检查）
   var SUB_NOTES = {
     macd: 'MACD 指标 · hist=2×(DIF−DEA)',
     kdj: 'KDJ(9,3,3) · 显示用，不参与信号',
@@ -819,64 +930,100 @@
 
   function lastVal(arr) { for (var i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i]; }
 
+  function bollNote(boll, close) {
+    var mid = boll && lastVal(boll.mid), up = boll && lastVal(boll.up), low = boll && lastVal(boll.lo);
+    var fmt = function (v) { return v == null ? '--' : v.toFixed(2); };
+    return 'BOLL(20,2)' + (mid == null ? ' · 样本不足（至少 20 根）' : '') +
+      ' · MID <b style="color:' + P.gold + '">' + fmt(mid) + '</b>' +
+      ' · UP <b style="color:' + P.bi + '">' + fmt(up) + '</b>' +
+      ' · LOW <b style="color:' + P.bi + '">' + fmt(low) + '</b>' +
+      ' · C <b style="color:' + P.up + '">' + fmt(close) + '</b> · 显示用';
+  }
+
   function showInd(name) {
     curInd = name;
-    document.querySelectorAll('#subSeg button').forEach(function (b) {
+    document.querySelectorAll('#subSeg [data-ind]').forEach(function (b) {
       b.classList.toggle('active', b.dataset.ind === name);
     });
+    var cur = el('subSegCur');
+    if (cur) cur.textContent = name.toUpperCase();
     if (!charts) return;
     var LW = LightweightCharts, sub = charts.macdChart;
-    clearSub();
-    el('subNote').textContent = SUB_NOTES[name];
-    if (!klineData.length) return;
-    var toPt = function (arr) {
-      return klineData.map(function (b, i) {
-        return arr[i] == null ? { time: toTime(b.time) } : { time: toTime(b.time), value: +arr[i].toFixed(4) };
-      }).filter(function (x) { return x.value !== undefined; });
-    };
-    if (name === 'macd') {
-      var h = sub.addSeries(LW.HistogramSeries, { priceLineVisible: false, lastValueVisible: false });
-      h.setData(macdRowsRaw.map(function (m) {
-        return { time: toTime(m.time), value: m.hist, color: m.hist >= 0 ? P.upA : P.downA };
-      }));
-      var d1 = sub.addSeries(LW.LineSeries, subLine(P.gold));
-      d1.setData(macdRowsRaw.map(function (m) { return { time: toTime(m.time), value: m.dif }; }));
-      var d2 = sub.addSeries(LW.LineSeries, subLine(P.bi));
-      d2.setData(macdRowsRaw.map(function (m) { return { time: toTime(m.time), value: m.dea }; }));
-      subSeries = [h, d1, d2];
-    } else if (name === 'kdj') {
-      var kdj = kdjArr();
-      var k = sub.addSeries(LW.LineSeries, subLine(P.gold)); k.setData(toPt(kdj.k));
-      var d = sub.addSeries(LW.LineSeries, subLine(P.bi)); d.setData(toPt(kdj.d));
-      var j = sub.addSeries(LW.LineSeries, subLine(P.up)); j.setData(toPt(kdj.j));
-      subSeries = [k, d, j];
-    } else if (name === 'rsi') {
-      var r = sub.addSeries(LW.LineSeries, subLine(P.gold));
-      r.setData(toPt(rsiArr(14)));
-      subSeries = [r];
-    } else if (name === 'boll') {
-      var boll = bollArr(20, 2);
-      var u = sub.addSeries(LW.LineSeries, subLine(P.bi)); u.setData(toPt(boll.up));
-      var m = sub.addSeries(LW.LineSeries, Object.assign(subLine(P.gold), { lineStyle: LW.LineStyle.Dashed }));
-      m.setData(toPt(boll.mid));
-      var l = sub.addSeries(LW.LineSeries, subLine(P.bi)); l.setData(toPt(boll.lo));
-      // 价格线（收盘），让轨道有参照
-      var closes = klineData.map(function (b) { return b.close; });
-      var c = sub.addSeries(LW.LineSeries, subLine(P.up)); c.setData(toPt(closes));
-      subSeries = [u, m, l, c];
-      // 附注带最新数值
-      el('subNote').innerHTML =
-        'BOLL(20,2) · MID <b style="color:' + P.gold + '">' + lastVal(boll.mid).toFixed(2) + '</b>' +
-        ' · UP <b style="color:' + P.bi + '">' + lastVal(boll.up).toFixed(2) + '</b>' +
-        ' · LOW <b style="color:' + P.bi + '">' + lastVal(boll.lo).toFixed(2) + '</b>' +
-        ' · C <b style="color:' + P.up + '">' + closes[closes.length - 1].toFixed(2) + '</b> · 显示用';
+    // 清空副图会让库的时间轴经历 null→自动适配 瞬变：记录原区间，重建后恢复，期间抑制同步
+    subRebuild = true;
+    var keepRange = null;
+    try {
+      keepRange = sub.timeScale().getVisibleLogicalRange();
+      clearSub();
+      el('subNote').textContent = SUB_NOTES[name];
+      if (!klineData.length) {
+        if (name === 'boll') el('subNote').innerHTML = bollNote(null, null);
+        return;
+      }
+      var toPt = function (arr) {
+        return klineData.map(function (b, i) {
+          return arr[i] == null ? { time: toTime(b.time) } : { time: toTime(b.time), value: +arr[i].toFixed(4) };
+        }).filter(function (x) { return x.value !== undefined; });
+      };
+      if (name === 'macd') {
+        var h = sub.addSeries(LW.HistogramSeries, { priceLineVisible: false, lastValueVisible: false });
+        h.setData(macdRowsRaw.map(function (m) {
+          return { time: toTime(m.time), value: m.hist, color: m.hist >= 0 ? P.upA : P.downA };
+        }));
+        var d1 = sub.addSeries(LW.LineSeries, subLine(P.gold));
+        d1.setData(macdRowsRaw.map(function (m) { return { time: toTime(m.time), value: m.dif }; }));
+        var d2 = sub.addSeries(LW.LineSeries, subLine(P.bi));
+        d2.setData(macdRowsRaw.map(function (m) { return { time: toTime(m.time), value: m.dea }; }));
+        subSeries = [h, d1, d2];
+      } else if (name === 'kdj') {
+        var kdj = kdjArr();
+        var k = sub.addSeries(LW.LineSeries, subLine(P.gold)); k.setData(toPt(kdj.k));
+        var d = sub.addSeries(LW.LineSeries, subLine(P.bi)); d.setData(toPt(kdj.d));
+        var j = sub.addSeries(LW.LineSeries, subLine(P.up)); j.setData(toPt(kdj.j));
+        subSeries = [k, d, j];
+      } else if (name === 'rsi') {
+        var r = sub.addSeries(LW.LineSeries, subLine(P.gold));
+        r.setData(toPt(rsiArr(14)));
+        subSeries = [r];
+      } else if (name === 'boll') {
+        var boll = bollArr(20, 2);
+        var u = sub.addSeries(LW.LineSeries, subLine(P.bi)); u.setData(toPt(boll.up));
+        var m = sub.addSeries(LW.LineSeries, Object.assign(subLine(P.gold), { lineStyle: LW.LineStyle.Dashed }));
+        m.setData(toPt(boll.mid));
+        var l = sub.addSeries(LW.LineSeries, subLine(P.bi)); l.setData(toPt(boll.lo));
+        // 价格线（收盘），让轨道有参照
+        var closes = klineData.map(function (b) { return b.close; });
+        var c = sub.addSeries(LW.LineSeries, subLine(P.up)); c.setData(toPt(closes));
+        subSeries = [u, m, l, c];
+        // 附注带最新数值
+        el('subNote').innerHTML = bollNote(boll, closes[closes.length - 1]);
+      }
+    } finally {
+      try {
+        if (keepRange) sub.timeScale().setVisibleLogicalRange(keepRange);
+      } finally {
+        subRebuild = false;
+      }
     }
   }
 
   function wireSubSeg() {
-    el('subSeg').addEventListener('click', function (e) {
+    var wrap = el('subSeg'), btn = el('subSegBtn'), pop = el('subSegPop');
+    function setOpen(open) {
+      pop.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    btn.addEventListener('click', function () { setOpen(pop.hidden); });
+    pop.addEventListener('click', function (e) {
       var b = e.target.closest('button'); if (!b) return;
       showInd(b.dataset.ind);
+      setOpen(false);
+    });
+    document.addEventListener('click', function (e) {
+      if (!pop.hidden && !wrap.contains(e.target)) setOpen(false);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !pop.hidden) { setOpen(false); btn.focus(); }
     });
   }
 
@@ -907,9 +1054,16 @@
       }
       var chip = document.createElement('span');
       chip.className = 'res-chip';
-      chip.title = FREQ_NAME[freq] + '：' + details.join(' / ');
+      chip.dataset.freq = freq;
+      chip.title = FREQ_NAME[freq] + '：' + details.join(' / ') + '（点击切换周期）';
       chip.innerHTML = '<span class="lv">' + FREQ_NAME[freq] + '</span><span class="res-detail">' + html + '</span>' +
         (forming ? '<span class="res-state">形成中</span>' : '');
+      chip.onclick = function () {
+        if (state.freq === freq) return;
+        state.freq = freq;
+        renderTabs();
+        load();
+      };
       box.appendChild(chip);
     });
   }
@@ -950,25 +1104,85 @@
 
   // ---------- 依据卡 ----------
 
-  function renderEvidence(evidence) {
-    var box = el('cards');
-    box.innerHTML = '';
-    var sorted = evidence.slice().sort(function (a, b) { return a.dt < b.dt ? 1 : -1; });
-    if (!sorted.length) {
-      box.innerHTML = '<div class="card"><span class="text">当前区间无信号</span></div>';
+  // 依据卡点击定位：目标 bar 在当前跨度内居中，越界收敛（+3 与默认右留白一致）
+  function locateEvidenceRange(i, len, span) {
+    var from = Math.max(0, Math.min(i - Math.floor(span / 2), len - 1 + 3 - span));
+    return { from: from, to: from + span };
+  }
+
+  function locateBar(dt) {
+    if (!charts || !charts.main || !klineData.length) return;
+    var rec = klineByTime[toTime(dt)];
+    if (!rec) return;
+    var lr = charts.main.timeScale().getVisibleLogicalRange();
+    var span = lr ? Math.max(20, lr.to - lr.from) : 60;
+    var range = locateEvidenceRange(rec.i, klineData.length, span);
+    charts.main.timeScale().setVisibleLogicalRange(range);
+    charts.macdChart.timeScale().setVisibleLogicalRange(range);
+    charts.main.setCrosshairPosition(rec.bar.close, toTime(dt), charts.candleSeries);
+    renderLegend(rec.bar, rec.prev, rec.i);  // 程序化十字线不触发 crosshairMove 订阅，图例手动同步
+    if (locateBar.timer) clearTimeout(locateBar.timer);
+    locateBar.timer = setTimeout(function () {
+      charts.main.clearCrosshairPosition();
+      legendLatest();
+    }, 1600);
+  }
+
+  function renderEvidence(evidence, options) {
+    var selected = options && options.preserve && evidenceList[evidenceIdx];
+    evidenceList = evidence.slice().sort(function (a, b) { return a.dt < b.dt ? 1 : -1; });
+    evidenceIdx = 0;
+    if (selected) {
+      var index = evidenceList.findIndex(function (c) {
+        return c.dt === selected.dt && c.side === selected.side && c.level === selected.level &&
+          JSON.stringify(c.types) === JSON.stringify(selected.types);
+      });
+      if (index >= 0) evidenceIdx = index;
+    }
+    if (!evidenceList.length) {
+      el('cardsDock').hidden = true;
+      el('cards').innerHTML = '';
+      el('cardsCount').textContent = '';
+      el('cardsPrev').disabled = true;
+      el('cardsNext').disabled = true;
       return;
     }
-    sorted.forEach(function (c) {
-      var div = document.createElement('div');
-      div.className = 'card';
-      var sideCls = c.side === 'buy' ? 'lbl-buy' : 'lbl-sell';
-      div.innerHTML =
-        '<div class="head"><span class="' + sideCls + '">' + esc(signalLabel(c)) + '</span>' +
-        '<span class="price">' + c.price.toFixed(2) + '</span></div>' +
-        '<div class="text">' + fmtBarTime(c.dt) + '</div>' +
-        '<div class="text">' + c.text + '</div>';
-      box.appendChild(div);
-    });
+    el('cardsDock').hidden = false;
+    showEvidence(evidenceIdx);
+  }
+
+  // 依据卡浮层状态：dt 降序全量与当前展示条序号
+  var evidenceList = [], evidenceIdx = 0;
+
+  // 渲染当前条并同步计数与左右切换键；越界序号忽略
+  function showEvidence(i) {
+    if (i < 0 || i >= evidenceList.length) return;
+    evidenceIdx = i;
+    var c = evidenceList[i];
+    var box = el('cards');
+    var hadFocus = box.contains(document.activeElement);
+    box.innerHTML = '';
+    var div = document.createElement('div');
+    div.className = 'card';
+    div.dataset.dt = c.dt;
+    div.tabIndex = 0;
+    div.setAttribute('role', 'button');
+    div.title = '点击定位到 K 线';
+    div.onclick = function () { locateBar(c.dt); };
+    div.onkeydown = function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); locateBar(c.dt); }
+    };
+    var sideCls = c.side === 'buy' ? 'lbl-buy' : 'lbl-sell';
+    div.innerHTML =
+      '<div class="head"><span class="' + sideCls + '">' + esc(signalLabel(c)) + '</span>' +
+      '<span class="price">' + c.price.toFixed(2) + '</span></div>' +
+      '<div class="text">' + fmtBarTime(c.dt) + '</div>' +
+      '<div class="text">' + c.text + '</div>';
+    box.appendChild(div);
+    if (hadFocus) div.focus({preventScroll: true});
+    el('cardsCount').textContent = (i + 1) + '/' + evidenceList.length;
+    el('cardsPrev').disabled = i <= 0;
+    el('cardsNext').disabled = i >= evidenceList.length - 1;
   }
 
   // ---------- AI 完全分类面板 ----------
@@ -1001,7 +1215,9 @@
   function renderAnalysis(j, noteMode) {
     var box = el('aiPanel');
     if (noteMode) pendingAnalysis = null;
+    if (typeof closeAiPopup === 'function') closeAiPopup();  // 任何重渲染都关掉情景弹层，避免悬留旧内容
     el('aiDataStatus').hidden = true;
+    el('aiSampleBadge').hidden = !noteMode;  // 静态样例身份常驻面板头部，不随滚动离开
     var html = '';
     if (!noteMode && j.analysis_scope === 'multi_timeframe') {
       html += '<div class="ai-note">联合分析 · 日线 / 60分 / 30分</div>';
@@ -1025,14 +1241,20 @@
     var scenarios = (j.scenarios || []).filter(function (s) {
       return String(s.posterior || '').charAt(0) !== '低';
     }).slice(0, 3);
-    scenarios.forEach(function (s) {
-      html += renderScenario(s);
+    aiScenarios = scenarios;
+    // 情景折叠为标题行：点击（初始化区事件委托）弹玻璃浮层，全文仍由 renderScenario 渲染
+    scenarios.forEach(function (s, i) {
+      html += '<div class="ai-row" data-i="' + i + '" role="button" tabindex="0"><span>' +
+        esc(s.name) + '</span>' + posteriorBadge(s.posterior) + '</div>';
     });
     if (!j.current_state && !scenarios.length && !j.raw) {
       html += '<div class="card"><span class="text">暂无完全分类结果</span></div>';
     }
     box.innerHTML = html;
   }
+
+  // 当前面板的情景数据：标题行 data-i 索引对应，弹层据此渲染全文
+  var aiScenarios = [];
 
   // 后验置信徽章：从 posterior 文本开头提取 高/中/低 档位
   function posteriorBadge(posterior) {
@@ -1072,6 +1294,27 @@
       kv('依据：', s.basis) +
       kv('更新观察：', s.update_watch) +
       '</div>';
+  }
+
+  // 非模态详情保留右栏操作能力；原生 dialog 管理打开状态，关闭后返回触发控件。
+  var aiPopupTrigger = null;
+  function openAiPopup(i, trigger) {
+    var s = aiScenarios[i];
+    if (!s) return;
+    el('aiPopBody').innerHTML = renderScenario(s);
+    aiPopupTrigger = trigger || document.activeElement;
+    el('aiPop').hidden = false;
+    var dialog = el('aiPopDialog');
+    if (!dialog.open) dialog.show();
+    el('aiPopClose').focus({preventScroll: true});
+  }
+  function closeAiPopup() {
+    var dialog = el('aiPopDialog');
+    var restore = dialog.contains(document.activeElement);
+    if (dialog.open) dialog.close();
+    el('aiPop').hidden = true;
+    if (restore && aiPopupTrigger && aiPopupTrigger.isConnected) aiPopupTrigger.focus({preventScroll: true});
+    aiPopupTrigger = null;
   }
 
   var pendingAnalysis = null, activeChartVersion = null;
@@ -1127,7 +1370,9 @@
     pendingAnalysis = null;
     ruleSwitchNote = null;
     el('aiPanel').innerHTML = '<div class="ai-note">点击刷新生成分析</div>';
+    if (typeof closeAiPopup === 'function') closeAiPopup();
     el('aiDataStatus').hidden = true;
+    el('aiSampleBadge').hidden = true;
     var btn = el('aiRefresh');
     btn.classList.remove('spin');
     btn.disabled = false;
@@ -1135,6 +1380,7 @@
 
   function loadAnalysis(options) {
     if (!options || options.manual !== true || supplyBusy) return;
+    closeAiPopup();
     var generation = supplyState.generation, epoch = supplyState.epoch, profile = state.ruleProfile, scope = state.signalScope;
     if (!state.code) { el('aiPanel').innerHTML = ''; return; }
     var identity = currentAnalysisIdentity();
@@ -1269,17 +1515,7 @@
     stale.setAttribute('aria-label', dataNote);
     stale.hidden = !dataNote;
     renderF10Header(f);
-    var tags = '';
-    if (f.industry) {
-      var ip = j.industry_pct;
-      tags += '<span class="chip ind">' + esc(f.industry) +
-        (ip == null ? '' : '<span class="pct ' + signCls(ip) + '">' +
-          (ip > 0 ? '+' : '') + ip.toFixed(2) + '%</span>') + '</span>';
-    }
-    (f.concepts || []).forEach(function (c) {
-      tags += '<span class="chip">' + esc(c) + '</span>';
-    });
-    el('f10Tags').innerHTML = tags;
+    renderTags();
     var cells = [
       ['总市值', fmtYi(f.total_mv)], ['PE(TTM)', numOr(f.pe_ttm)], ['PB', numOr(f.pb)],
       ['成交额', fmtYi(f.amount)], ['换手', pctOr(f.turnover)], ['量比', numOr(f.volume_ratio)],
@@ -1288,6 +1524,83 @@
     el('f10Grid').innerHTML = cells.map(function (c) {
       return '<div class="kv"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div></div>';
     }).join('');
+  }
+
+  // 自定义标签行：取自 state.watchlist；末尾编辑 chip（无标签时占位「+ 标签」）进编辑态。非自选股只读，不渲染编辑 chip（保存必然 404）
+  function renderTags(force) {
+    var box = el('f10Tags');
+    var currentInput = box.querySelector('.tag-input');
+    if (!force && currentInput && currentInput.getAttribute('data-code') === state.code) return;
+    var w = null;
+    state.watchlist.forEach(function (x) { if (x.code === state.code) w = x; });
+    var tags = (w && w.tags) || [];
+    box.innerHTML = '';
+    tags.forEach(function (t) {
+      var chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = t;
+      box.appendChild(chip);
+    });
+    if (w) {
+      var edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'chip tag-edit';
+      edit.id = 'f10TagEdit';
+      edit.textContent = tags.length ? '✎ 编辑' : '+ 标签';
+      edit.onclick = function () { editTags(tags); };
+      box.appendChild(edit);
+    }
+  }
+
+  // 编辑态：标签行换成单个 input（现有标签、连接）；Enter/失焦保存，Esc 取消（同搜索框键盘习惯）
+  function editTags(tags) {
+    var box = el('f10Tags');
+    var code = state.code;
+    box.innerHTML = '';
+    var label = document.createElement('label');
+    label.setAttribute('for', 'f10TagInput');
+    label.textContent = '自选股标签';
+    label.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap';
+    var input = document.createElement('input');
+    input.id = 'f10TagInput';
+    input.className = 'tag-input';
+    input.setAttribute('data-code', code);
+    input.value = tags.join('、');
+    input.placeholder = '多个标签用、分隔';
+    box.appendChild(label);
+    box.appendChild(input);
+    input.focus();
+    var settled = false;  // Enter 后 blur 会再触发一次保存，只放行第一次
+    function save() {
+      if (settled) return;
+      settled = true;
+      input.readOnly = true;
+      input.setAttribute('aria-busy', 'true');
+      var next = input.value.split(/[、,，;；\s]+/).filter(function (t) { return t; });
+      return queueWatchlist(function () {
+        return fetch('/api/watchlist/' + encodeURIComponent(code) + '/tags', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tags: next }),
+        }).then(function (r) {
+          if (!r.ok) throw new Error('标签保存失败 ' + r.status);
+          return r.json();
+        }).then(function (items) {
+          state.watchlist = items;
+          if (state.code === code && input.parentNode === box) renderTags(true);
+        });
+      }).catch(function (e) {
+        setStatus(e.message);
+        if (state.code === code && input.parentNode === box) renderTags(true);
+      });
+    }
+    input.onkeydown = function (ev) {
+      if (settled) return;
+      if (ev.key === 'Escape') { ev.preventDefault(); settled = true; renderTags(true); return; }
+      if (ev.key === 'Enter' && (ev.isComposing || ev.keyCode === 229)) return;
+      if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+    };
+    input.onblur = save;
   }
 
   function renderFlow(j) {
@@ -1346,6 +1659,39 @@
       if (acc.length && acc[acc.length - 1].time === p[0].time) acc.pop();
       return acc.concat(p);
     }, []);
+  }
+
+  // 同标的/同周期的后台刷新保留可视区间：历史区按时间锚点恢复，最新端仅随新 bar 前移
+  function refreshRangePlan(keep, newBars) {
+    if (!keep || !newBars || !newBars.length) return null;
+    var newLen = newBars.length, span = keep.to - keep.from;
+    var newLastTime = toTime(newBars[newLen - 1].time);
+    if (keep.to >= keep.len - 1.5 && newLastTime !== keep.lastTime) {
+      var latestTo = newLen - 1 + 3;
+      return { from: Math.max(0, latestTo - span), to: latestTo };
+    }
+    var anchorIndex = -1;
+    for (var i = 0; i < newLen; i++) {
+      if (toTime(newBars[i].time) === keep.anchorTime) { anchorIndex = i; break; }
+    }
+    if (anchorIndex >= 0) {
+      var anchoredFrom = anchorIndex + keep.anchorOffset;
+      return { from: anchoredFrom, to: anchoredFrom + span };
+    }
+    var fallbackFrom = keep.from + newLen - keep.len;
+    var maxFrom = Math.max(0, newLen - 1 - span);
+    fallbackFrom = Math.max(0, Math.min(fallbackFrom, maxFrom));
+    return { from: fallbackFrom, to: fallbackFrom + span };
+  }
+
+  function captureRefreshRange(range, bars) {
+    if (!range || !bars || !bars.length) return null;
+    var anchorIndex = Math.max(0, Math.min(bars.length - 1, Math.floor(range.from)));
+    return {
+      from: range.from, to: range.to, len: bars.length,
+      anchorTime: toTime(bars[anchorIndex].time), anchorOffset: range.from - anchorIndex,
+      lastTime: toTime(bars[bars.length - 1].time),
+    };
   }
 
   // 图表渲染主路径：fetch 后与主题切换共用（opts.resetRange=false 时保留可视区间）
@@ -1444,6 +1790,14 @@
     updateAiTitle();
     setStatus('加载中… ' + state.code + ' ' + state.freq);
     hideChartError();
+    if (!options || !options.refresh) {  // 用户切换：新数据到达前旧内容降为「旧数据」标记，失败时保留
+      el('center').classList.add('ctx-old');
+      el('rail').classList.add('ctx-old');
+    }
+    // 只记录刷新身份；可视区间必须在响应提交前再取，避免覆盖请求期间的用户平移。
+    var refreshTarget = options && options.refresh && loadedTarget &&
+      loadedTarget.code === state.code && loadedTarget.freq === state.freq
+      ? { code: state.code, freq: state.freq } : null;
     loadF10(state.code);  // F10/资金流与 /api/chart 并行，互不阻塞（内部有 300s TTL）
     syncManualAnalysis(); // 切换与行情自动刷新不请求 AI
     var timer = setTimeout(function () {
@@ -1464,14 +1818,27 @@
         }
         if (!eligible(generation, data, epoch)) return;
         var saved = supplyRange && supplyRange.code === state.code && supplyRange.freq === state.freq && supplyRange.range;
-        renderChart(data, { resetRange: !saved });
+        var keep = null;
+        if (!saved && refreshTarget && charts && charts.main && loadedTarget &&
+            loadedTarget.code === refreshTarget.code && loadedTarget.freq === refreshTarget.freq &&
+            state.code === refreshTarget.code && state.freq === refreshTarget.freq && klineData.length) {
+          keep = captureRefreshRange(charts.main.timeScale().getVisibleLogicalRange(), klineData);
+        }
+        var plan = keep ? refreshRangePlan(keep, data.kline) : null;
+        renderChart(data, { resetRange: !saved && !plan });
         if (saved) {
           charts.main.timeScale().setVisibleRange(saved);
           charts.macdChart.timeScale().setVisibleRange(saved);
+        } else if (plan) {
+          charts.main.timeScale().setVisibleLogicalRange(plan);
+          charts.macdChart.timeScale().setVisibleLogicalRange(plan);
         }
         supplyRange = null;
+        loadedTarget = { code: state.code, freq: state.freq };
         el('center').classList.remove('supply-loading');
-        renderEvidence(data.evidence);
+        el('center').classList.remove('ctx-old');
+        el('rail').classList.remove('ctx-old');
+        renderEvidence(data.evidence, {preserve: !!plan});
         renderMeta(data.meta);
         activeChartVersion = {code: state.code, freq: state.freq, epoch: epoch || '', generation: generation, calculation_id: data.calculation_id, data_version: data.data_version || data.meta.data_version};
         updateAnalysisFreshness();
@@ -1485,6 +1852,32 @@
         showChartError(e.message);
       })
       .finally(function () { clearTimeout(timer); });
+  }
+
+  function clearSelection() {
+    if (chartAbort) chartAbort.abort();
+    if (analysisAbort) analysisAbort.abort();
+    chartAbort = null; analysisAbort = null;
+    pendingAnalysis = null; activeChartVersion = null; analysisIdentity = null; analysisInFlight = false;
+    loadedTarget = null; supplyRange = null; lastMeta = null; lastF10 = null;
+    f10Last = {code: null, ts: 0};
+    if (charts) renderChart({kline: [], macd: {rows: []}, structure: {bi: [], xd: [], zs: []},
+      channels: [], signals: [], resonance: []}, {resetRange: false});
+    lastChartData = null;
+    renderEvidence([]);
+    hideF10Cards();
+    closeAiPopup();
+    el('aiPanel').innerHTML = '<div class="ai-note">请先添加自选股</div>';
+    el('aiDataStatus').hidden = true;
+    el('aiSampleBadge').hidden = true;
+    el('aiRefresh').disabled = true;
+    el('aiRefresh').classList.remove('spin');
+    el('metaBar').innerHTML = '';
+    el('resonance').innerHTML = '';
+    el('center').classList.remove('ctx-old', 'supply-loading');
+    el('rail').classList.remove('ctx-old');
+    hideChartError();
+    setStatus('请添加自选股');
   }
 
   // ---------- 交易时段自动刷新（口径同 engine/session.py：cn 09:25–15:05，hk 09:30–16:05，周一至五） ----------
@@ -1511,8 +1904,98 @@
     loadQuotes();
   }, 60000);
 
+  // ---------- 侧边栏（Codex 客户端式：pinned 固定展开 / rail 窄栏；窄栏悬停或聚焦自动浮动展开，移开收回） ----------
+
+  var hoverOpen = false;      /* 当前 open 是否由悬停触发（决定移开时是否自动收回） */
+  var suppressHover = false;  /* 主动收回后鼠标仍在栏内：先移出一次才允许再次悬停展开 */
+
+  function sbMode() {
+    var b = document.body.classList;
+    return b.contains('sb-rail') ? 'rail' : (b.contains('sb-open') ? 'open' : 'pinned');
+  }
+
+  function setSidebar(mode) {
+    var prev = sbMode();
+    if (mode !== 'open') hoverOpen = false;
+    if (mode === 'rail' && prev !== 'rail') suppressHover = el('sidebar').matches(':hover');
+    document.body.classList.toggle('sb-rail', mode === 'rail');
+    document.body.classList.toggle('sb-open', mode === 'open');
+    /* open 是临时浮层，只持久化 pinned / rail；兼容旧键值 expanded / collapsed */
+    try { localStorage.setItem('chanapp-sidebar', mode === 'pinned' ? 'pinned' : 'rail'); } catch (_) {}
+    var pin = el('sidebarPin');
+    pin.classList.toggle('on', mode === 'pinned');
+    pin.setAttribute('aria-pressed', mode === 'pinned' ? 'true' : 'false');
+    pin.title = mode === 'pinned' ? '取消固定（收为窄栏）' : '固定展开侧边栏';
+    /* 收回窄栏时迁移焦点：窄窗窄栏整条隐藏，焦点迁到顶栏展开钮；宽窗迁到钉按钮 */
+    if (mode === 'rail' && prev !== 'rail' && el('sidebar').contains(document.activeElement)) {
+      var narrowRail = window.matchMedia('(max-width: 1100px)').matches;
+      (narrowRail ? el('sidebarExpand') : pin).focus({preventScroll: true});
+    }
+  }
+
+  function toggleSidebar() { setSidebar(sbMode() === 'rail' ? 'open' : 'rail'); }
+
+  function initSidebar() {
+    var mode = window.matchMedia('(max-width: 1100px)').matches ? 'rail' : 'pinned';
+    try {
+      var saved = localStorage.getItem('chanapp-sidebar');
+      if (saved === 'pinned' || saved === 'expanded') mode = 'pinned';
+      else if (saved === 'rail' || saved === 'collapsed') mode = 'rail';
+    } catch (_) {}
+    setSidebar(mode);
+    el('sidebarPin').addEventListener('click', function () {
+      setSidebar(sbMode() === 'pinned' ? 'rail' : 'pinned');
+    });
+    el('sidebarExpand').addEventListener('click', toggleSidebar);
+    /* 窄栏悬停自动浮动展开，移开自动收回（仅悬停触发的 open 才随鼠标收回） */
+    el('sidebar').addEventListener('mousemove', function () {
+      if (sbMode() !== 'rail' || suppressHover) return;
+      setSidebar('open');
+      hoverOpen = true;
+    });
+    el('sidebar').addEventListener('mouseleave', function () {
+      suppressHover = false;
+      if (hoverOpen && sbMode() === 'open') setSidebar('rail');
+    });
+    /* 键盘可达性：焦点进入窄栏同样展开；非悬停展开时焦点离开即收回 */
+    el('sidebar').addEventListener('focusin', function () {
+      if (sbMode() === 'rail') setSidebar('open');
+    });
+    el('sidebar').addEventListener('focusout', function (ev) {
+      if (sbMode() !== 'open' || hoverOpen) return;
+      if (ev.relatedTarget && el('sidebar').contains(ev.relatedTarget)) return;
+      setSidebar('rail');
+    });
+    document.addEventListener('keydown', function (ev) {
+      var tag = ev.target && ev.target.tagName || '';
+      if (ev.key === '[' && !/^(INPUT|TEXTAREA|SELECT)$/.test(tag) && !(ev.target && ev.target.isContentEditable)) {
+        toggleSidebar();
+      }
+      if (ev.key === 'Escape' && sbMode() === 'open') setSidebar('rail');
+    });
+    /* 浮动展开时点外部收回窄栏；固定展开不自动收回 */
+    document.addEventListener('mousedown', function (ev) {
+      if (sbMode() !== 'open') return;
+      if (ev.target.closest && (ev.target.closest('#sidebar') || ev.target.closest('#sidebarExpand'))) return;
+      setSidebar('rail');
+    });
+  }
+
   // ---------- 初始化 ----------
 
+  initSidebar();
+
+  /* 右栏依据卡与副图共享底部分带：cardsDock 高度跟随 subWrap，两条分隔线始终同高（桌面；窄屏块布局不同步） */
+  (function syncCardsDockHeight() {
+    var dock = el('cardsDock'), sub = el('subWrap');
+    var mq = window.matchMedia('(min-width: 761px)');
+    function sync() {
+      dock.style.height = mq.matches ? Math.round(sub.getBoundingClientRect().height) + 'px' : '';
+    }
+    new ResizeObserver(sync).observe(sub);
+    mq.addEventListener('change', sync);
+    sync();
+  })();
   window.addEventListener('focus', function () { syncSupply(); });
   el('themeBtn').addEventListener('click', function () {
     applyTheme(theme === 'light' ? 'dark' : 'light');
@@ -1545,21 +2028,60 @@
     reloadRuleSelection('提示范围');
   });
   function reloadRuleSelection(label) {
+    if (!state.code) { syncRuleControl(); return; }
     supplyRange = charts ? {code: state.code, freq: state.freq, range: charts.main.timeScale().getVisibleRange()} : null;
     if (analysisAbort) analysisAbort.abort();
     analysisAbort = null; analysisIdentity = null; analysisInFlight = false;
     pendingAnalysis = null; activeChartVersion = null; lastChartData = null;
     syncRuleControl();
-    el('cards').innerHTML = '<div class="card"><span class="text">加载中…</span></div>';
+    renderEvidence([]);
     el('resonance').innerHTML = '';
     ruleSwitchNote = label + '已切换，分析待更新…';
     el('aiPanel').innerHTML = '<div class="ai-note">' + ruleSwitchNote + '</div>';
+    if (typeof closeAiPopup === 'function') closeAiPopup();
     el('center').classList.add('supply-loading');
     load();
   }
   el('aiRefresh').onclick = function () { loadAnalysis({manual:true, refresh:true}); };
+  // 依据卡浮层左右切换：按钮与 ArrowLeft/ArrowRight 键逐条翻看（越界由 showEvidence 忽略）
+  function wireCardsNav() {
+    el('cardsPrev').onclick = function () { showEvidence(evidenceIdx - 1); };
+    el('cardsNext').onclick = function () { showEvidence(evidenceIdx + 1); };
+    el('cardsDock').addEventListener('keydown', function (ev) {
+      if (ev.key === 'ArrowLeft') { ev.preventDefault(); showEvidence(evidenceIdx - 1); }
+      else if (ev.key === 'ArrowRight') { ev.preventDefault(); showEvidence(evidenceIdx + 1); }
+    });
+  }
   wireMaSeg();
   wireSubSeg();
+  wireCardsNav();
+
+  // AI 完全分类标题行：点击（或聚焦后 Enter/Space）弹玻璃浮层看全文；遮罩/×/Esc 关闭
+  function wireAiPopup() {
+    el('aiPanel').addEventListener('click', function (ev) {
+      var row = ev.target.closest('.ai-row');
+      if (row) openAiPopup(+row.dataset.i, row);
+    });
+    el('aiPanel').addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      var row = ev.target.closest('.ai-row');
+      if (!row) return;
+      ev.preventDefault();
+      openAiPopup(+row.dataset.i, row);
+    });
+    var aiPop = el('aiPop');
+    /* 非模态：弹层罩布不拦指针，点弹层外关闭但不吞这次点击（依据卡等下层控件照常响应） */
+    document.addEventListener('mousedown', function (ev) {
+      if (aiPop.hidden) return;
+      if (ev.target.closest && ev.target.closest('#aiPop .sheet')) return;
+      closeAiPopup();
+    });
+    el('aiPopClose').onclick = closeAiPopup;
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && !aiPop.hidden) closeAiPopup();
+    });
+  }
+  wireAiPopup();
 
   renderTabs();
   renderStatus();

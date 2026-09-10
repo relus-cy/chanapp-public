@@ -18,13 +18,13 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     --line2: rgba(0,0,12,.18);
     --overlay: rgba(255,255,255,.88);
     --fg: #20242b;
-    --dim: #686e78;
-    --faint: #9aa0a8;
-    --gold: #96700f;
-    --gold-dim: rgba(150,112,15,.5);
+    --dim: #565c66;
+    --faint: #6a7079;
+    --gold: #7d5f0c;
+    --gold-dim: rgba(125,95,12,.5);
     --up: #d63f33;
     --down: #2e8ca3;
-    --ma5: #6a7079; --ma13: #96700f; --ma20: #2e8ca3; --ma60: #d63f33; --ma144: #8a72b8; --ma250: #4f7fb8;
+    --ma5: #6a7079; --ma13: #7d5f0c; --ma20: #2e8ca3; --ma60: #d63f33; --ma144: #8a72b8; --ma250: #4f7fb8;
     --radius-s: 4px; --radius-m: 8px;
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
   }
@@ -36,8 +36,8 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     --line2: rgba(255,255,255,.13);
     --overlay: rgba(11,12,14,.85);
     --fg: #d7d9dd;
-    --dim: #84898f;
-    --faint: #5b6067;
+    --dim: #959aa1;
+    --faint: #7d8289;
     --gold: #c9a24d;
     --gold-dim: rgba(201,162,77,.55);
     --up: #df4b3e;
@@ -51,7 +51,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     font: 13px/1.6 -apple-system, "SF Pro Text", "PingFang SC", "Noto Sans SC", sans-serif;
     font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
-    display: flex; flex-direction: column; overflow: hidden;
+    display: flex; overflow: hidden;
   }
   button { font: inherit; color: inherit; }
   button:focus-visible, input:focus-visible { outline: 1px solid var(--gold); outline-offset: 1px; }
@@ -71,11 +71,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .freq button:active { transform: scale(.96); }
   @media (hover:hover) { .freq button:hover { color: var(--fg); } }
   .freq button.active { color: var(--gold); background: var(--raise); }
-  .brand, .freq, .header-settings { flex-shrink: 0; }
-  .header-settings { display: flex; align-items: center; gap: 12px; }
-  .header-setting { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-  .header-setting .rule-label { color: var(--faint); font-size: 11px; }
-  .header-setting .seg button { font-size: 11px; padding: 1px 8px; }
+  .brand, .freq { flex-shrink: 0; }
   #status { min-width: 0; overflow: hidden; white-space: nowrap; margin-left: auto; color: var(--dim); font-size: 12px; font-family: var(--mono); }
   #themeBtn {
     position: relative; width: 30px; height: 24px; padding: 0;
@@ -100,59 +96,152 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   main { flex: 1; display: flex; min-height: 0; }
 
   /* ---------- watchlist ---------- */
-  #watchlist {
-    width: 208px; border-right: 1px solid var(--line); background: var(--panel);
-    overflow-y: auto; padding: 6px 0; flex-shrink: 0;
+  /* ---------- 侧边栏（Chrome 垂直标签式三态：pinned 固定展开 / open 浮动展开 / rail 窄栏） ---------- */
+  /* 侧栏常驻 fixed，主区用 margin-left 让位；三态切换只动宽度，曲线对齐 ChatGPT 边栏实测（~180ms 强 ease-out） */
+  #page {
+    flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+    margin-left: 220px; transition: margin-left .18s cubic-bezier(.16, 1, .3, 1);
   }
-  #watchlist .wl-head { padding: 4px 12px 8px; font-size: 11px; color: var(--faint); letter-spacing: .12em; }
-  #watchlist .item { padding: 7px 12px; cursor: pointer; border-left: 2px solid transparent; }
-  @media (hover:hover) { #watchlist .item:hover { background: var(--raise); } }
-  #watchlist .item.active { background: var(--raise); border-left-color: var(--gold); }
-  #watchlist .item .row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
-  #watchlist .item .row > span:first-child { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #watchlist .item .chg { font-family: var(--mono); font-size: 12px; margin-left: auto; flex-shrink: 0; }
-  #watchlist .item .row2 { display: flex; justify-content: space-between; align-items: baseline; margin-top: 1px; }
-  #watchlist .item .code { color: var(--faint); font-size: 11px; font-family: var(--mono); }
-  #watchlist .item .px { font-family: var(--mono); font-size: 12px; }
-  #watchlist .up, #f10Sec .up, #flowSec .up, .legend .up { color: var(--up); }
-  #watchlist .down, #f10Sec .down, #flowSec .down, .legend .down { color: var(--down); }
-  #watchlist .flat, #f10Sec .flat, #flowSec .flat { color: var(--dim); }
-  #watchlist .item .tag-limit {
+  #sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0; z-index: 60;
+    width: 220px; display: flex; flex-direction: column;
+    /* 颜色对齐 ChatGPT 边栏：与页面同底色的齐平竖条，1px 发丝线分隔，无阴影无圆角 */
+    background: var(--bg); border-right: 1px solid var(--line);
+    overflow: hidden;
+    transition: width .18s cubic-bezier(.16, 1, .3, 1), box-shadow .18s ease-out,
+      transform .18s cubic-bezier(.16, 1, .3, 1), visibility .18s;
+  }
+  /* 窄窗展开钮：仅窄窗且窄栏隐藏时出现在顶栏（宽窗窄栏常驻，不需要它） */
+  #sidebarExpand { display: none; }
+  /* open / rail：主区只给窄栏让位（88），展开时侧栏浮在主区上方 */
+  body.sb-open #page, body.sb-rail #page { margin-left: 88px; }
+  /* open 浮层：不透明同色，只加一道向右软影提示浮起 */
+  body.sb-open #sidebar { box-shadow: 12px 0 32px rgba(0, 0, 0, .10); }
+  :root[data-theme="dark"] body.sb-open #sidebar { box-shadow: 12px 0 32px rgba(0, 0, 0, .5); }
+  /* rail 窄栏：只留名称 + 换行涨跌幅 */
+  body.sb-rail #sidebar { width: 88px; }
+  body.sb-rail .sb-top { padding: 0; justify-content: center; }
+  body.sb-rail .sb-top .brand { display: none; }
+  body.sb-rail .wl-head, body.sb-rail #wlForm, body.sb-rail .sb-supply { display: none; }
+  body.sb-rail #sidebar .sb-group { padding: 2px 0; }
+  body.sb-rail #sidebar .item { margin: 1px 6px; padding: 6px 2px; }
+  body.sb-rail #sidebar .item .row { flex-direction: column; align-items: stretch; gap: 0; }
+  /* 名称硬截断不带省略号（CJK 等宽，截整字）；4 字名与 ±xx.xx% 在 88px 内完整放下 */
+  body.sb-rail #sidebar .item .row > span:first-child { font-size: 12px; text-align: center; text-overflow: clip; }
+  body.sb-rail #sidebar .item .chg { margin-left: 0; font-size: 11px; text-align: center; }
+  body.sb-rail #sidebar .item .row2,
+  body.sb-rail #sidebar .item .btns,
+  body.sb-rail #sidebar .item .tag-limit { display: none; }
+  .sb-top {
+    flex: 0 0 44px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 8px 0 14px; gap: 2px;  /* 无分隔线，与 ChatGPT 边栏头部一致 */
+  }
+  .sb-group { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 0; }
+  #wlForm { flex-shrink: 0; }
+  .sb-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 28px; height: 24px; padding: 0; background: transparent;
+    border: 1px solid transparent; border-radius: var(--radius-s); color: var(--dim); cursor: pointer;
+    transition: transform .1s ease-out, color .1s ease-out, background-color .1s ease-out;
+  }
+  .sb-btn:active { transform: scale(.94); }
+  @media (hover:hover) { .sb-btn:hover { color: var(--fg); background: var(--raise); } }
+  .sb-btn svg { width: 15px; height: 15px; }
+  #sidebarPin.on { color: var(--gold); }
+  .sb-supply { flex-shrink: 0; border-top: 1px solid var(--line); }
+  .sb-supply summary {
+    display: flex; align-items: center; gap: 6px; height: 35px; padding: 0 12px; cursor: pointer;
+    font-size: 11px; color: var(--faint); letter-spacing: .12em; list-style: none; user-select: none;
+  }
+  .sb-supply summary::-webkit-details-marker { display: none; }
+  .sb-supply summary::before {
+    content: ''; width: 0; height: 0; border: 4px solid transparent; border-left-color: currentColor;
+    transition: transform .12s ease-out;
+  }
+  .sb-supply[open] summary::before { transform: rotate(90deg); }
+  .sb-supply summary .sb-scheme { margin-left: auto; color: var(--dim); letter-spacing: 0; font-family: var(--mono); }
+  .sb-supply .supply-control { padding: 0 12px 10px; }
+
+  /* 窄窗：侧栏变浮层抽屉，半透明毛玻璃浮于图表之上，保持浮动卡片形态 */
+  @media (max-width: 1100px) {
+    /* 窄窗：窄栏整条收起（88px 对中小屏太贵），顶栏给展开钮；pinned/open 浮动不推布局 */
+    body.sb-rail #sidebar { transform: translateX(-104%); visibility: hidden; border-right: 0; }
+    body.sb-rail #sidebarExpand { display: flex; }
+    body:not(.sb-rail) #sidebar {
+      width: 250px; box-shadow: 12px 0 32px rgba(0, 0, 0, .10);
+    }
+    :root[data-theme="dark"] body:not(.sb-rail) #sidebar { box-shadow: 12px 0 32px rgba(0, 0, 0, .5); }
+    #page, body.sb-open #page, body.sb-rail #page { margin-left: 0; }
+  }
+
+  #sidebar .wl-head { padding: 4px 12px 8px; font-size: 11px; color: var(--faint); letter-spacing: .12em; }
+  #sidebar .item { margin: 1px 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+  @media (hover:hover) { #sidebar .item:hover { background: var(--raise); } }
+  #sidebar .item.active { background: var(--raise); }
+  #sidebar .item .row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  #sidebar .item .row > span:first-child { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #sidebar .item .chg { font-family: var(--mono); font-size: 12px; margin-left: auto; flex-shrink: 0; }
+  #sidebar .item .row2 { display: flex; justify-content: space-between; align-items: baseline; margin-top: 1px; }
+  #sidebar .item .code { color: var(--faint); font-size: 11px; font-family: var(--mono); }
+  #sidebar .item .px { font-family: var(--mono); font-size: 12px; }
+  #sidebar .up, #f10Sec .up, #flowSec .up, .legend .up { color: var(--up); }
+  #sidebar .down, #f10Sec .down, #flowSec .down, .legend .down { color: var(--down); }
+  #sidebar .flat, #f10Sec .flat, #flowSec .flat { color: var(--dim); }
+  #sidebar .item .tag-limit {
     font-size: 10px; color: var(--up); border: 1px solid var(--up);
     border-radius: 3px; padding: 0 3px; margin-left: 4px; line-height: 14px; white-space: nowrap;
   }
-  #watchlist .item .btns { display: flex; align-items: center; flex-shrink: 0; }
-  #watchlist .item .del, #watchlist .item .star {
-    background: transparent; border: none; color: var(--dim);
-    cursor: pointer; font-size: 13px; padding: 0 2px; visibility: hidden;
+  #sidebar .item .btns { display: flex; align-items: center; flex-shrink: 0; }
+  #sidebar .item .del, #sidebar .item .star {
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; color: var(--dim); border-radius: 4px;
+    cursor: pointer; padding: 4px; visibility: hidden;
   }
-  #watchlist .item .star { font-size: 12px; }
-  #watchlist .item:hover .del, #watchlist .item:hover .star { visibility: visible; }
-  #watchlist .item .del:hover { color: var(--up); }
-  #watchlist .item .star.on { visibility: visible; color: var(--gold); }
-  #watchlist .item .star:hover { color: var(--gold); }
-  #watchlist .wl-add { padding: 8px 12px; border-top: 1px solid var(--line); margin-top: 4px; position: relative; }
-  #watchlist .wl-add input {
-    width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-s);
+  #sidebar .item .del svg, #sidebar .item .star svg { width: 12px; height: 12px; }
+  #sidebar .item .star.on svg { fill: currentColor; }
+  #sidebar .item:hover .del, #sidebar .item:hover .star,
+  #sidebar .item:focus-within .del, #sidebar .item:focus-within .star { visibility: visible; }
+  #sidebar .item:focus-visible { outline: 1px solid var(--gold); outline-offset: -1px; }
+  #sidebar .item .del:hover { color: var(--up); }
+  #sidebar .item .star.on { visibility: visible; color: var(--gold); }
+  #sidebar .item .star:hover { color: var(--gold); }
+  #sidebar .wl-add { padding: 8px 12px; margin-top: 4px; position: relative; }
+  #sidebar .wl-add input {
+    width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-s);
     color: var(--fg); padding: 4px 8px; font-size: 12px;
   }
-  #watchlist .wl-add input::placeholder { color: var(--faint); }
-  #watchlist .wl-drop {
-    position: absolute; left: 8px; right: 8px; top: 100%; z-index: 20;
+  #sidebar .wl-add input::placeholder { color: var(--faint); }
+  #sidebar .wl-drop {
+    position: absolute; left: 8px; right: 8px; bottom: 100%; z-index: 20;
     background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius-s);
     max-height: 240px; overflow-y: auto; box-shadow: 0 4px 16px rgba(0,0,0,.18);
   }
-  #watchlist .wl-drop .cand {
+  #sidebar .wl-drop .cand {
     display: flex; justify-content: space-between; gap: 6px;
     padding: 4px 8px; cursor: pointer; font-size: 12px; white-space: nowrap;
   }
-  #watchlist .wl-drop .cand:hover { background: var(--raise); }
-  #watchlist .wl-drop .cand .c-code { color: var(--faint); font-size: 11px; font-family: var(--mono); }
-  #watchlist .wl-drop .cand.none { color: var(--dim); cursor: default; }
-  #watchlist .wl-drop .cand.none:hover { background: transparent; }
+  #sidebar .wl-drop .cand:hover, #sidebar .wl-drop .cand.active { background: var(--raise); }
+  #sidebar .wl-drop .cand .c-code { color: var(--faint); font-size: 11px; font-family: var(--mono); }
+  #sidebar .wl-drop .cand.none { color: var(--dim); cursor: default; }
+  #sidebar .wl-drop .cand.none:hover { background: transparent; }
+
+  /* 切换标的/周期/规则后、新数据到达前：旧内容降为旧数据标记（失败时保留至重试成功） */
+  #center.ctx-old .resonance, #center.ctx-old #chartWrap, #rail.ctx-old {
+    opacity: .45; transition: opacity .15s ease-out;
+  }
+  #center .resonance, #center #chartWrap, #rail { transition: opacity .15s ease-out; }
+  #chartError button {
+    margin-left: 6px; font: inherit; font-size: 11px; color: var(--gold);
+    background: transparent; border: 1px solid var(--gold-dim); border-radius: var(--radius-s);
+    padding: 0 8px; cursor: pointer;
+  }
+  @media (hover:hover) { #chartError button:hover { border-color: var(--gold); } }
 
   /* ---------- center ---------- */
-  #center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  /* 左侧 10px 槽口：图表/日期锚点不与侧栏贴边，也给时间轴最左刻度留出余量；
+     中列底色与图表画布一致（日间 panel / 夜间 bg），槽口不可见、只留物理间距 */
+  #center { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; container-type: inline-size; padding-left: 10px; background: var(--panel); }
+  :root[data-theme="dark"] #center { background: var(--bg); }
   #chartWrap { flex: 3; min-height: 0; position: relative; }
   #chart { position: absolute; inset: 0; }
   .chart-error { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 24px; text-align: center; color: var(--up); background: var(--overlay); font-size: 13px; z-index: 5; }
@@ -169,16 +258,19 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .legend .dim { color: var(--faint); }
 
   /* 多级别信号占独立一行，不覆盖图表或拦截十字线。 */
-  .res-bar { flex: 0 0 36px; height: 36px; padding: 5px 10px; border-bottom: 1px solid var(--line); }
-  .resonance { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; min-width: 0; height: 25px; }
+  .res-bar { flex: 0 0 36px; height: 36px; display: flex; align-items: center; gap: 12px; padding: 5px 10px; background: var(--panel); }
+  .res-bar .res-setting { display: flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; }
+  .res-bar .rule-label { font-size: 11px; color: var(--faint); }
+  .res-bar .seg button { font-size: 11px; padding: 1px 8px; }
+  .resonance { flex: 1; display: flex; gap: 6px; align-items: center; min-width: 0; height: 25px; overflow: hidden; }
   .res-chip {
     display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--mono);
-    background: var(--overlay); border: 1px solid var(--line2); border-radius: var(--radius-s);
-    height: 25px; min-width: 0; padding: 2px 8px; color: var(--dim); white-space: nowrap; overflow: hidden;
+    background: var(--raise); border: 1px solid transparent; border-radius: var(--radius-s);
+    height: 25px; flex: 0 1 auto; min-width: 0; padding: 2px 8px; color: var(--dim); white-space: nowrap; overflow: hidden;
   }
   .res-chip .lv, .res-chip .res-state { flex-shrink: 0; }
   .res-chip .res-detail { min-width: 0; overflow: hidden; white-space: nowrap; }
-  .res-chip .res-state { margin-left: auto; color: var(--faint); }
+  .res-chip .res-state { color: var(--faint); }
   .res-chip .lv { color: var(--faint); }
   .res-chip .sig-b { color: var(--up); font-weight: 600; }
   .res-chip .sig-s { color: var(--down); font-weight: 600; }
@@ -195,8 +287,8 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
 
   /* ---------- subchart ---------- */
   #subWrap { flex: 1.15; min-height: 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; }
-  #subBar { display: flex; align-items: center; gap: 8px; padding: 4px 10px 0; }
-  .seg { display: flex; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 2px; }
+  #subBar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; height: 34px; flex-shrink: 0; background: var(--panel); }
+  .seg { display: flex; gap: 2px; background: var(--raise); border: 1px solid transparent; border-radius: var(--radius-s); padding: 2px; }
   .seg button {
     background: transparent; border: none; color: var(--dim); font-size: 11px; font-family: var(--mono);
     padding: 1px 8px; border-radius: 3px; cursor: pointer; white-space: nowrap;
@@ -204,15 +296,33 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   }
   .seg button:active { transform: scale(.96); }
   @media (hover:hover) { .seg button:hover { color: var(--fg); } }
-  .seg button.active { color: var(--gold); background: var(--raise); }
+  .seg button.active { color: var(--gold); background: var(--panel); }
   #maSeg .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; }
+  /* 副图指标：窄窗下 seg 会换行顶高副图栏，改为当前值按钮 + 点击弹出小菜单 */
+  #subSeg { position: relative; }
+  #subSegBtn { display: inline-flex; align-items: center; gap: 4px; color: var(--gold); background: var(--panel); }
+  #subSegBtn svg { width: 9px; height: 9px; flex-shrink: 0; }
+  #subSegPop {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; min-width: 100%;
+    display: flex; flex-direction: column; gap: 2px; padding: 2px;
+    background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius-s);
+    box-shadow: 0 8px 24px rgba(0,0,0,.14);
+  }
+  #subSegPop[hidden] { display: none; }
+  #subSegPop button { display: block; width: 100%; text-align: left; padding: 3px 10px; }
+  #subSegPop button.active { background: var(--raise); }
+  @media (hover:hover) { #subSegPop button:hover { background: var(--raise); } }
   #subNote { font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #sub { flex: 1; min-height: 0; position: relative; }
 
   /* ---------- right rail ---------- */
-  #rail { width: 322px; border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; flex-shrink: 0; }
-  .sec { padding: 10px 12px; border-bottom: 1px solid var(--line); }
-  .sec > h3, .sec .ai-head h3 { margin: 0 0 8px; font-size: 11px; color: var(--faint); font-weight: 600; letter-spacing: .12em; }
+  #rail { width: 322px; border-left: 1px solid var(--line); background: var(--panel); flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+  /* F10 摘要与资金流固定在右栏顶部，只有 AI 区滚动 */
+  #rail > #f10Sec, #rail > #flowSec { flex-shrink: 0; }
+  #railScroll { flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--line); }
+  .sec { padding: 12px; }
+  .sec + .sec { padding-top: 16px; }
+  .sec > h3, .sec .ai-head h3 { margin: 0 0 6px; font-size: 11px; color: var(--faint); font-weight: 600; letter-spacing: .12em; }
 
   /* F10 摘要 */
   #f10Sec .f10-top { display: flex; justify-content: space-between; align-items: baseline; }
@@ -220,19 +330,25 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #f10Sec .cd { color: var(--faint); font-family: var(--mono); font-size: 11px; margin-left: 6px; }
   #f10Sec .px { font-family: var(--mono); font-size: 18px; font-weight: 600; }
   #f10Sec .chg { font-family: var(--mono); font-size: 12px; margin-left: 6px; }
-  #f10Sec .tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+  #f10Sec .tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
   .chip {
-    font-size: 11px; color: var(--dim); border: 1px solid var(--line2); border-radius: 3px;
+    font-size: 11px; color: var(--dim); background: var(--raise); border: 1px solid transparent; border-radius: 3px;
     padding: 0 6px; line-height: 18px;
   }
-  .chip.ind { color: var(--gold); border-color: var(--gold-dim); }
-  .chip .pct { font-family: var(--mono); margin-left: 4px; }
+  .chip.tag-edit { color: var(--dim); cursor: pointer; user-select: none; }
+  @media (hover:hover) { .chip.tag-edit:hover { color: var(--gold); border-color: var(--gold-dim); } }
+  #f10Tags .tag-input {
+    flex: 1; min-width: 0; font-size: 11px; line-height: 18px; padding: 0 6px;
+    color: var(--dim); background: var(--bg); border: 1px solid var(--line2); border-radius: 3px;
+    outline: none; font-family: inherit;
+  }
+  #f10Tags .tag-input[readonly] { opacity: .65; cursor: progress; }
   #f10Sec .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px 10px; }
   #f10Sec .kv .k { font-size: 11px; color: var(--faint); }
   #f10Sec .kv .v { font-family: var(--mono); font-size: 13px; margin-top: 1px; }
 
   /* 资金流 */
-  #flowSec .main { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  #flowSec .main { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
   #flowSec .main .k { color: var(--dim); font-size: 12px; }
   #flowSec .main .v { font-family: var(--mono); font-size: 15px; font-weight: 600; }
   #flowNote { margin: 8px 0 0; color: var(--dim); font-size: 11px; }
@@ -246,7 +362,20 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #flowSec .track i.neg { background: var(--down); right: 50%; }
 
   /* AI 完全分类 */
-  .ai-head { display: flex; align-items: center; justify-content: space-between; }
+  .ai-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  /* h3 的底间距移到容器上：flex 居中按外边距盒计算，h3 带 margin-bottom 会把徽标/按钮压得偏离文字中线 */
+  .sec .ai-head h3 { margin: 0 6px 0 0; }
+  .ai-sample {
+    display: inline-flex; align-items: center; flex-shrink: 0; height: 16px;
+    margin-right: auto; font-size: 10px; color: var(--gold); border: 1px solid var(--gold-dim);
+    border-radius: 3px; padding: 0 4px;
+  }
+  .ai-sample[hidden] { display: none; }
+  /* 依据卡可点击定位图表 */
+  #cards .card { cursor: pointer; transition: border-color .12s ease-out; }
+  @media (hover:hover) { #cards .card:hover { border-color: var(--line2); } }
+  #cards .card:focus-visible { outline: 1px solid var(--gold); outline-offset: 1px; }
+  .res-chip { cursor: pointer; }
   #aiRefresh {
     display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; height: 22px;
     background: transparent; color: var(--dim); border: 1px solid var(--line2); border-radius: var(--radius-s);
@@ -272,7 +401,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     border: 1px solid var(--line); border-radius: var(--radius-m); padding: 7px 10px;
     margin-bottom: 8px; background: var(--bg);
   }
-  #aiPanel .card .head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 12px; }
+  #aiPanel .card .head, #aiPop .card .head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 12px; }
   .badge {
     font-size: 10px; font-weight: 400; padding: 0 6px; border-radius: 8px; line-height: 16px;
     border: 1px solid var(--line2); color: var(--dim); font-family: var(--mono); white-space: nowrap;
@@ -280,10 +409,46 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .badge.hi { color: var(--gold); border-color: var(--gold-dim); }
   .badge.mid { color: var(--dim); }
   .badge.lo { color: var(--faint); }
-  #aiPanel .card .kv { color: var(--dim); margin-top: 3px; font-size: 12px; line-height: 1.45; }
-  #aiPanel .card .kv b { color: var(--fg); font-weight: 500; }
-  #aiPanel .card .kv.ev-for { color: var(--up); }
-  #aiPanel .card .kv.ev-against { color: var(--down); }
+  #aiPanel .card .kv, #aiPop .card .kv { color: var(--dim); margin-top: 3px; font-size: 12px; line-height: 1.45; }
+  #aiPanel .card .kv b, #aiPop .card .kv b { color: var(--fg); font-weight: 500; }
+  /* 证据支持/削弱用中性符号，红青只表达价格方向 */
+  #aiPanel .card .kv.ev-for b::before, #aiPop .card .kv.ev-for b::before { content: '+ '; color: var(--dim); font-weight: 400; }
+  #aiPanel .card .kv.ev-against b::before, #aiPop .card .kv.ev-against b::before { content: '− '; color: var(--dim); font-weight: 400; }
+
+  /* AI 完全分类：情景折叠为标题行，点击弹玻璃浮层看全文（内容复用 .card 渲染） */
+  #aiPanel .ai-row {
+    display: flex; justify-content: space-between; align-items: center;
+    border: 1px solid transparent; border-radius: var(--radius-m); padding: 6px 10px;
+    margin-bottom: 6px; background: var(--bg); cursor: pointer;
+    font-weight: 600; font-size: 12px; transition: border-color .12s ease-out;
+  }
+  @media (hover:hover) { #aiPanel .ai-row:hover { border-color: var(--line2); } }
+  #aiPanel .ai-row:focus-visible { outline: 1px solid var(--gold); outline-offset: 1px; }
+  /* 非模态玻璃弹层：定位罩右栏但指针穿透，右栏其余内容（依据卡等）保持可点 */
+  #aiPop { position: absolute; inset: 0; z-index: 40; display: flex; align-items: flex-start; justify-content: center; padding: 12px; pointer-events: none; }
+  #aiPop[hidden] { display: none; }
+  #aiPop .sheet {
+    position: relative; width: min(720px, 100%); max-height: 100%; overflow-y: auto;
+    pointer-events: auto;
+    margin: 0; color: var(--fg);
+    border-radius: 16px; padding: 12px 14px;
+    background: color-mix(in srgb, var(--panel) 58%, transparent);
+    backdrop-filter: blur(30px) saturate(1.8); -webkit-backdrop-filter: blur(30px) saturate(1.8);
+    border: 1px solid rgba(255,255,255,.45);
+    box-shadow: 0 24px 70px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.5);
+  }
+  :root[data-theme="dark"] #aiPop .sheet {
+    background: color-mix(in srgb, var(--raise) 55%, transparent);
+    border-color: rgba(255,255,255,.14);
+    box-shadow: 0 24px 70px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.12);
+  }
+  #aiPopClose {
+    position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; padding: 0;
+    background: transparent; color: var(--dim); border: 1px solid var(--line2); border-radius: 50%;
+    font-size: 13px; line-height: 1; cursor: pointer;
+  }
+  @media (hover:hover) { #aiPopClose:hover { color: var(--gold); border-color: var(--gold-dim); } }
+  #aiPop .card { border: 0; background: transparent; margin: 0; padding: 4px 22px 4px 0; }
 
   /* 依据卡 */
   .card { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 6px 10px; margin-bottom: 8px; background: var(--bg); }
@@ -293,7 +458,28 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .card .price { font-family: var(--mono); font-weight: 400; }
   .card .text { color: var(--dim); margin-top: 2px; font-size: 12px; line-height: 1.45; }
 
-  .supply-control { padding: 10px; border-top: 1px solid var(--line); font-size: 12px; }
+  /* 信号依据卡：右栏底部固定模块，左右键逐条翻看（不遮图表）；底色同右栏，卡片自身成色块 */
+  #cardsDock { flex-shrink: 0; padding: 12px; border-top: 1px solid var(--line); max-height: 50%; overflow-y: auto; }
+  #cardsDock[hidden] { display: none; }
+  .cards-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 11px; color: var(--faint); letter-spacing: .12em; padding: 0 2px 4px;
+  }
+  .cards-head #cardsCount { font-family: var(--mono); letter-spacing: 0; }
+  .cards-body { display: block; }
+  .cards-actions { display: flex; gap: 4px; margin-left: auto; }
+  #cardsCount { margin-left: 8px; margin-right: 8px; }
+  .cards-nav {
+    width: 28px; height: 28px; flex-shrink: 0; box-sizing: border-box;
+    background: var(--panel); border: 1px solid transparent; border-radius: var(--radius-s);
+    color: var(--dim); font-size: 15px; line-height: 1; cursor: pointer; padding: 0;
+  }
+  .cards-nav:disabled { opacity: .35; cursor: default; }
+  @media (hover:hover) { .cards-nav:hover:not(:disabled) { color: var(--gold); border-color: var(--gold-dim); } }
+  #cardsDock #cards { flex: 1; min-width: 0; }
+  #cardsDock #cards .card { margin: 0; }
+
+  .supply-control { padding: 10px; font-size: 12px; }
   .supply-actions { display: flex; gap: 6px; margin: 6px 0; }
   .supply-actions select, .supply-actions button { min-width: 0; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line2); border-radius: var(--radius-s); padding: 3px 6px; }
   .supply-actions select { flex: 1; }
@@ -304,52 +490,55 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #center.supply-loading #chart, #center.supply-loading #sub, #center.supply-loading #axisAnchor { visibility: hidden; }
   /* ---------- footer ---------- */
   footer {
-    padding: 4px 14px; border-top: 1px solid var(--line); background: var(--panel);
+    height: 36px; padding: 0 14px; align-items: center; border-top: 1px solid var(--line); background: var(--panel);
     color: var(--faint); font-size: 11px; display: flex; gap: 18px; flex-wrap: nowrap; flex-shrink: 0; overflow: hidden; white-space: nowrap;
     font-family: var(--mono);
   }
   footer > span { min-width: 0; overflow: hidden; }
+  @container (max-width: 700px) {
+    .res-bar { height: auto; flex-basis: auto; flex-wrap: wrap; gap: 6px 12px; }
+    .resonance { flex-basis: 100%; }
+    #subBar { display: grid; grid-template-columns: 1fr; justify-items: start; height: 86px; gap: 4px; }
+    #subNote { max-width: 100%; height: 16px; }
+    .legend { white-space: normal; max-width: calc(100% - 85px); line-height: 1.5; }
+    #axisAnchor { top: 66px; }
+  }
+  @media (max-width: 760px) {
+    main { display: block; overflow-y: auto; }
+    #center { height: calc(100dvh - 110px); min-height: 560px; }
+    #rail { width: 100%; border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
+    #railScroll { overflow: visible; }
+    #cardsDock { max-height: none; }
+    header { gap: 8px; padding: 0 10px; }
+    .freq button { padding: 2px 7px; }
+    #status { font-size: 11px; }
+    footer { gap: 10px; padding: 0 10px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #sidebar, #page, .sb-btn, .seg button, .freq button,
+    #center .resonance, #center #chartWrap, #rail { transition: none; }
+  }
   .data-status { display: inline-block; margin-left: 6px; color: var(--faint); font-size: 10px; font-weight: 400; cursor: help; }
   .data-status[hidden] { display: none; }
   .data-status:focus-visible { outline: 1px solid var(--gold); outline-offset: 2px; }
-  footer .warn, #status .warn, .wl-head .warn { color: var(--gold); }
+  footer .warn, #status .warn { color: var(--gold); }
 </style>
 </head>
 <body>
-<header>
-  <div class="brand"><span class="name">chanapp · 缠论结构</span></div>
-  <div class="freq" id="freqTabs">
-    <button data-freq="day" class="active">日线</button>
-    <button data-freq="m60">60分</button>
-    <button data-freq="m30">30分</button>
-    <button data-freq="m15">15分</button>
-    <button data-freq="m5">5分</button>
+<aside id="sidebar">
+  <div class="sb-top">
+    <div class="brand"><span class="name">chanapp · 缠论结构</span></div>
+    <button id="sidebarPin" class="sb-btn" aria-label="固定展开侧边栏" aria-pressed="true" title="固定展开（取消固定则收为窄栏）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12.5" r="5.6"/><ellipse cx="12" cy="12.5" rx="10.6" ry="3.5" transform="rotate(-16 12 12.5)"/><path d="M19.6 3.4l.55 1.45 1.45.55-1.45.55-.55 1.45-.55-1.45-1.45-.55 1.45-.55z" fill="currentColor" stroke="none"/></svg>
+    </button>
   </div>
-  <div class="header-settings">
-    <div class="header-setting"><span class="rule-label">成笔标准</span>
-      <div class="seg" id="ruleProfile" role="group" aria-label="成笔标准" title="严格/宽松仅指成笔跨度，买卖点按上游形态规则计算">
-        <button data-profile="strict">严格</button>
-        <button data-profile="relaxed">宽松</button>
-      </div>
-    </div>
-    <div class="header-setting"><span class="rule-label">提示范围</span>
-      <div class="seg" id="signalScope" role="group" aria-label="提示范围" title="扩展包含零中枢上下文提示，不表示更确定">
-        <button data-scope="standard">标准</button>
-        <button data-scope="expanded">扩展</button>
-      </div>
-    </div>
-  </div>
-  <span id="status"></span>
-  <button id="themeBtn" aria-label="切换日间/夜间主题">
-    <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>
-    <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>
-  </button>
-</header>
-<main>
-  <div id="watchlist">
-    <div class="wl-head">自选股 WATCHLIST <span id="wlStale" class="warn" hidden></span></div>
+  <div class="sb-group">
+    <div class="wl-head">自选股 WATCHLIST</div>
     <div id="wlItems"></div>
-    <div id="wlForm"></div>
+  </div>
+  <div id="wlForm"></div>
+  <details class="sb-supply" id="supplyWrap">
+    <summary>供数方案<span class="sb-scheme" id="supplyScheme"></span></summary>
     <section id="supplyControl" class="supply-control" aria-label="供数方案" hidden>
       <div id="supplyCurrent"></div>
       <div class="supply-actions">
@@ -362,10 +551,42 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
       <p id="supplyReasons"></p>
       <p id="supplyStatus" role="status" aria-live="polite"></p>
     </section>
+  </details>
+</aside>
+<div id="page">
+<header>
+  <button id="sidebarExpand" class="sb-btn" aria-label="展开侧边栏" title="展开侧边栏（[）">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M9.5 4.5v15"/><path d="M13 12h6M16 9l3 3-3 3"/></svg>
+  </button>
+  <div class="freq" id="freqTabs">
+    <button data-freq="day" class="active">日线</button>
+    <button data-freq="m60">60分</button>
+    <button data-freq="m30">30分</button>
+    <button data-freq="m15">15分</button>
+    <button data-freq="m5">5分</button>
   </div>
+  <span id="status"></span>
+  <button id="themeBtn" aria-label="切换日间/夜间主题">
+    <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>
+    <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>
+  </button>
+</header>
+<main>
   <div id="center">
     <div class="res-bar">
       <div class="resonance" id="resonance" role="group" aria-label="多周期信号摘要"></div>
+      <div class="res-setting"><span class="rule-label">成笔标准</span>
+        <div class="seg" id="ruleProfile" role="group" aria-label="成笔标准" title="严格/宽松仅指成笔跨度，买卖点按上游形态规则计算">
+          <button data-profile="strict">严格</button>
+          <button data-profile="relaxed">宽松</button>
+        </div>
+      </div>
+      <div class="res-setting"><span class="rule-label">提示范围</span>
+        <div class="seg" id="signalScope" role="group" aria-label="提示范围" title="扩展包含零中枢上下文提示，不表示更确定">
+          <button data-scope="standard">标准</button>
+          <button data-scope="expanded">扩展</button>
+        </div>
+      </div>
     </div>
     <div id="chartWrap">
       <div id="chart"></div>
@@ -384,10 +605,13 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
           <button data-ma="250"><i class="dot" style="background:var(--ma250)"></i>MA250</button>
         </div>
         <div class="seg" id="subSeg" title="副图指标（单选）">
-          <button data-ind="macd" class="active">MACD</button>
-          <button data-ind="kdj">KDJ</button>
-          <button data-ind="rsi">RSI</button>
-          <button data-ind="boll">BOLL</button>
+          <button id="subSegBtn" aria-haspopup="true" aria-expanded="false"><span id="subSegCur">MACD</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+          <div id="subSegPop" hidden>
+            <button data-ind="macd" class="active">MACD</button>
+            <button data-ind="kdj">KDJ</button>
+            <button data-ind="rsi">RSI</button>
+            <button data-ind="boll">BOLL</button>
+          </div>
         </div>
         <span id="subNote"></span>
       </div>
@@ -409,18 +633,34 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
       <div class="bars" id="flowBars"></div>
       <p id="flowNote" hidden></p>
     </div>
+    <div id="railScroll">
     <div class="sec">
-      <div class="ai-head"><h3 id="aiTitle">AI 完全分类</h3><button id="aiRefresh" title="刷新完全分类"><span class="ic"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 12C4 16.4183 7.58172 20 12 20C14.7485 20 17.1746 18.6137 18.6152 16.5H16V14.5H22V20.5H20V18.001C18.1762 20.4286 15.2723 22 12 22C6.47715 22 2 17.5228 2 12H4ZM11.5293 8.31934C11.7059 7.8935 12.2943 7.89349 12.4707 8.31934L12.7236 8.93066C13.1556 9.97346 13.9615 10.8062 14.9746 11.2568L15.6924 11.5762C16.1026 11.759 16.1026 12.3562 15.6924 12.5391L14.9326 12.877C13.9449 13.3162 13.1534 14.1194 12.7139 15.1279L12.4668 15.6934C12.2864 16.1075 11.7137 16.1075 11.5332 15.6934L11.2871 15.1279C10.8476 14.1193 10.0552 13.3163 9.06738 12.877L8.30762 12.5391C7.89744 12.3562 7.89741 11.759 8.30762 11.5762L9.02539 11.2568C10.0385 10.8062 10.8445 9.97348 11.2764 8.93066L11.5293 8.31934ZM12 2C17.5228 2 22 6.47715 22 12H20C20 7.58172 16.4183 4 12 4C9.25151 4 6.82543 5.38634 5.38477 7.5H8V9.5H2V3.5H4V5.99902C5.82382 3.57144 8.72774 2 12 2Z"/></svg></span></button></div>
+      <div class="ai-head"><h3 id="aiTitle">AI 完全分类</h3><span id="aiSampleBadge" class="ai-sample" hidden>示例</span><button id="aiRefresh" title="刷新完全分类"><span class="ic"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 12C4 16.4183 7.58172 20 12 20C14.7485 20 17.1746 18.6137 18.6152 16.5H16V14.5H22V20.5H20V18.001C18.1762 20.4286 15.2723 22 12 22C6.47715 22 2 17.5228 2 12H4ZM11.5293 8.31934C11.7059 7.8935 12.2943 7.89349 12.4707 8.31934L12.7236 8.93066C13.1556 9.97346 13.9615 10.8062 14.9746 11.2568L15.6924 11.5762C16.1026 11.759 16.1026 12.3562 15.6924 12.5391L14.9326 12.877C13.9449 13.3162 13.1534 14.1194 12.7139 15.1279L12.4668 15.6934C12.2864 16.1075 11.7137 16.1075 11.5332 15.6934L11.2871 15.1279C10.8476 14.1193 10.0552 13.3163 9.06738 12.877L8.30762 12.5391C7.89744 12.3562 7.89741 11.759 8.30762 11.5762L9.02539 11.2568C10.0385 10.8062 10.8445 9.97348 11.2764 8.93066L11.5293 8.31934ZM12 2C17.5228 2 22 6.47715 22 12H20C20 7.58172 16.4183 4 12 4C9.25151 4 6.82543 5.38634 5.38477 7.5H8V9.5H2V3.5H4V5.99902C5.82382 3.57144 8.72774 2 12 2Z"/></svg></span></button></div>
       <div class="ai-note" id="aiDataStatus" hidden></div>
       <div id="aiPanel"></div>
     </div>
-    <div class="sec">
-      <h3>信号依据卡</h3>
-      <div id="cards"></div>
+    </div>
+    <div id="cardsDock" hidden>
+      <div class="cards-head"><span id="cardsTitle">信号依据卡</span><span id="cardsCount"></span>
+        <div class="cards-actions">
+          <button class="cards-nav" id="cardsPrev" aria-label="较新信号" title="较新信号">‹</button>
+          <button class="cards-nav" id="cardsNext" aria-label="较早信号" title="较早信号">›</button>
+        </div>
+      </div>
+      <div class="cards-body">
+        <div id="cards"></div>
+      </div>
+    </div>
+    <div id="aiPop" hidden>
+      <dialog class="sheet" id="aiPopDialog" aria-label="情景详情">
+        <button id="aiPopClose" aria-label="关闭">×</button>
+        <div id="aiPopBody"></div>
+      </dialog>
     </div>
   </div>
 </main>
 <footer id="metaBar"></footer>
+</div>
 <script src="/vendor/lightweight-charts.standalone.production.js"></script>
 <script src="/supply.js"></script>
 <script src="/app.js"></script>

@@ -3,10 +3,10 @@
 配置（环境变量，或 chanapp/.env 不入库）：
 - LLM_PROVIDER：缺省 "deepseek"
 - LLM_API_KEY：必填；缺失时 is_configured() 为 False，analyze() 抛 LLMError
-- LLM_MODEL：缺省 "deepseek-chat"（DeepSeek 官方稳定别名；2026-08-25 实测
-  转发到 deepseek-v4-flash。/models 当前在线 id：deepseek-v4-flash /
-  deepseek-v4-pro / deepseek-v4-flash-vision-exp；v4-flash 为推理模型，
-  响应含 reasoning_content）
+- LLM_MODEL：缺省 "deepseek-flash"（2026-09-10 起）。2026-08-25 实测
+  deepseek-chat 别名转发到 deepseek-v4-flash；当时 /models 在线 id：
+  deepseek-v4-flash / deepseek-v4-pro / deepseek-v4-flash-vision-exp；
+  v4-flash 为推理模型，响应含 reasoning_content
 
 真 key 连通性冒烟已于 2026-08-25 执行（curl /models +
 chat/completions，deepseek-chat 与 deepseek-v4-flash 均通，响应 model
@@ -21,7 +21,7 @@ _TIMEOUT = 30
 _PROVIDERS = {
     "deepseek": {
         "url": "https://api.deepseek.com/chat/completions",
-        "default_model": "deepseek-chat",
+        "default_model": "deepseek-flash",
     },
 }
 
