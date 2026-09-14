@@ -1908,6 +1908,7 @@
 
   var hoverOpen = false;      /* 当前 open 是否由悬停触发（决定移开时是否自动收回） */
   var suppressHover = false;  /* 主动收回后鼠标仍在栏内：先移出一次才允许再次悬停展开 */
+  var focusMute = false;      /* 程序化焦点迁移期间抑制 focusin 重开（迁移目标在栏内，focus 会冒泡 focusin） */
 
   function sbMode() {
     var b = document.body.classList;
@@ -1929,7 +1930,9 @@
     /* 收回窄栏时迁移焦点：窄窗窄栏整条隐藏，焦点迁到顶栏展开钮；宽窗迁到钉按钮 */
     if (mode === 'rail' && prev !== 'rail' && el('sidebar').contains(document.activeElement)) {
       var narrowRail = window.matchMedia('(max-width: 1100px)').matches;
+      focusMute = true;
       (narrowRail ? el('sidebarExpand') : pin).focus({preventScroll: true});
+      focusMute = false;
     }
   }
 
@@ -1959,6 +1962,7 @@
     });
     /* 键盘可达性：焦点进入窄栏同样展开；非悬停展开时焦点离开即收回 */
     el('sidebar').addEventListener('focusin', function () {
+      if (focusMute) return;
       if (sbMode() === 'rail') setSidebar('open');
     });
     el('sidebar').addEventListener('focusout', function (ev) {
