@@ -1,14 +1,15 @@
 """AI 完全分类端点：GET /api/analysis?code=&freq=
 
 固定联合 day/m60/m30，组装与 /api/chart 同源的结构数据（bars/structure/signals/evidence），
-构造完全分类 prompt 调 LLM，按结构哈希缓存结果：
-- 缓存文件：chanapp/.cache/analysis/{sha256(code+三周期完整数据身份+信号+scope版本)}.json，
+构造完全分类 prompt 调 LLM，按 prompt 文本哈希缓存结果：
+- 缓存文件：chanapp/.cache/analysis/{sha256(prompt)}.json，
   目录可用 ANALYSIS_CACHE_DIR 环境变量注入（测试用，同 WATCHLIST_PATH 模式）。
 - llm.is_configured() 为 False → 直接返回 status "unconfigured"，不取数不调 LLM。
 - LLM 输出解析不成 JSON → 降级返回 raw 文本（status 仍 "ok"，scenarios 为空）。
 
-Prompt 契约（build_prompt）：按周期分别喂 {code, freq, 末bar dt/价, 最近中枢上沿/下沿,
-最近 5 个信号依据卡及状态}；要求输出 JSON {"current_state", "scenarios"
+Prompt 契约（build_prompt）：稳定指令与输出契约前置、数据 JSON 置尾（DeepSeek 前缀缓存友好）；
+按周期分别喂 {code, freq, 最近中枢上沿/下沿, 最近 5 张依据卡（旧→新）, 形成中信号, 末bar dt/价}；
+要求输出 JSON {"current_state", "scenarios"
 [≤3, 各含 name/prior/evidence_for/evidence_against/posterior/trigger/boundary/
 action/basis/update_watch]}，按贝叶斯结构推理：prior 先验、evidence_for/against
 证据更新、posterior 后验置信（定性三档 高/中/低）、update_watch 更新观察点；
@@ -84,18 +85,44 @@ def _strip_pct(text: str) -> str:
     return re.sub(r"，衰竭度\s*[\d.]+%", "", text)
 
 
+def _round_floats(obj):
+    """prompt 数值统一 4 位小数：消除浮点尾数噪声（同值不同字节会打掉缓存前缀）。"""
+    if isinstance(obj, float):
+        return round(obj, 4)
+    if isinstance(obj, dict):
+        return {k: _round_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_round_floats(v) for v in obj]
+    return obj
+
+
+# 形成中信号进 prompt 时剔除随时间窗滑动整体位移的内部索引字段
+_PROV_DROP = ("x", "forming", "structure_ref", "last_sure_pos")
+
+
+def _prompt_signal(s: dict) -> dict:
+    out = {k: v for k, v in s.items() if k not in _PROV_DROP}
+    rel = out.get("related_bsp1")
+    if isinstance(rel, dict):
+        out["related_bsp1"] = {k: rel.get(k) for k in ("dt", "price", "types")}
+    return out
+
+
 def collect_prompt_data(code: str, freq: str, bars: list[dict],
                         structure: dict, sig: dict,
                         evidence_cards: list[dict]) -> dict:
-    """从组装数据提取 prompt 输入：末bar、最近中枢、最近 5 张依据卡及当前形成中信号。"""
+    """从组装数据提取 prompt 输入。
+
+    字段按稳定性排列（最易变的 last_bar 在末），依据卡旧→新（新卡尾部追加），
+    让两次刷新间的 prompt 公共前缀尽可能长（DeepSeek 前缀缓存按前缀命中）。
+    """
     last = bars[-1]
     zss = structure.get("zs") or []
     zs = zss[-1] if zss else None
-    cards = sorted(evidence_cards, key=lambda c: c["dt"], reverse=True)[:5]
-    return {
+    cards = sorted(evidence_cards, key=lambda c: c["dt"])[-5:]
+    return _round_floats({
         "code": code,
         "freq": freq,
-        "last_bar": {"dt": last["dt"], "close": last["close"]},
         "latest_zs": ({"dt0": zs["dt0"], "dt1": zs["dt1"],
                        "中枢上沿": zs["zg"], "中枢下沿": zs["zd"]} if zs else None),
         "recent_evidence": [
@@ -107,13 +134,18 @@ def collect_prompt_data(code: str, freq: str, bars: list[dict],
              "strength": c.get("detail", {}).get("strength")}
             for c in cards
         ],
-        "provisional_signals": [s for s in sig.get("signals", [])
+        "provisional_signals": [_prompt_signal(s) for s in sig.get("signals", [])
                                 if s.get("status") == "provisional"],
-    }
+        "last_bar": {"dt": last["dt"], "close": last["close"]},
+    })
 
 
 def build_prompt(data: dict) -> str:
-    """完全分类 prompt：数据 JSON + 贝叶斯输出契约（先验/证据/后验，禁概率数字）。"""
+    """完全分类 prompt：固定指令 + 输出契约（稳定前缀）在前，数据 JSON 在末。
+
+    DeepSeek 上下文缓存按前缀完全匹配命中；稳定部分全部前置后，
+    两次刷新只有末尾数据段变化时可命中前缀缓存。
+    """
     body = json.dumps(data, ensure_ascii=False, indent=2)
     return (
         "你是缠论完全分类助手，用贝叶斯方式推理：先有基准判断（先验 prior），"
@@ -130,7 +162,6 @@ def build_prompt(data: dict) -> str:
         "strength 仅作信息：value 是力度比而非概率，peak 是 MACD 同向柱峰值，"
         "slope 是价格变化斜率；weaker/equal/stronger 不等同于交易有效性。"
         "unavailable 表示没有可用力度比，不从关联点借用或猜测。\n\n"
-        "数据（JSON）：\n" + body + "\n\n"
         "输出要求：\n"
         "1. 只输出一个 JSON 对象：{\"current_state\": \"...\", \"scenarios\": "
         "[{\"name\", \"prior\", \"evidence_for\", \"evidence_against\", "
@@ -141,28 +172,17 @@ def build_prompt(data: dict) -> str:
         "3. 每个 scenario 按贝叶斯结构推理：\n"
         "   - prior：先验判断，仅凭当前结构状态、不看最新信号时的基准看法，一两句；\n"
         "   - evidence_for / evidence_against：支持 / 削弱该情景的证据列表，"
-        "每条必须引用上面数据中出现过的信号 label、价位或中枢上沿/下沿；\n"
+        "每条必须引用下面数据中出现过的信号 label、价位或中枢上沿/下沿；\n"
         "   - posterior：后验置信度，以「高」「中」「低」三档开头，加一句话理由；\n"
         "   - update_watch：什么新证据出现会改变这个判断，与 trigger/boundary 呼应。\n"
         "4. 禁止输出概率或百分比数字（不写「概率」「%」），置信度只用高/中/低定性表述。\n"
-        "5. 每个 scenario 的 trigger 与 boundary 必须引用上面数据中出现过的"
+        "5. 每个 scenario 的 trigger 与 boundary 必须引用下面数据中出现过的"
         "具体价位（末bar价、中枢上沿/中枢下沿、依据卡中的信号价/锚定价）。\n"
         "6. basis 必须引用 recent_evidence 中依据卡的内容（信号类型与价位）。\n"
         "7. 输出文本中的日期一律用 MM-DD 格式（需区分年份时用 MM-DD-YY），"
-        "不要写 yyyy-mm-dd。\n"
+        "不要写 yyyy-mm-dd。\n\n"
+        "数据（JSON）：\n" + body + "\n"
     )
-
-
-def _structure_hash(code: str, freq: str, bars: list[dict], sig: dict,
-                    identity: object = '', data_version: str | None = None,
-                    calculation_id: str | None = None) -> str:
-    """缓存键覆盖全部历史 bar、来源口径与信号，保留四参数调用兼容。"""
-    raw = json.dumps({"code": code, "freq": freq,
-                      "data_version": data_version or data_identity.version(bars, identity),
-                      "signals": sig.get("signals", []),
-                      "calculation_id": calculation_id or profile_identity()["calculation_id"]},
-                     sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _normalize_scenario(s: dict) -> dict:
@@ -213,7 +233,6 @@ def api_analysis(code: str = Query(..., min_length=2),
                 "current_state": None, "scenarios": [], "cached": False, **response_identity}
 
     prompt_frames = {}
-    frame_hashes = {}
     for frame in ANALYSIS_FREQS:
         try:
             with supply.use(snapshot):
@@ -239,18 +258,22 @@ def api_analysis(code: str = Query(..., min_length=2),
             log.exception("analysis calculation failed code=%s freq=%s", code, frame)
             raise HTTPException(status_code=502, detail="结构计算暂不可用") from e
         prompt_frames[frame] = collect_prompt_data(code, frame, bars, structure, sig, evidence)
-        frame_hashes[frame] = _structure_hash(code, frame, bars, sig, data_version=data_version,
-                                               calculation_id=rules["calculation_id"])
 
     response_identity["data_version"] = data_identity.version([], {
         "scope": ANALYSIS_SCOPE_VERSION, "data_versions": response_identity["data_versions"]})
-    h = data_identity.version([], {"code": code, "scope": ANALYSIS_SCOPE_VERSION,
-                                    "frames": frame_hashes, "calculation_id": rules["calculation_id"]})
+    prompt = build_prompt({"code": code, "analysis_scope": ANALYSIS_SCOPE_VERSION,
+                           "rule_profile": response_identity["rule_profile"],
+                           "calculation_id": response_identity["calculation_id"],
+                           "signal_scope": response_identity["signal_scope"],
+                           "timeframes": prompt_frames})
+    # 结果缓存键 = prompt 文本哈希：miss ⇔ LLM 输入真的变化，
+    # prompt 之外的 bar/信号噪声不再造成假 miss
+    h = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     with _analysis_lock(h):
-        return _analyze_combined(code, h, prompt_frames, response_identity, t0)
+        return _analyze_combined(code, h, prompt, prompt_frames, response_identity, t0)
 
 
-def _analyze_combined(code: str, h: str, prompt_frames: dict,
+def _analyze_combined(code: str, h: str, prompt: str, prompt_frames: dict,
                       response_identity: dict, t0: float) -> dict:
     cache_file = _cache_dir() / f"{h}.json"
     if cache_file.exists():
@@ -267,11 +290,6 @@ def _analyze_combined(code: str, h: str, prompt_frames: dict,
                      code, ANALYSIS_SCOPE_VERSION, int((time.monotonic() - t0) * 1000))
             return cached
 
-    prompt = build_prompt({"code": code, "analysis_scope": "multi_timeframe",
-                           "timeframes": prompt_frames,
-                           "rule_profile": response_identity["rule_profile"],
-                           "calculation_id": response_identity["calculation_id"],
-                           "signal_scope": response_identity["signal_scope"]})
     try:
         t_llm = time.monotonic()
         raw = engine_llm.analyze(prompt)

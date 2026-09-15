@@ -119,6 +119,31 @@ class TestLLMProvider(_EnvMixin, unittest.TestCase):
         with self.assertRaises(llm.LLMError):
             llm.analyze("p")
 
+    def test_cache_usage_logged(self):
+        """响应带 usage 时记录 prompt 缓存命中/未命中 token 数（命中率观测）。"""
+        self._set_env(LLM_API_KEY="k")
+        payload = {"choices": [{"message": {"content": "ok"}}],
+                   "usage": {"prompt_cache_hit_tokens": 120, "prompt_cache_miss_tokens": 30}}
+        from chanapp.engine import llm
+        with mock.patch("requests.post", return_value=_FakeResp(payload)), \
+             self.assertLogs("chanapp.engine.llm", level="INFO") as logs:
+            self.assertEqual(llm.analyze("p"), "ok")
+        self.assertIn("prompt_cache_hit_tokens=120", "\n".join(logs.output))
+        self.assertIn("prompt_cache_miss_tokens=30", "\n".join(logs.output))
+
+    def test_non_object_response_raises_llm_error(self):
+        """200 但 JSON 体非对象（[] / 字符串 / null）→ LLMError，不逃逸 AttributeError。"""
+        self._set_env(LLM_API_KEY="k")
+        from chanapp.engine import llm
+        for body in ([], "ok", None):
+            with mock.patch("requests.post", return_value=_FakeResp(body)):
+                with self.assertRaises(llm.LLMError):
+                    llm.analyze("p")
+        # usage 为非对象 truthy 值：不报错、正常返回
+        with mock.patch("requests.post", return_value=_FakeResp(
+                {"choices": [{"message": {"content": "ok"}}], "usage": "x"})):
+            self.assertEqual(llm.analyze("p"), "ok")
+
 
 if __name__ == "__main__":
     unittest.main()

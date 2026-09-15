@@ -62,10 +62,12 @@ class TestRuleProfilesAPI(unittest.TestCase):
             self.assertTrue(responses[2]["cached"])
 
     def test_hash_isolates_profiles_even_without_signal_changes(self):
-        from chanapp.api.analysis import _structure_hash
-        args = ("code", "day", [], {"signals": []})
-        self.assertNotEqual(_structure_hash(*args, calculation_id="strict-id"),
-                            _structure_hash(*args, calculation_id="relaxed-id"))
+        """prompt 含 calculation_id：规则身份不同即不同缓存键，与信号内容无关。"""
+        from chanapp.api.analysis import build_prompt
+        base = {"code": "c", "analysis_scope": "multi_timeframe_chanpy_v2",
+                "rule_profile": "strict", "signal_scope": "expanded", "timeframes": {}}
+        self.assertNotEqual(build_prompt({**base, "calculation_id": "strict-id"}),
+                            build_prompt({**base, "calculation_id": "relaxed-id"}))
 
     def test_scope_is_independent_and_roundtrip_cached(self):
         dataset = {"bars": load_bars(), "data_version": "same-input"}

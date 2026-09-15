@@ -1,4 +1,4 @@
-"""Task 11: /api/analysis 完全分类生成（结构哈希缓存）测试。
+"""Task 11: /api/analysis 完全分类生成（prompt 哈希缓存）测试。
 
 全部 mock LLM / 冻结 fixture，离线可跑，不打外网：
 - engine_data.get_bars 用 fixture 替换（sh000001 日线 800 根快照）；
@@ -109,7 +109,7 @@ class TestAnalysisApi(unittest.TestCase):
             self.assertEqual(j2["hash"], j1["hash"])
             self.assertEqual(an.call_count, 1)  # 第二次未调 LLM
 
-        # 缓存文件按结构哈希命名落在注入目录
+        # 缓存文件按 prompt 哈希命名落在注入目录
         files = list(Path(self._tmp.name).glob("*.json"))
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0].stem, j1["hash"])
@@ -139,20 +139,6 @@ class TestAnalysisApi(unittest.TestCase):
         self.assertEqual(j["raw"], "这不是 JSON")
         self.assertEqual(j["scenarios"], [])
 
-    def test_structure_hash_changes_with_bars(self):
-        """缓存键随 code/freq/末bar dt/最新信号 dt 变化。"""
-        from chanapp.api import analysis
-        from chanapp.engine import signals, structure
-        bars = load_bars()
-        st = structure.compute_structure(bars, "sh000001", "day")
-        sig = signals.compute_signals(bars, st)
-        h1 = analysis._structure_hash("sh000001", "day", bars, sig)
-        self.assertEqual(len(h1), 64)
-        self.assertNotEqual(h1, analysis._structure_hash("sh000001", "m60", bars, sig))
-        self.assertNotEqual(h1, analysis._structure_hash("sz399006", "day", bars, sig))
-        sig2 = {"signals": [], "forming_signal": None}  # 信号集合变化 → 哈希变化
-        self.assertNotEqual(h1, analysis._structure_hash("sh000001", "day", bars, sig2))
-
     def test_prompt_contains_only_traceable_numbers(self):
         """prompt 只含可追溯价位；数据段无 % 数字；指令段含禁止概率约束。
 
@@ -169,8 +155,9 @@ class TestAnalysisApi(unittest.TestCase):
         p = analysis.build_prompt(data)
 
         # Prompt serialization preserves supplied prices, independently of signal algorithm.
-        for token in [str(bars[-1]["close"]), bars[-1]["dt"],
-                      str(data["latest_zs"]["中枢上沿"]), str(data["latest_zs"]["中枢下沿"])]:
+        for token in [str(round(bars[-1]["close"], 4)), bars[-1]["dt"],
+                      str(round(data["latest_zs"]["中枢上沿"], 4)),
+                      str(round(data["latest_zs"]["中枢下沿"], 4))]:
             self.assertIn(token, p)
         # 中枢键名用白话术语，不出 ZG/ZD 缩写
         self.assertIn("中枢上沿", data["latest_zs"])
@@ -180,10 +167,10 @@ class TestAnalysisApi(unittest.TestCase):
         # 依据卡最多 5 张
         self.assertLessEqual(len(data["recent_evidence"]), 5)
 
-        data_part = p.split("数据（JSON）：", 1)[1].split("输出要求：", 1)[0]
+        rules = p.split("输出要求：", 1)[1].split("数据（JSON）：", 1)[0]
+        data_part = p.split("数据（JSON）：", 1)[1]
         self.assertNotIn("%", data_part)       # 衰竭度等百分数不喂给 LLM
         self.assertNotIn("衰竭度", data_part)
-        rules = p.split("输出要求：", 1)[1]
         self.assertIn("概率", rules)           # 禁止概率指令
         self.assertIn("价位", rules)           # trigger/boundary 必须引用输入价位
 
@@ -198,7 +185,7 @@ class TestAnalysisApi(unittest.TestCase):
         ev = evidence.build_evidence(sig["signals"], st)
         data = analysis.collect_prompt_data("sh000001", "day", bars, st, sig, ev)
         p = analysis.build_prompt(data)
-        rules = p.split("输出要求：", 1)[1]
+        rules = p.split("输出要求：", 1)[1].split("数据（JSON）：", 1)[0]
 
         for field in ["prior", "evidence_for", "evidence_against",
                       "posterior", "update_watch"]:
@@ -243,9 +230,79 @@ class TestAnalysisApi(unittest.TestCase):
                   for label, level in [("S1p", "bi"), ("段:S1p", "seg")]]
         data = analysis.collect_prompt_data(
             "sh000001", "day", bars, {"zs": []}, {"signals": points}, [])
-        self.assertEqual(data["provisional_signals"], points)
+        expected = [{k: v for k, v in pt.items() if k != "forming"} for pt in points]
+        self.assertEqual(data["provisional_signals"], expected)
         self.assertNotIn("forming_signal", data)
         self.assertIn("不能表述为已确认", analysis.build_prompt(data))
+
+    def test_prompt_places_contract_before_data(self):
+        """稳定前缀：指令与输出契约在数据 JSON 之前（DeepSeek 前缀缓存友好）。"""
+        from chanapp.api import analysis
+        from chanapp.engine import evidence, signals, structure
+        bars = load_bars()
+        st = structure.compute_structure(bars, "sh000001", "day")
+        sig = signals.compute_signals(bars, st)
+        ev = evidence.build_evidence(sig["signals"], st)
+        p = analysis.build_prompt(analysis.collect_prompt_data("sh000001", "day", bars, st, sig, ev))
+        self.assertLess(p.index("输出要求："), p.index("数据（JSON）："))
+
+    def test_prompt_frame_orders_stable_fields_first(self):
+        """帧内字段按稳定性排列：最易变的 last_bar 在末尾。"""
+        from chanapp.api import analysis
+        bars = load_bars()
+        data = analysis.collect_prompt_data("sh000001", "day", bars, {"zs": []}, {"signals": []}, [])
+        self.assertEqual(list(data), ["code", "freq", "latest_zs", "recent_evidence",
+                                      "provisional_signals", "last_bar"])
+
+    def test_new_evidence_card_appends_at_tail_preserving_prefix(self):
+        """新依据卡追加在 recent_evidence 末尾：之前内容保持为公共前缀。"""
+        import os.path
+        from chanapp.api import analysis
+        bars = load_bars()
+
+        def card(day):
+            return {"dt": f"2026-08-{day}", "type": "B1", "price": 3905.2, "side": "buy",
+                    "text": "B1 依据", "status": "confirmed", "level": "bi",
+                    "types": ["1"], "detail": {}}
+
+        base = [card(d) for d in ("10", "11", "12")]
+        d1 = analysis.collect_prompt_data("sh000001", "day", bars, {"zs": []}, {"signals": []}, base)
+        d2 = analysis.collect_prompt_data("sh000001", "day", bars, {"zs": []}, {"signals": []}, base + [card("13")])
+        top = {"code": "sh000001", "analysis_scope": analysis.ANALYSIS_SCOPE_VERSION,
+               "rule_profile": "strict", "calculation_id": "id", "signal_scope": "expanded"}
+        p1 = analysis.build_prompt({**top, "timeframes": {"day": d1}})
+        p2 = analysis.build_prompt({**top, "timeframes": {"day": d2}})
+        anchor = p1.index('"recent_evidence"')
+        self.assertTrue(p2.startswith(p1[:anchor]), '新卡追加前的全部内容应保持字节级一致')
+        # 阈值锚定在共享卡片之后：反转卡片方向会让公共前缀退到 recent_evidence 头部，
+        # 只有「旧→新、尾部追加」才能让公共前缀延伸到 provisional_signals 附近
+        self.assertGreaterEqual(len(os.path.commonprefix([p1, p2])),
+                                p1.index('"provisional_signals"') - 20)
+
+    def test_provisional_signals_strip_window_indices(self):
+        """形成中信号剔除随时间窗位移的内部索引字段；related_bsp1 只留 dt/price/types；浮点 4 位。"""
+        from chanapp.api import analysis
+        bars = load_bars()
+        point = {"x": 799, "dt": "2026-08-21", "price": 3905.2, "side": "sell",
+                 "label": "S1p", "level": "bi", "types": ["1p"], "status": "provisional",
+                 "forming": True, "structure_ref": {"level": "bi", "index": 120},
+                 "last_sure_pos": 790,
+                 "related_bsp1": {"index": 100, "x": 780, "dt": "2026-08-01",
+                                  "price": 3800.0, "types": ["1"]},
+                 "strength": {"metric": "divergence_rate", "value": 0.9583787826842796,
+                              "state": "weaker"},
+                 "features": {"divergence_rate": 0.9583787826842796}}
+        data = analysis.collect_prompt_data("sh000001", "day", bars, {"zs": []}, {"signals": [point]}, [])
+        got = data["provisional_signals"][0]
+        for key in ("x", "forming", "structure_ref", "last_sure_pos"):
+            self.assertNotIn(key, got)
+        self.assertEqual(got["related_bsp1"], {"dt": "2026-08-01", "price": 3800.0, "types": ["1"]})
+        self.assertEqual(got["strength"]["value"], 0.9584)
+        self.assertIn("features", got)  # 力度明细保留，仅降噪
+        p = analysis.build_prompt(data)
+        self.assertNotIn("structure_ref", p)
+        self.assertNotIn("last_sure_pos", p)
+        self.assertNotIn("0.9583787826842796", p)
 
 
 if __name__ == "__main__":

@@ -12,9 +12,12 @@
 chat/completions，deepseek-chat 与 deepseek-v4-flash 均通，响应 model
 字段均为 deepseek-v4-flash）；测试一律 mock HTTP，不打外网。
 """
+import logging
 import os
 
 import requests
+
+log = logging.getLogger(__name__)
 
 _TIMEOUT = 30
 
@@ -58,7 +61,15 @@ def analyze(prompt: str) -> str:
             timeout=timeout,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            raise LLMError(f"unexpected LLM response shape: {type(payload).__name__}")
+        usage = payload.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        log.info("[timing] llm model=%s prompt_cache_hit_tokens=%s prompt_cache_miss_tokens=%s",
+                 model, usage.get("prompt_cache_hit_tokens"),
+                 usage.get("prompt_cache_miss_tokens"))
+        return payload["choices"][0]["message"]["content"]
     except LLMError:
         raise
     except requests.RequestException as e:

@@ -97,18 +97,21 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
 
   /* ---------- watchlist ---------- */
   /* ---------- 侧边栏（Chrome 垂直标签式三态：pinned 固定展开 / open 浮动展开 / rail 窄栏） ---------- */
-  /* 侧栏常驻 fixed，主区用 margin-left 让位；三态切换只动宽度，曲线对齐 ChatGPT 边栏实测（~180ms 强 ease-out） */
+  /* 侧栏内容一次完成布局；外壳通过裁切揭示，过渡期间不重新排版。 */
   #page {
     flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden;
     margin-left: 220px; transition: margin-left .18s cubic-bezier(.16, 1, .3, 1);
   }
   #sidebar {
+    --expanded-width: 220px;
+    --rail-width: 88px;
     position: fixed; left: 0; top: 0; bottom: 0; z-index: 60;
-    width: 220px; display: flex; flex-direction: column;
+    width: var(--expanded-width); display: flex; flex-direction: column;
     /* 颜色对齐 ChatGPT 边栏：与页面同底色的齐平竖条，1px 发丝线分隔，无阴影无圆角 */
     background: var(--bg); border-right: 1px solid var(--line);
     overflow: hidden;
-    transition: width .18s cubic-bezier(.16, 1, .3, 1), box-shadow .18s ease-out,
+    clip-path: inset(-40px);
+    transition: clip-path .18s cubic-bezier(.16, 1, .3, 1), box-shadow .18s ease-out,
       transform .18s cubic-bezier(.16, 1, .3, 1), visibility .18s;
   }
   /* 窄窗展开钮：仅窄窗且窄栏隐藏时出现在顶栏（宽窗窄栏常驻，不需要它） */
@@ -119,24 +122,44 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   body.sb-open #sidebar { box-shadow: 12px 0 32px rgba(0, 0, 0, .10); }
   :root[data-theme="dark"] body.sb-open #sidebar { box-shadow: 12px 0 32px rgba(0, 0, 0, .5); }
   /* rail 窄栏：只留名称 + 换行涨跌幅 */
-  body.sb-rail #sidebar { width: 88px; }
+  body.sb-rail #sidebar { clip-path: inset(0 calc(100% - var(--rail-width)) 0 0); }
+  body.sb-rail #sidebar .sb-top, body.sb-rail #sidebar .sb-group { width: calc(var(--rail-width) - 1px); }
+  #sidebar::after {
+    content: ''; position: absolute; top: 0; bottom: 0; left: calc(var(--rail-width) - 1px);
+    width: 1px; background: var(--line); opacity: 0; pointer-events: none;
+  }
+  body.sb-rail #sidebar::after { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { #sidebar, #sidebarPin svg { transition: none; } }
   body.sb-rail .sb-top { padding: 0; justify-content: center; }
   body.sb-rail .sb-top .brand { display: none; }
-  body.sb-rail .wl-head, body.sb-rail #wlForm, body.sb-rail .sb-supply { display: none; }
-  body.sb-rail #sidebar .sb-group { padding: 2px 0; }
+  /* 窄栏与展开纵向几何逐行等高：展开只是水平裁切揭示 + 文字淡入，不做任何滚动补偿。
+     不变量：wl-head 与底部控件都占位隐藏；行盒 = margin 2 + padding 12 + 20.8 + 20.2 = 55px，两态一致。 */
+  body.sb-rail .wl-head { visibility: hidden; }
+  /* 保留底部占位：展开时控件不能盖住窄栏中正被悬停的股票。 */
+  body.sb-rail #wlForm, body.sb-rail .sb-supply { visibility: hidden; pointer-events: none; }
+  #wlForm, .sb-supply { width: calc(var(--expanded-width) - 1px); }
   body.sb-rail #sidebar .item { margin: 1px 6px; padding: 6px 2px; }
-  body.sb-rail #sidebar .item .row { flex-direction: column; align-items: stretch; gap: 0; }
-  /* 名称硬截断不带省略号（CJK 等宽，截整字）；4 字名与 ±xx.xx% 在 88px 内完整放下 */
-  body.sb-rail #sidebar .item .row > span:first-child { font-size: 12px; text-align: center; text-overflow: clip; }
-  body.sb-rail #sidebar .item .chg { margin-left: 0; font-size: 11px; text-align: center; }
+  body.sb-rail #sidebar .item .row { flex-direction: column; align-items: stretch; gap: 0; height: auto; }
+  /* 名称硬截断不带省略号（CJK 等宽，截整字）；4 字名与 ±xx.xx% 在 88px 内完整放下。
+     line-height 对齐展开态行盒（body 13px/1.6：row1 = 13×1.6，row2 = 12×1.6 + margin-top 1px）。 */
+  body.sb-rail #sidebar .item .row > span:first-child { font-size: 12px; text-align: center; text-overflow: clip; line-height: calc(1.6 * 13px); }
+  body.sb-rail #sidebar .item .chg { margin-left: 0; font-size: 11px; text-align: center; line-height: calc(1.6 * 12px); margin-top: 1px; }
   body.sb-rail #sidebar .item .row2,
   body.sb-rail #sidebar .item .btns,
   body.sb-rail #sidebar .item .tag-limit { display: none; }
+  /* 展开文字编排：交错淡入（contentTransition 式），行盒不动只动文字；参数经原型体感定稿 */
+  @keyframes sbTextIn { from { opacity: 0; transform: translateX(-5px); } }
+  @keyframes sbFadeIn { from { opacity: 0; } }
+  body.sb-anim-in #sidebar .item .row > span:first-child,
+  body.sb-anim-in #sidebar .item .chg { animation: sbTextIn .26s cubic-bezier(.16, 1, .3, 1) both; }
+  body.sb-anim-in #sidebar .item .row2 { animation: sbTextIn .26s cubic-bezier(.16, 1, .3, 1) .09s both; }
+  body.sb-anim-in #sidebar .wl-head,
+  body.sb-anim-in #sidebar .sb-top .brand { animation: sbFadeIn .28s ease-out .08s both; }
   .sb-top {
     flex: 0 0 44px; display: flex; align-items: center; justify-content: space-between;
     padding: 0 8px 0 14px; gap: 2px;  /* 无分隔线，与 ChatGPT 边栏头部一致 */
   }
-  .sb-group { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 0; }
+  .sb-group { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overflow-anchor: none; padding: 6px 0; }
   #wlForm { flex-shrink: 0; }
   .sb-btn {
     display: flex; align-items: center; justify-content: center;
@@ -147,6 +170,11 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .sb-btn:active { transform: scale(.94); }
   @media (hover:hover) { .sb-btn:hover { color: var(--fg); background: var(--raise); } }
   .sb-btn svg { width: 15px; height: 15px; }
+  /* 图钉（土星）：窄栏大、展开小，形态切换时尺寸随外壳同曲线过渡（matchedGeometry 式） */
+  #sidebarPin svg { width: 17px; height: 17px;
+    transition: width .26s cubic-bezier(.16, 1, .3, 1), height .26s cubic-bezier(.16, 1, .3, 1); }
+  body.sb-rail #sidebarPin { width: 36px; height: 32px; }
+  body.sb-rail #sidebarPin svg { width: 22px; height: 22px; }
   #sidebarPin.on { color: var(--gold); }
   .sb-supply { flex-shrink: 0; border-top: 1px solid var(--line); }
   .sb-supply summary {
@@ -164,24 +192,25 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
 
   /* 窄窗：侧栏变浮层抽屉，半透明毛玻璃浮于图表之上，保持浮动卡片形态 */
   @media (max-width: 1100px) {
+    #sidebar { --expanded-width: 250px; }
     /* 窄窗：窄栏整条收起（88px 对中小屏太贵），顶栏给展开钮；pinned/open 浮动不推布局 */
     body.sb-rail #sidebar { transform: translateX(-104%); visibility: hidden; border-right: 0; }
     body.sb-rail #sidebarExpand { display: flex; }
     body:not(.sb-rail) #sidebar {
-      width: 250px; box-shadow: 12px 0 32px rgba(0, 0, 0, .10);
+      width: var(--expanded-width); box-shadow: 12px 0 32px rgba(0, 0, 0, .10);
     }
     :root[data-theme="dark"] body:not(.sb-rail) #sidebar { box-shadow: 12px 0 32px rgba(0, 0, 0, .5); }
     #page, body.sb-open #page, body.sb-rail #page { margin-left: 0; }
   }
 
-  #sidebar .wl-head { padding: 4px 12px 8px; font-size: 11px; color: var(--faint); letter-spacing: .12em; }
+  #sidebar .wl-head { padding: 4px 12px 8px; font-size: 11px; color: var(--faint); letter-spacing: .12em; white-space: nowrap; }
   #sidebar .item { margin: 1px 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
   @media (hover:hover) { #sidebar .item:hover { background: var(--raise); } }
   #sidebar .item.active { background: var(--raise); }
-  #sidebar .item .row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  #sidebar .item .row { display: flex; justify-content: space-between; align-items: center; gap: 6px; height: calc(1.6 * 13px); }
   #sidebar .item .row > span:first-child { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #sidebar .item .chg { font-family: var(--mono); font-size: 12px; margin-left: auto; flex-shrink: 0; }
-  #sidebar .item .row2 { display: flex; justify-content: space-between; align-items: baseline; margin-top: 1px; }
+  #sidebar .item .row2 { display: flex; justify-content: space-between; align-items: center; margin-top: 1px; height: calc(1.6 * 12px); }
   #sidebar .item .code { color: var(--faint); font-size: 11px; font-family: var(--mono); }
   #sidebar .item .px { font-family: var(--mono); font-size: 12px; }
   #sidebar .up, #f10Sec .up, #flowSec .up, .legend .up { color: var(--up); }

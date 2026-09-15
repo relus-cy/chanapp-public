@@ -99,8 +99,9 @@
     supplyState.scheme = j.scheme;
     supplyState.generation = j.generation;
     if (chartAbort) chartAbort.abort();
-    if (analysisAbort) analysisAbort.abort();
-    chartAbort = analysisAbort = null;
+    chartAbort = null;
+    Object.keys(analysisSlots).forEach(function (k) { var s = analysisSlots[k]; if (s.abort) s.abort.abort(); });
+    analysisSlots = {};
     state.quotes = {}; f10Last = {code: null, ts: 0}; lastF10 = null;
     lastChartData = null; lastMeta = null; loadedTarget = null;
     pendingAnalysis = null; activeChartVersion = null;
@@ -196,7 +197,7 @@
     if (qs.get('freq')) state.freq = qs.get('freq');
   })();
   var charts = null; // {main, macdChart, candleSeries, ...}
-  var chartAbort = null, analysisAbort = null;
+  var chartAbort = null;
   var CHART_TIMEOUT_MS = 25000;     // 冷取数正常 ~8s；25s 在病理性兜底链前切断
   var ANALYSIS_TIMEOUT_MS = 150000; // 覆盖可配置的 LLM 最长 120s 及联合数据准备
   var klineData = [];    // 当前 K 线原始数据（time 为原始字符串，供图例/指标计算）
@@ -1228,7 +1229,7 @@
       html += '<div class="ai-note">完全分类接口不可用，以下为静态样例</div>';
     } else if (j.cached) {
       html += '<div class="ai-note">缓存结果（' +
-        (j.analysis_scope === 'multi_timeframe' ? '三周期数据未变化' : (j.ref_bar_dt ? fmtRefDt(j.ref_bar_dt) + '后结构未变化' : '结构未变化')) +
+        (j.analysis_scope === 'multi_timeframe' ? '分析输入未变化' : (j.ref_bar_dt ? fmtRefDt(j.ref_bar_dt) + '后结构未变化' : '结构未变化')) +
         '）</div>';
     }
     if (j.current_state) {
@@ -1318,7 +1319,27 @@
   }
 
   var pendingAnalysis = null, activeChartVersion = null;
-  var analysisIdentity = null, analysisInFlight = false;
+  var analysisIdentity = null;
+  /* AI 结果与在飞请求按身份槽位保留（身份 = 股票 + 成笔标准 + 提示范围 + 供数口径）：
+     切走不 abort、不丢结果，切回即恢复；超出上限按最近发起逐出并中止其请求 */
+  var AI_SLOT_MAX = 10;
+  var analysisSlots = {};
+  function analysisSlot(identity) {
+    var slot = analysisSlots[identity];
+    if (slot) {  /* 触到即移到最新位 */
+      delete analysisSlots[identity];
+      analysisSlots[identity] = slot;
+      return slot;
+    }
+    var keys = Object.keys(analysisSlots);
+    if (keys.length >= AI_SLOT_MAX) {
+      var old = analysisSlots[keys[0]];
+      if (old.abort) old.abort.abort();
+      delete analysisSlots[keys[0]];
+    }
+    slot = analysisSlots[identity] = {abort: null, inFlight: false, body: null};
+    return slot;
+  }
   var ruleSwitchNote = null;  // 成笔标准刚切换时的面板提示，由下一次 loadAnalysis 消费
   function acceptsRule(body, profile, scope) {
     return profile === state.ruleProfile && body.rule_profile === profile &&
@@ -1359,23 +1380,28 @@
   // fetch 失败或未配置 LLM 时回落到静态样例渲染，保证无 key 也能验收 UI
   var AI_SPIN_MIN = 500;  // 旋转反馈最短时长：缓存秒回时也要让用户感知「已刷新」
 
-  // 自动刷新与切换仅同步面板归属；AI 请求暂时只由刷新按钮触发。
+  // 自动刷新与切换仅同步面板归属；AI 请求只由刷新按钮触发。
+  // 身份切换不再丢弃在飞请求与已完成结果：按身份落槽，切回时恢复。
   function syncManualAnalysis() {
     var identity = currentAnalysisIdentity();
     if (identity === analysisIdentity) return;
-    if (analysisAbort) analysisAbort.abort();
-    analysisAbort = null;
     analysisIdentity = identity;
-    analysisInFlight = false;
-    pendingAnalysis = null;
     ruleSwitchNote = null;
-    el('aiPanel').innerHTML = '<div class="ai-note">点击刷新生成分析</div>';
+    var slot = analysisSlots[identity];
+    var busy = !!(slot && slot.inFlight);
+    pendingAnalysis = slot && slot.body ? {body: slot.body, identity: identity} : null;
+    if (pendingAnalysis) {
+      showMatchingAnalysis();
+    } else {
+      el('aiPanel').innerHTML = '<div class="ai-note">' + (busy ? '加载中…' : '点击刷新生成分析') + '</div>';
+      el('aiDataStatus').hidden = true;
+      el('aiSampleBadge').hidden = true;
+    }
     if (typeof closeAiPopup === 'function') closeAiPopup();
-    el('aiDataStatus').hidden = true;
-    el('aiSampleBadge').hidden = true;
     var btn = el('aiRefresh');
-    btn.classList.remove('spin');
-    btn.disabled = false;
+    btn.classList[busy ? 'add' : 'remove']('spin');
+    btn.disabled = busy;
+    updateAnalysisFreshness();
   }
 
   function loadAnalysis(options) {
@@ -1384,16 +1410,17 @@
     var generation = supplyState.generation, epoch = supplyState.epoch, profile = state.ruleProfile, scope = state.signalScope;
     if (!state.code) { el('aiPanel').innerHTML = ''; return; }
     var identity = currentAnalysisIdentity();
-    if (identity === analysisIdentity && (analysisInFlight || !(options && options.refresh))) return;
+    var slot = analysisSlot(identity);
+    if (identity === analysisIdentity && (slot.inFlight || !(options && options.refresh))) return;
     if (identity !== analysisIdentity || !pendingAnalysis) {
       pendingAnalysis = null;
       el('aiPanel').innerHTML = '<div class="ai-note">' + (ruleSwitchNote || '加载中…') + '</div>';
       ruleSwitchNote = null;
     }
     analysisIdentity = identity;
-    analysisInFlight = true;
-    if (analysisAbort) analysisAbort.abort();
-    var ctl = analysisAbort = new AbortController();
+    slot.inFlight = true;
+    if (slot.abort) slot.abort.abort();
+    var ctl = slot.abort = new AbortController();
     var btn = el('aiRefresh');
     btn.classList.add('spin');
     btn.disabled = true;
@@ -1407,38 +1434,44 @@
         return r.json();
       })
       .then(function (j) {
-        if (ctl !== analysisAbort || identity !== currentAnalysisIdentity()) return;
+        if (ctl !== slot.abort) return;
         if (!acceptsRule(j, profile, scope)) {  // 规则身份不匹配：显式提示，不静默停在加载态
-          analysisIdentity = null;
-          el('aiPanel').innerHTML = '<div class="ai-note">分析响应与当前成笔标准或提示范围不一致，请刷新</div>';
+          if (identity === currentAnalysisIdentity()) {
+            analysisIdentity = null;
+            el('aiPanel').innerHTML = '<div class="ai-note">分析响应与当前成笔标准或提示范围不一致，请刷新</div>';
+          }
           return;
         }
         if (!eligible(generation, j, epoch)) return;
-        if (j.status === 'ok') { queueAnalysis(j); return; }
-        return fetchAnalysisSample().then(function (s) { if (ctl === analysisAbort && identity === currentAnalysisIdentity()) renderAnalysis(s, 'unconfigured'); });
+        if (j.status === 'ok') {
+          slot.body = j;   /* 结果落槽：切走后才完成也不丢，切回即恢复 */
+          if (identity === currentAnalysisIdentity()) queueAnalysis(j);
+          return;
+        }
+        return fetchAnalysisSample().then(function (s) { if (ctl === slot.abort && identity === currentAnalysisIdentity()) renderAnalysis(s, 'unconfigured'); });
       })
       .catch(function (e) {
-        if (ctl !== analysisAbort || identity !== currentAnalysisIdentity()) return;
+        if (ctl !== slot.abort || identity !== currentAnalysisIdentity()) return;
         if (e && e.name === 'AbortError') return;  // 被新请求中止，静默
         return fetchAnalysisSample()
-          .then(function (s) { if (ctl === analysisAbort && identity === currentAnalysisIdentity()) renderAnalysis(s, 'fallback'); })
+          .then(function (s) { if (ctl === slot.abort && identity === currentAnalysisIdentity()) renderAnalysis(s, 'fallback'); })
           .catch(function () {
-            if (ctl !== analysisAbort || identity !== currentAnalysisIdentity()) return;
+            if (ctl !== slot.abort || identity !== currentAnalysisIdentity()) return;
             el('aiPanel').innerHTML = '<div class="ai-note">完全分类不可用</div>';
           });
       })
-      .then(function () {  // 复位仅由最新一次请求执行（旧请求被 abort 后 ctl 已易主）
-        if (ctl !== analysisAbort) return;
+      .then(function () {  // 按钮复位仅由最新一次请求执行，且只在身份仍当前时触碰 UI
+        if (ctl !== slot.abort) return;
         var wait = Math.max(0, AI_SPIN_MIN - (Date.now() - t0));
         setTimeout(function () {
-          if (ctl !== analysisAbort) return;
+          if (ctl !== slot.abort || identity !== currentAnalysisIdentity()) return;
           btn.classList.remove('spin');
           btn.disabled = false;
         }, wait);
       })
       .finally(function () {
         clearTimeout(timer);
-        if (ctl === analysisAbort) analysisInFlight = false;
+        if (ctl === slot.abort) slot.inFlight = false;
       });
   }
 
@@ -1856,9 +1889,8 @@
 
   function clearSelection() {
     if (chartAbort) chartAbort.abort();
-    if (analysisAbort) analysisAbort.abort();
-    chartAbort = null; analysisAbort = null;
-    pendingAnalysis = null; activeChartVersion = null; analysisIdentity = null; analysisInFlight = false;
+    chartAbort = null;
+    pendingAnalysis = null; activeChartVersion = null; analysisIdentity = null;
     loadedTarget = null; supplyRange = null; lastMeta = null; lastF10 = null;
     f10Last = {code: null, ts: 0};
     if (charts) renderChart({kline: [], macd: {rows: []}, structure: {bi: [], xd: [], zs: []},
@@ -1910,6 +1942,32 @@
   var suppressHover = false;  /* 主动收回后鼠标仍在栏内：先移出一次才允许再次悬停展开 */
   var focusMute = false;      /* 程序化焦点迁移期间抑制 focusin 重开（迁移目标在栏内，focus 会冒泡 focusin） */
 
+  /* 展开文字编排：窄栏与展开逐行等高（CSS 不变量），进入展开态时给文字交错淡入。
+     级联延迟逐行 12ms 封顶 60ms；row2 由 CSS 再延迟 90ms；reduced-motion 整体跳过。 */
+  var sbAnimTimer = 0;
+  function playSidebarEnter() {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var items = el('sidebar').querySelectorAll('.item');
+    for (var i = 0; i < items.length; i++) {
+      var d = Math.min(i * 12, 60) + 'ms';
+      var name = items[i].querySelector('.row > span:first-child');
+      var chg = items[i].querySelector('.chg');
+      var row2 = items[i].querySelector('.row2');
+      if (name) name.style.animationDelay = d;
+      if (chg) chg.style.animationDelay = d;
+      if (row2) row2.style.animationDelay = 'calc(.09s + ' + d + ')';
+    }
+    document.body.classList.add('sb-anim-in');
+    clearTimeout(sbAnimTimer);
+    sbAnimTimer = setTimeout(function () {
+      document.body.classList.remove('sb-anim-in');
+      for (var j = 0; j < items.length; j++) {
+        var s = items[j].querySelectorAll('.row > span:first-child, .chg, .row2');
+        for (var k = 0; k < s.length; k++) s[k].style.animationDelay = '';
+      }
+    }, 620);
+  }
+
   function sbMode() {
     var b = document.body.classList;
     return b.contains('sb-rail') ? 'rail' : (b.contains('sb-open') ? 'open' : 'pinned');
@@ -1921,6 +1979,8 @@
     if (mode === 'rail' && prev !== 'rail') suppressHover = el('sidebar').matches(':hover');
     document.body.classList.toggle('sb-rail', mode === 'rail');
     document.body.classList.toggle('sb-open', mode === 'open');
+    /* 窄栏 → 展开（悬停/图钉/快捷键同路）：文字交错淡入；几何等高保证无任何纵向位移 */
+    if (prev === 'rail' && mode !== 'rail') playSidebarEnter();
     /* open 是临时浮层，只持久化 pinned / rail；兼容旧键值 expanded / collapsed */
     try { localStorage.setItem('chanapp-sidebar', mode === 'pinned' ? 'pinned' : 'rail'); } catch (_) {}
     var pin = el('sidebarPin');
@@ -2034,8 +2094,7 @@
   function reloadRuleSelection(label) {
     if (!state.code) { syncRuleControl(); return; }
     supplyRange = charts ? {code: state.code, freq: state.freq, range: charts.main.timeScale().getVisibleRange()} : null;
-    if (analysisAbort) analysisAbort.abort();
-    analysisAbort = null; analysisIdentity = null; analysisInFlight = false;
+    analysisIdentity = null;
     pendingAnalysis = null; activeChartVersion = null; lastChartData = null;
     syncRuleControl();
     renderEvidence([]);

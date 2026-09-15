@@ -1,0 +1,16 @@
+'use strict';
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../web/app.js'), 'utf8');
+const context = {hhmmss: x => x};
+vm.createContext(context);
+vm.runInContext(source.slice(source.indexOf('  function displayDataNote('), source.indexOf('  function loadQuotes()')), context);
+assert.equal(typeof context.displayDataNote, 'function');
+assert.equal(context.displayDataNote({}), '');
+assert.match(context.displayDataNote({degraded:true,fetch_time:'10:00'}), /10:00.*缓存/);
+assert.match(context.displayDataNote({meta:{sources:['baseline_backup']}}), /备用/);
+assert.match(context.displayDataNote({missing_codes:['sh600000']}), /部分数据缺失/);
+assert.match(context.displayDataNote({meta:{source_stale:true, source_ts:1788912000}}), /源时间较早/);
+assert.match(context.displayDataNote({meta:{source_stale:true}}), /源时间未确认/);
+assert.match(context.displayDataNote({meta:{source_time_unknown:true,source_stale:false}}), /源时间未确认/);
+console.log('display status UI checks passed');

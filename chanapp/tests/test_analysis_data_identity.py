@@ -1,5 +1,6 @@
 """Offline content identity and request-snapshot isolation checks."""
 import copy
+import hashlib
 import tempfile
 import unittest
 from unittest import mock
@@ -18,21 +19,6 @@ class TestAnalysisDataIdentity(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def test_history_revision_changes_hash_without_timestamp_change(self):
-        bars = load_bars()
-        revised = copy.deepcopy(bars)
-        revised[0]['close'] += .01
-        sig = {'signals': []}
-        self.assertNotEqual(analysis._structure_hash('a', 'day', bars, sig),
-                            analysis._structure_hash('a', 'day', revised, sig))
-
-    def test_equal_bars_different_schemes_have_distinct_hash(self):
-        bars = load_bars()
-        sig = {'signals': []}
-        self.assertNotEqual(
-            analysis._structure_hash('a', 'day', bars, sig, identity={'scheme': 'baseline'}),
-            analysis._structure_hash('a', 'day', bars, sig, identity={'scheme': 'primary_candidate'}))
-
     def test_resonance_workers_use_bound_snapshot(self):
         old = supply.Snapshot('baseline', 4)
         new = supply.Snapshot('primary_candidate', 5)
@@ -44,6 +30,17 @@ class TestAnalysisDataIdentity(unittest.TestCase):
             chart_payload._resonance('a', read)
         self.assertEqual(observed, [old] * 3)
 
+    def test_cache_key_is_prompt_hash(self):
+        """结果缓存键 = prompt 文本哈希：miss ⇔ LLM 输入真的变化。"""
+        dataset = {'bars': load_bars()}
+        with supply.use(supply.Snapshot('baseline', 0)), \
+             mock.patch.object(analysis.engine_llm, 'is_configured', return_value=True), \
+             mock.patch.object(analysis.engine_llm, 'analyze', return_value='{"current_state":"s","scenarios":[]}') as llm, \
+             mock.patch.object(analysis.engine_data, 'get_bars', return_value=dataset):
+            result = analysis.api_analysis('a', 'day')
+        prompt = llm.call_args.args[0]
+        self.assertEqual(result['hash'], hashlib.sha256(prompt.encode('utf-8')).hexdigest())
+
     def test_cached_response_uses_current_generation_and_content_identity(self):
         dataset = {'bars': load_bars(), 'source': 'fixture', 'fqf': 'adjusted'}
         with mock.patch.object(analysis.engine_llm, 'is_configured', return_value=True), \
@@ -53,22 +50,29 @@ class TestAnalysisDataIdentity(unittest.TestCase):
                 first = analysis.api_analysis('a', 'day')
             with supply.use(supply.Snapshot('baseline', 2)):
                 cached = analysis.api_analysis('a', 'day')
-            with supply.use(supply.Snapshot('primary_candidate', 3)):
-                candidate = analysis.api_analysis('a', 'day')
         self.assertTrue(cached['cached'])
         self.assertEqual(cached['generation'], 2)
         self.assertEqual(first['data_version'], cached['data_version'])
+        self.assertEqual(llm.call_count, 1)  # 同 prompt 跨代复用
+        revised = {'bars': copy.deepcopy(dataset['bars']), 'source': 'fixture', 'fqf': 'adjusted'}
+        revised['bars'][-1]['close'] += .01   # prompt 可见内容变化 → 重新分析
+        with mock.patch.object(analysis.engine_llm, 'is_configured', return_value=True), \
+             mock.patch.object(analysis.engine_llm, 'analyze', return_value='{"current_state":"s","scenarios":[]}') as llm2, \
+             mock.patch.object(analysis.engine_data, 'get_bars', return_value=revised):
+            with supply.use(supply.Snapshot('primary_candidate', 3)):
+                candidate = analysis.api_analysis('a', 'day')
+        self.assertFalse(candidate['cached'])
         self.assertNotEqual(first['data_version'], candidate['data_version'])
-        self.assertEqual(llm.call_count, 2)
+        self.assertEqual(llm2.call_count, 1)
 
-    def test_history_revision_recomputes_analysis(self):
+    def test_last_bar_change_recomputes_analysis(self):
         dataset = {'bars': load_bars()}
         with supply.use(supply.Snapshot('baseline', 0)), \
              mock.patch.object(analysis.engine_llm, 'is_configured', return_value=True), \
              mock.patch.object(analysis.engine_llm, 'analyze', return_value='{"current_state":"s","scenarios":[]}') as llm, \
              mock.patch.object(analysis.engine_data, 'get_bars', return_value=dataset):
             first = analysis.api_analysis('a', 'day')
-            dataset['bars'][0]['close'] += .01
+            dataset['bars'][-1]['close'] += .01   # 末bar（prompt 可见）变化 → 重新分析
             second = analysis.api_analysis('a', 'day')
         self.assertFalse(second['cached'])
         self.assertNotEqual(first['data_version'], second['data_version'])
@@ -128,13 +132,13 @@ class TestMultiTimeframeAnalysis(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 502)
         llm.assert_not_called()
 
-    def test_minute_history_revision_invalidates_combined_analysis(self):
+    def test_minute_last_bar_change_invalidates_combined_analysis(self):
         datasets = {freq: {'bars': load_bars()} for freq in ('day', 'm60', 'm30')}
         with mock.patch.object(analysis.engine_llm, 'is_configured', return_value=True), \
              mock.patch.object(analysis.engine_llm, 'analyze', return_value='{"current_state":"s","scenarios":[]}') as llm, \
              mock.patch.object(analysis.engine_data, 'get_bars', side_effect=lambda code, freq: datasets[freq]):
             first = analysis.api_analysis('a', 'day')
-            datasets['m30']['bars'][0]['close'] += .01
+            datasets['m30']['bars'][-1]['close'] += .01   # 末bar（prompt 可见）变化 → 换键
             revised = analysis.api_analysis('a', 'day')
         self.assertEqual(first['data_versions']['day'], revised['data_versions']['day'])
         self.assertNotEqual(first['data_versions']['m30'], revised['data_versions']['m30'])

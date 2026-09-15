@@ -23,7 +23,7 @@ degraded=True 一律表示「本次回的是过期旧缓存」，此时 fetch_ti
 新鲜数据 degraded=False。
 
 AI 完全分类：GET /api/analysis?code=&freq=（chanapp/api/analysis.py，
-结构哈希缓存到 chanapp/.cache/analysis/，LLM 未配置时返回 unconfigured）。
+prompt 哈希缓存到 chanapp/.cache/analysis/，LLM 未配置时返回 unconfigured）。
 
 运行：.venv-chan/bin/python -m uvicorn chanapp.api.main:app --host 127.0.0.1 --port 8899
 """
