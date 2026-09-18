@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from chanapp.engine import data as engine_data
-from chanapp.engine import supply
+from chanapp.engine import supply, swr
 
 try:
     from chanapp.engine import display_feed as engine_feed
@@ -92,8 +92,9 @@ def prepare(target: supply.Snapshot, code: str | None, freq: str) -> dict:
         for symbol, period in jobs:
             try:
                 if strict:
-                    with engine_data._refresh_lock_for(symbol, period):
-                        dataset = engine_data._read_cache(symbol, period)
+                    with swr._lock_for(engine_data._work_key(symbol, period)):
+                        current = engine_data._read_dataset(symbol, period)
+                        dataset = current[0] if current and not current[0].get('stale') else None
                         if dataset is None:
                             dataset = engine_data._fetch_and_store(symbol, period)
                     if len(dataset['bars']) < engine_data.N_BARS:

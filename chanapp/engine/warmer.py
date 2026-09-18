@@ -1,5 +1,5 @@
 """交易时段自选股缓存预热：daemon 线程每 60s 唤醒一次，cn/hk 任一在开市时
-遍历 watchlist × (day, m30, m60) 调 get_bars——TTL 内命中仅本地读（~2ms）；
+遍历 watchlist × (day, m30, m60, m15, m5) 调 get_bars——TTL 内命中仅本地读（~2ms）；
 过期 key 由 get_bars 秒回旧数据并触发后台异步刷新（同 key 防踩踏，v1.3.1 起），
 预热职责由后台线程完成，warm_once 本身不再现场等抓取（errors 仅含首冷失败）。
 单条异常记录不中断；切换提交后旧身份当轮立即终止（obsolete）。版本缓存的
@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import threading
@@ -20,17 +21,17 @@ from chanapp.engine import data as engine_data
 from chanapp.engine import supply
 from chanapp.engine.session import is_session_open
 
-try:
+if importlib.util.find_spec("chanapp.engine.cache_store") is not None:
     from chanapp.engine import cache_store
     _Obsolete = cache_store.ObsoletePublication
-except ImportError:
-    # 公开演示不含版本化缓存层：该异常永远不会被抛出，GC 职责随之关闭。
+else:
+    # 公开演示不含版本化缓存层：占位类仅保证类型引用有效，GC 职责随之关闭。
     cache_store = None
     class _Obsolete(Exception):
         pass
 
 _PKG_ROOT = Path(__file__).resolve().parent.parent
-FREQS = ("day", "m30", "m60")
+FREQS = ("day", "m30", "m60", "m15", "m5")
 INTERVAL = 60
 
 _started = False
@@ -50,8 +51,9 @@ def _watchlist_codes() -> list[str]:
 
 def warm_once(now: datetime | None = None,
               get_bars_fn=engine_data.get_bars,
-              codes_fn=_watchlist_codes) -> dict:
-    """交易时段（cn/hk 任一）遍历预热一轮；非时段跳过。"""
+              codes_fn=_watchlist_codes,
+              freqs=FREQS) -> dict:
+    """交易时段（cn/hk 任一）遍历预热一轮；非时段跳过。freqs 供调用方限定周期子集（fetcher 供数策略）。"""
     permit = supply.capture_write_permit()  # 单次捕获，快照与许可同源
     with supply.use(permit.snapshot, permit):
         now = now or datetime.now()
@@ -59,7 +61,7 @@ def warm_once(now: datetime | None = None,
             return {"skipped": True, "ok": 0, "errors": []}
         ok, errors = 0, []
         for code in codes_fn():
-            for freq in FREQS:
+            for freq in freqs:
                 try:
                     get_bars_fn(code, freq)
                     ok += 1

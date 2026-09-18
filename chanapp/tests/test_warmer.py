@@ -1,4 +1,5 @@
 """warmer：交易时段遍历预热、非时段跳过、单条异常不中断、开关与单例。"""
+import importlib.util
 import json
 import os
 import tempfile
@@ -28,9 +29,16 @@ class TestWarmOnce(unittest.TestCase):
     def test_in_session_warms_all(self):
         r = warmer.warm_once(now=datetime(2026, 8, 25, 10, 30), get_bars_fn=self._gb)
         self.assertFalse(r["skipped"])
-        self.assertEqual(r["ok"], 6)  # 2 codes × 3 freqs
-        self.assertEqual(len(self.calls), 6)
+        self.assertEqual(r["ok"], 10)  # 2 codes × 5 freqs
+        self.assertEqual(len(self.calls), 10)
         self.assertIn(("hk00700", "m30"), self.calls)
+
+    def test_freqs_subset(self):
+        """fetcher 供数策略：warm_once 可按 freqs 子集预热（默认全集不变）。"""
+        r = warmer.warm_once(now=datetime(2026, 8, 25, 10, 30), get_bars_fn=self._gb,
+                             freqs=("day", "m30", "m60"))
+        self.assertEqual(r["ok"], 6)  # 2 codes × 3 freqs
+        self.assertEqual({f for _, f in self.calls}, {"day", "m30", "m60"})
 
     def test_round_keeps_snapshot_when_global_scheme_changes(self):
         manager = supply.Manager(Path(self._tmp.name) / 'supply.json')
@@ -44,8 +52,8 @@ class TestWarmOnce(unittest.TestCase):
         with mock.patch.object(supply, '_default_manager', manager):
             result = warmer.warm_once(now=datetime(2026, 8, 25, 10, 30),
                                       get_bars_fn=get_bars)
-            self.assertEqual(result['ok'], 6)
-            self.assertEqual(observed, [supply.Snapshot('baseline', 0)] * 6)
+            self.assertEqual(result['ok'], 10)
+            self.assertEqual(observed, [supply.Snapshot('baseline', 0)] * 10)
             self.assertEqual(supply.current(), supply.Snapshot('primary_candidate', 1))
 
     def test_outside_session_skips(self):
@@ -61,7 +69,7 @@ class TestWarmOnce(unittest.TestCase):
             self.calls.append((code, freq))
 
         r = warmer.warm_once(now=datetime(2026, 8, 25, 10, 30), get_bars_fn=gb)
-        self.assertEqual(r["ok"], 4)
+        self.assertEqual(r["ok"], 8)
         self.assertEqual(len(r["errors"]), 2)
 
     def test_obsolete_round_stops_early(self):
@@ -77,6 +85,13 @@ class TestWarmOnce(unittest.TestCase):
         r = warmer.warm_once(now=datetime(2026, 8, 25, 10, 30), get_bars_fn=gb)
         self.assertTrue(r["obsolete"])
         self.assertEqual(len(self.calls), 1)
+
+    def test_cache_store_binds_real_module(self):
+        """完整树：warmer 的 cache_store 守卫绑定真实模块（不降级）；公开树无此模块时跳过。"""
+        if importlib.util.find_spec("chanapp.engine.cache_store") is None:
+            self.skipTest('versioned cache store is not installed (public demo)')
+        self.assertIsNotNone(warmer.cache_store)
+        self.assertIs(warmer._Obsolete, warmer.cache_store.ObsoletePublication)
 
     def test_cache_retention_runs_at_most_once_a_day(self):
         calls = []

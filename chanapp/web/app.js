@@ -2118,14 +2118,24 @@
     if (document.hidden) return;  // 后台标签不轮询：回前台等下一跳，stale 由后端 SWR 兜底
     renderStatus();  // 交易时段点/分钟级状态保鲜
     if (el('supplyControl').hidden) {
-      syncSupply().then(function () { if (state.code && isSessionOpen(new Date(), marketOf(state.code))) { load({refresh:true}); loadQuotes(); } });
+      syncSupply().then(function () { if (state.code && isSessionOpen(new Date(), marketOf(state.code))) load({refresh:true}); });
       return;
     }
     if (!state.code || supplyBusy) return;
     if (!isSessionOpen(new Date(), marketOf(state.code))) return;
     load({refresh:true});
-    loadQuotes();
   }, 60000);
+
+  setInterval(function () {  // 自选股快照 30s 一轮（QUOTE_TTL=30s，每轮过期回旧+后台必刷，滞后 30–60s）
+    if (document.hidden) return;
+    if (el('supplyControl').hidden) {
+      syncSupply().then(function () { if (state.code && isSessionOpen(new Date(), marketOf(state.code))) loadQuotes(); });
+      return;
+    }
+    if (!state.code || supplyBusy) return;
+    if (!isSessionOpen(new Date(), marketOf(state.code))) return;
+    loadQuotes();
+  }, 30000);
 
   // ---------- 侧边栏（Codex 客户端式：pinned 固定展开 / rail 窄栏；窄栏悬停或聚焦自动浮动展开，移开收回） ----------
 
