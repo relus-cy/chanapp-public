@@ -101,11 +101,12 @@ function mkEl(tag) {
 // ---------- C. 摘要 chip 点击切周期 ----------
 {
   const box = mkEl('div');
-  const calls = [];
+  const calls = [], detailCalls = [];
   const context = {
     el: () => box, document: { createElement: () => mkEl('span') },
     esc: x => String(x), fmtBarTime: x => x, signalLabel: s => 'S2', FREQ_NAME: { day: '日线', m60: '60分', m30: '30分' },
     state: { freq: 'day' }, renderTabs() {}, load() { calls.push('load'); },
+    openDetail: (kind, lv, trigger) => detailCalls.push({ kind, freq: lv.freq, trigger }),
   };
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('  function renderResonance('), source.indexOf('  // ---------- 原生信号标注')), context);
@@ -113,9 +114,25 @@ function mkEl(tag) {
   assert.equal(box.children.length, 3, 'three freq slots');
   const m60 = box.children[1];
   assert.equal(m60.dataset.freq, 'm60', 'chip carries freq');
+  assert.ok(m60.classList.contains('has-signal'), 'signaled chip gets gold-soft class');
+  assert.equal(box.children[0].children.length, 0, 'quiet chip has no detail button');
+  assert.equal(box.children[2].children.length, 0, 'quiet chip has no detail button');
   m60.onclick();
   assert.equal(context.state.freq, 'm60', 'chip click switches freq');
   assert.deepEqual(calls, ['load'], 'chip click reloads');
+  // 尾钮开详情：路由 bs、payload 为该周期共振项、不冒泡切周期
+  const tailBtn = m60.children[0];
+  assert.equal(tailBtn.className, 'res-detail-btn', 'tail detail button class');
+  assert.equal(tailBtn.attrs['aria-label'], '60分信号详情', 'tail button aria-label names the freq');
+  assert.equal(tailBtn.textContent, '›', 'tail button glyph');
+  let stopped = false;
+  tailBtn.onclick({ stopPropagation() { stopped = true; } });
+  assert.ok(stopped, 'tail button stops propagation');
+  assert.equal(calls.length, 1, 'tail button does not reload chart');
+  assert.equal(detailCalls.length, 1, 'tail button routes to openDetail');
+  assert.equal(detailCalls[0].kind, 'bs', 'tail button opens bs detail');
+  assert.equal(detailCalls[0].freq, 'm60', 'bs payload is the freq resonance item');
+  assert.equal(detailCalls[0].trigger, tailBtn, 'bs trigger is the tail button');
   box.children[2].onclick();
   assert.equal(context.state.freq, 'm30');
   box.children[0].onclick();

@@ -205,6 +205,15 @@
   var macdRowsRaw = [];  // 后端 MACD 行（原始 dt 字符串）
   var lastChartData = null;  // 最近一次 /api/chart 响应，主题切换时原路径重渲染
   var loadedTarget = null;   // 当前图表内容归属 {code, freq}，后台刷新据此判定是否保留可视区间
+  var chartEtag = null;  // {code, freq, profile, scope, etag}：最近一次 200 的 /api/chart ETag，60s 自动刷新带 If-None-Match
+  function rememberEtag(code, freq, profile, scope, etag) {
+    chartEtag = etag ? { code: code, freq: freq, profile: profile, scope: scope, etag: etag } : null;
+  }
+  function conditionalHeaders(code, freq, profile, scope) {
+    if (!chartEtag || chartEtag.code !== code || chartEtag.freq !== freq ||
+        chartEtag.profile !== profile || chartEtag.scope !== scope) return {};
+    return { 'If-None-Match': chartEtag.etag };
+  }
   var legendEl = null;
 
   // ---------- UI 骨架 ----------
@@ -264,14 +273,24 @@
     }
 
     var formBox = el('wlForm');
-    if (!formBox.firstChild) {  // 表单只建一次：行情刷新重建会清空输入、夺走焦点
+    /* 表单只建一次：行情刷新重建会清空输入、夺走焦点。rail 版按钮是常驻首子，
+       不能拿 firstChild 判空——按类名在子级里找已建表单 */
+    var hasForm = Array.prototype.some.call(formBox.children, function (c) {
+      return c.classList && c.classList.contains('wl-add');
+    });
+    if (!hasForm) {
       var form = document.createElement('form');
       form.className = 'wl-add';
-      form.innerHTML = '<input name="q" placeholder="代码 / 名称，回车添加" autocomplete="off" required>' +
+      form.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>' +
+        '<input name="q" placeholder="代码 / 名称，回车添加" autocomplete="off" required>' +
         '<div class="wl-drop" hidden></div>';
       wireSearch(form);
       formBox.appendChild(form);
     }
+    var wlCount = el('wlCount');
+    if (wlCount) wlCount.textContent = String(state.watchlist.length).padStart(2, '0');
+    var wlCountRail = el('wlCountRail');
+    if (wlCountRail) wlCountRail.textContent = String(state.watchlist.length).padStart(2, '0');
     updateAiTitle();  // watchlist 晚于首次 load() 返回时修正标题
     if (lastF10 && lastF10.code === state.code) {
       renderF10Header(lastF10.json.f10 || {});  // 同上，修正 F10 卡头
@@ -411,17 +430,21 @@
     return result;
   }
 
-  function loadWatchlist() {
+  function loadWatchlist(options) {
+    var skipLoad = !!(options && options.skipLoad);
     return queueWatchlist(function () {
       return fetch('/api/watchlist')
         .then(function (r) { if (!r.ok) throw new Error('加载失败 ' + r.status); return r.json(); })
         .then(function (items) {
           state.watchlist = items;
+          var corrected = false;
           if (!items.some(function (w) { return w.code === state.code; })) {
             state.code = items.length ? items[0].code : null;
+            corrected = true;
           }
           renderWatchlist();
-          if (state.code) load();
+          // 首屏若 URL 已预选 code，chart 已与本请求并发发出（skipLoad）；只有 code 被纠正时才需重新 load
+          if (state.code && (!skipLoad || corrected)) load();
         });
     })
       .catch(function (e) { setStatus('自选股加载失败：' + e.message); });
@@ -1024,13 +1047,18 @@
       if (!pop.hidden && !wrap.contains(e.target)) setOpen(false);
     });
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && !pop.hidden) { setOpen(false); btn.focus(); }
+      if (e.key === 'Escape' && !pop.hidden) {
+        setOpen(false); btn.focus();
+        e.stopImmediatePropagation();  // 已消费 Esc：下层浮层（aiPop/rulesPop）不再同键连关
+      }
     });
   }
 
   // ---------- 多级别共振角标 ----------
 
   var FREQ_NAME = { day: '日线', m60: '60分', m30: '30分', m15: '15分', m5: '5分' };
+  // 力度算法上游口径的中文名（详情卡多处展示，统一走这一份）
+  var MACD_ALGO_NAME = { peak: 'MACD同向柱峰值', slope: '价格变化斜率' };
 
   function renderResonance(list) {
     var box = el('resonance');
@@ -1054,11 +1082,25 @@
         html = '<span class="' + (lv.zs ? 'zs' : 'lv') + '">' + esc(text) + '</span>';
       }
       var chip = document.createElement('span');
-      chip.className = 'res-chip';
+      chip.className = 'res-chip' + (signals.length ? ' has-signal' : '');
       chip.dataset.freq = freq;
       chip.title = FREQ_NAME[freq] + '：' + details.join(' / ') + '（点击切换周期）';
       chip.innerHTML = '<span class="lv">' + FREQ_NAME[freq] + '</span><span class="res-detail">' + html + '</span>' +
         (forming ? '<span class="res-state">形成中</span>' : '');
+      if (signals.length) {
+        // 尾部详情钮：吃住在 chip 内但点击不冒泡（不触发切周期），开该周期最新信号详情
+        var detailBtn = document.createElement('button');
+        detailBtn.className = 'res-detail-btn';
+        detailBtn.type = 'button';
+        detailBtn.textContent = '›';
+        detailBtn.setAttribute('aria-label', FREQ_NAME[freq] + '信号详情');
+        detailBtn.title = '查看该周期信号详情';
+        detailBtn.onclick = function (ev) {
+          ev.stopPropagation();
+          openDetail('bs', lv, detailBtn);
+        };
+        chip.appendChild(detailBtn);
+      }
       chip.onclick = function () {
         if (state.freq === freq) return;
         state.freq = freq;
@@ -1279,43 +1321,177 @@
       list.map(esc).join('；') + '</div>';
   }
 
-  // 贝叶斯情景卡：先验/证据（支持红、削弱青）/后验徽章/更新观察，旧字段保留；
-  // 新字段缺失（旧格式缓存）时对应行不渲染
+  // 详情副题：标的名 + 行内说明（AI 情景/信号详情共用）
+  function detailSubtitle(extra) {
+    var w = null;
+    state.watchlist.forEach(function (x) { if (x.code === state.code) w = x; });
+    return '<p class="detail-subtitle">' + esc(w ? w.name : state.code) + ' · ' + extra + '<br>' +
+      esc(ruleLabelText()) + '</p>';
+  }
+
+  // 情景详情渲染为覆盖层分块排版：h2 标题 + 副题 + detail-block 逐块；新字段缺失（旧格式缓存）时不渲染
   function renderScenario(s) {
-    return '<div class="card">' +
-      '<div class="head"><span>' + esc(s.name) + '</span>' +
-      posteriorBadge(s.posterior) + '</div>' +
-      kv('先验：', s.prior) +
-      kvList('支持：', s.evidence_for, 'ev-for') +
-      kvList('削弱：', s.evidence_against, 'ev-against') +
-      kv('后验：', s.posterior) +
-      kv('触发：', s.trigger) +
-      kv('边界：', s.boundary) +
-      kv('应对：', s.action) +
-      kv('依据：', s.basis) +
-      kv('更新观察：', s.update_watch) +
+    function block(label, value, cls) {
+      var inner = kv(label, value, cls);
+      return inner ? '<div class="detail-block">' + inner + '</div>' : '';
+    }
+    function blockList(label, items, cls) {
+      var inner = kvList(label, items, cls);
+      return inner ? '<div class="detail-block">' + inner + '</div>' : '';
+    }
+    return '<h2>' + esc(s.name) + ' ' + posteriorBadge(s.posterior) + '</h2>' +
+      detailSubtitle('AI 完全分类') +
+      block('先验：', s.prior) +
+      blockList('支持：', s.evidence_for, 'ev-for') +
+      blockList('削弱：', s.evidence_against, 'ev-against') +
+      block('后验：', s.posterior) +
+      block('触发：', s.trigger) +
+      block('边界：', s.boundary) +
+      block('应对：', s.action) +
+      block('依据：', s.basis) +
+      block('更新观察：', s.update_watch);
+  }
+
+  // 共振 chip 信号详情（lv = 该周期共振项）：label/时间/形成中/识别依据（字段齐全时逐条）+ 中枢信息
+  function renderSignalDetail(lv) {
+    var freq = lv.freq, signals = lv.signals || [];
+    /* signals 按上游枚举序排列（level: bi 在前 seg 在后），不按时间排序：
+       尾钮语义是「该周期最新信号详情」，这里显式按 dt 取最新，不依赖 signals[0] 恰好最新 */
+    var s = null;
+    signals.forEach(function (x) { if (!s || x.dt > s.dt) s = x; });
+    if (!s) {
+      var text = lv.zs ? (lv.zs.inside ? '中枢内 ' : '中枢外 ') + lv.zs.zd + '–' + lv.zs.zg : '暂无点位';
+      return '<h2>' + FREQ_NAME[freq] + '</h2>' + detailSubtitle(FREQ_NAME[freq] + '信号') +
+        '<div class="detail-block"><div class="kv"><b>当前状态：</b>' + esc(text) + '</div></div>';
+    }
+    var forming = s.forming || s.status === 'provisional';
+    var dt = s.detail || {};
+    var lsp = (freq === state.freq) ? (dt.last_sure_pos != null ? dt.last_sure_pos : s.last_sure_pos) : null;
+    var sure = (lsp != null && klineData[lsp]) ? klineData[lsp].time : null;
+    var str = dt.strength || s.strength;
+    var metricName = MACD_ALGO_NAME[s.macd_algo || dt.macd_algo];
+    var feats = dt.features || s.features;
+    var featText = feats ? Object.keys(feats).map(function (k) { return k + '=' + (typeof feats[k] === 'number' ? +feats[k].toFixed(4) : feats[k]); }).join('，') : null;
+    var rel = dt.related_bsp1 || s.related_bsp1;
+    var relText = rel ? fmtBarTime(rel.dt) + ' @ ' + (rel.price != null ? rel.price.toFixed(2) : rel.price) : null;
+    var ctx = dt.context || s.context;
+    var ref = dt.structure_ref || s.structure_ref;
+    var refText = ref ? (ref.level === 'seg' ? '段' : '笔') + ' #' + ref.index : null;
+    var zsText = lv.zs ? (lv.zs.inside ? '中枢内 ' : '中枢外 ') + lv.zs.zd + '–' + lv.zs.zg : null;
+    return '<h2>' + esc(signalLabel(s).replace(' · 形成中', '')) + ' ' +
+      (forming ? '<b class="badge mid">形成中</b>' : '<b class="badge hi">已确认</b>') + '</h2>' +
+      detailSubtitle(FREQ_NAME[freq] + '信号') +
+      '<div class="detail-block"><div class="kv"><b>当前状态：</b>' +
+      esc(s.text || (forming ? '候选点位仍可能随新 K 线移动或消失。' : '已确认信号。')) + '</div></div>' +
+      '<div class="detail-block">' +
+      kv('信号时间：', fmtBarTime(s.dt)) +
+      kv('点位：', s.price != null ? s.price.toFixed(2) : null) +
+      kv('最近确认 K 线：', sure ? fmtBarTime(sure) : null) +
+      kv('力度算法：', metricName || s.macd_algo || dt.macd_algo) +
+      kv('关联一类点：', relText) +
+      kv('结构引用：', refText) +
+      (feats ? kv('特征：', featText) : '') +
+      (ctx && ctx.zs_count != null ? kv('父段中枢数：', String(ctx.zs_count)) : '') +
+      (ctx && ctx.origin === 'zero_center' ? kv('扩展来源：', ctx.origin_source === 'self' ? '自身为无中枢一类点' : '关联无中枢一类点') : '') +
+      '</div>' +
+      (str && str.value != null ? '<div class="detail-block"><h3>力度</h3>' +
+        kv('指标：', MACD_ALGO_NAME[str.metric] || str.metric) +
+        kv('数值：', +str.value.toFixed(4) + '') +
+        kv('状态：', {weaker: '减弱', equal: '持平', stronger: '增强'}[str.state] || str.state) +
+        '</div>' : '') +
+      (zsText ? '<div class="detail-block"><h3>中枢</h3><div class="kv"><b>位置：</b>' + esc(zsText) + '</div></div>' : '');
+  }
+
+  // 依据卡详情：当前卡 evidence 的完整字段
+  function renderEvidenceDetail(c) {
+    if (!c) return '';
+    var forming = c.forming || c.status === 'provisional';
+    var dt = c.detail || {};
+    var rel = dt.related_bsp1;
+    var relText = rel ? fmtBarTime(rel.dt) + ' @ ' + (rel.price != null ? rel.price.toFixed(2) : rel.price) : null;
+    var ctx = dt.context;
+    var ref = dt.structure_ref;
+    var refText = ref ? (ref.level === 'seg' ? '段' : '笔') + ' #' + ref.index : null;
+    var str = dt.strength;
+    var feats = dt.features;
+    var featText = feats ? Object.keys(feats).map(function (k) { return k + '=' + (typeof feats[k] === 'number' ? +feats[k].toFixed(4) : feats[k]); }).join('，') : null;
+    return '<h2>' + esc(signalLabel(c).replace(' · 形成中', '')) + ' ' +
+      (forming ? '<b class="badge mid">形成中</b>' : '<b class="badge hi">已确认</b>') + '</h2>' +
+      detailSubtitle('信号依据卡') +
+      '<div class="detail-block"><h3>当前状态</h3><div class="kv">' + esc(c.text || '') + '</div></div>' +
+      '<div class="detail-block"><h3>时间口径</h3>' +
+      kv('信号时间：', fmtBarTime(c.dt)) +
+      kv('点位：', c.price != null ? c.price.toFixed(2) : null) +
+      kv('力度算法：', MACD_ALGO_NAME[dt.macd_algo] || dt.macd_algo) +
+      kv('最近确认 K 线位置：', dt.last_sure_pos != null ? String(dt.last_sure_pos) : null) +
+      '</div>' +
+      '<div class="detail-block"><h3>结构字段</h3>' +
+      kv('结构引用：', refText) +
+      kv('关联一类点：', relText) +
+      (feats ? kv('特征：', featText) : '') +
+      (ctx && ctx.zs_count != null ? kv('父段中枢数：', String(ctx.zs_count)) : '') +
+      (ctx && ctx.origin === 'zero_center' ? kv('扩展来源：', ctx.origin_source === 'self' ? '自身为无中枢一类点' : '关联无中枢一类点') : '') +
+      (str ? kv('力度：', (str.value != null ? +str.value.toFixed(4) : '不可用') +
+        (str.state && str.state !== 'unavailable' ? '（' + ({weaker: '减弱', equal: '持平', stronger: '增强'}[str.state] || str.state) + '）' : '') +
+        (str.metric ? ' · ' + (MACD_ALGO_NAME[str.metric] || str.metric) : '')) : '') +
       '</div>';
   }
 
-  // 非模态详情保留右栏操作能力；原生 dialog 管理打开状态，关闭后返回触发控件。
-  var aiPopupTrigger = null;
+  // 非模态详情为右栏滑入覆盖层：覆盖右栏期间将下层兄弟设为 inert，关闭后焦点归还触发控件
+  var aiPopupTrigger = null, railSavedScroll = 0, detailKind = null;
+  function openDetail(kind, payload, trigger) {
+    /* 切换/刷新请求期间仍保留旧图表供对照，但不可用新选择解释旧信号。
+       activeChartVersion 只在当前请求成功提交后存在，同时保证位置索引对应已加载 K 线。 */
+    if ((kind === 'card' || kind === 'bs') && (!activeChartVersion ||
+        activeChartVersion.code !== state.code || activeChartVersion.freq !== state.freq)) return;
+    var html;
+    if (kind === 'ai') html = renderScenario(payload);
+    else if (kind === 'card') html = renderEvidenceDetail(payload);
+    else if (kind === 'bs') html = renderSignalDetail(payload);
+    else return;
+    if (!html) return;  // 渲染落空（如 payload 缺失）不开空覆盖层
+    el('aiPopBody').innerHTML = html;
+    detailKind = kind;
+    aiPopupTrigger = trigger || document.activeElement;
+    var pop = el('aiPop');
+    railSavedScroll = el('railScroll').scrollTop;
+    pop.scrollTop = 0;
+    pop.classList.add('open');
+    pop.setAttribute('aria-hidden', 'false');
+    pop.inert = false;
+    for (var i = 0; i < pop.parentElement.children.length; i++) {
+      var sib = pop.parentElement.children[i];
+      if (sib !== pop) sib.inert = true;
+    }
+    el('aiPopBack').focus({preventScroll: true});
+    /* ≤760px 时 main 是滚动容器、覆盖层随 #rail 流式排布，inset:0 只贴 rail 顶部：
+       从 rail 底部打开会把覆盖层留在视口外，scrollIntoView 把它的顶边滚进视野
+       （focus 仍 preventScroll，由这一行统一决定去向，桌面端 rail 固定不占滚动）。 */
+    if (window.matchMedia('(max-width: 760px)').matches) pop.scrollIntoView({ block: 'start' });
+  }
+  function closeDetail() {
+    var pop = el('aiPop');
+    if (!pop.classList.contains('open')) return;  // 幂等兜底调用不触碰滚动/inert
+    var restore = pop.contains(document.activeElement);
+    pop.classList.remove('open');
+    pop.setAttribute('aria-hidden', 'true');
+    for (var i = 0; i < pop.parentElement.children.length; i++) {
+      var sib = pop.parentElement.children[i];
+      sib.inert = (sib === pop);
+    }
+    if (restore && aiPopupTrigger && aiPopupTrigger.isConnected) aiPopupTrigger.focus({preventScroll: true});
+    // 焦点归还仍可能触发滚动对齐，滚动恢复放在其后覆盖
+    el('railScroll').scrollTop = railSavedScroll;
+    aiPopupTrigger = null;
+    detailKind = null;
+  }
   function openAiPopup(i, trigger) {
     var s = aiScenarios[i];
     if (!s) return;
-    el('aiPopBody').innerHTML = renderScenario(s);
-    aiPopupTrigger = trigger || document.activeElement;
-    el('aiPop').hidden = false;
-    var dialog = el('aiPopDialog');
-    if (!dialog.open) dialog.show();
-    el('aiPopClose').focus({preventScroll: true});
+    openDetail('ai', s, trigger);
   }
   function closeAiPopup() {
-    var dialog = el('aiPopDialog');
-    var restore = dialog.contains(document.activeElement);
-    if (dialog.open) dialog.close();
-    el('aiPop').hidden = true;
-    if (restore && aiPopupTrigger && aiPopupTrigger.isConnected) aiPopupTrigger.focus({preventScroll: true});
-    aiPopupTrigger = null;
+    closeDetail();
   }
 
   var pendingAnalysis = null, activeChartVersion = null;
@@ -1813,6 +1989,9 @@
   }
 
   function load(options) {
+    // 供数准备可能推迟请求，但选择已经变更；旧图表详情须在早退前收回。
+    // 联合 AI 的身份不含当前周期，仍由其原生命周期管理。
+    if (detailKind === 'card' || detailKind === 'bs') closeDetail();
     if (supplyBusy || !state.code) return;
     var generation = supplyState.generation, epoch = supplyState.epoch, profile = state.ruleProfile, scope = state.signalScope;
     activeChartVersion = null;
@@ -1836,13 +2015,24 @@
     var timer = setTimeout(function () {
       ctl.abort(new Error('加载超时（25s）'));
     }, CHART_TIMEOUT_MS);
-    fetch('/api/chart?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq + '&rule_profile=' + encodeURIComponent(profile) + '&signal_scope=' + encodeURIComponent(scope), { signal: ctl.signal })
+    fetch('/api/chart?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq + '&rule_profile=' + encodeURIComponent(profile) + '&signal_scope=' + encodeURIComponent(scope),
+          { signal: ctl.signal, headers: conditionalHeaders(state.code, state.freq, profile, scope) })
       .then(function (r) {
+        if (r.status === 304) return null;  // 内容未变：保留现有图表，只清状态
         if (!r.ok) return r.json().then(function (j) { throw new Error(j.detail || r.status); });
+        if (ctl === chartAbort) rememberEtag(state.code, state.freq, profile, scope, r.headers.get('ETag'));
         return r.json();
       })
       .then(function (data) {
         if (ctl !== chartAbort) return;
+        if (data === null) {
+          el('center').classList.remove('supply-loading');
+          el('center').classList.remove('ctx-old');
+          el('rail').classList.remove('ctx-old');
+          renderStatus();
+          setStatus('');
+          return;
+        }
         if (!acceptsRule(data, profile, scope)) {  // 规则身份不匹配：显式报错并解除遮罩，不静默停在加载态
           el('center').classList.remove('supply-loading');
           setStatus('加载失败');
@@ -1891,7 +2081,7 @@
     if (chartAbort) chartAbort.abort();
     chartAbort = null;
     pendingAnalysis = null; activeChartVersion = null; analysisIdentity = null;
-    loadedTarget = null; supplyRange = null; lastMeta = null; lastF10 = null;
+    loadedTarget = null; supplyRange = null; lastMeta = null; lastF10 = null; chartEtag = null;
     f10Last = {code: null, ts: 0};
     if (charts) renderChart({kline: [], macd: {rows: []}, structure: {bi: [], xd: [], zs: []},
       channels: [], signals: [], resonance: []}, {resetRange: false});
@@ -1925,6 +2115,7 @@
   }
 
   setInterval(function () {
+    if (document.hidden) return;  // 后台标签不轮询：回前台等下一跳，stale 由后端 SWR 兜底
     renderStatus();  // 交易时段点/分钟级状态保鲜
     if (el('supplyControl').hidden) {
       syncSupply().then(function () { if (state.code && isSessionOpen(new Date(), marketOf(state.code))) { load({refresh:true}); loadQuotes(); } });
@@ -2035,7 +2226,7 @@
       if (ev.key === '[' && !/^(INPUT|TEXTAREA|SELECT)$/.test(tag) && !(ev.target && ev.target.isContentEditable)) {
         toggleSidebar();
       }
-      if (ev.key === 'Escape' && sbMode() === 'open') setSidebar('rail');
+      if (ev.key === 'Escape' && sbMode() === 'open') { setSidebar('rail'); ev.stopImmediatePropagation(); }
     });
     /* 浮动展开时点外部收回窄栏；固定展开不自动收回 */
     document.addEventListener('mousedown', function (ev) {
@@ -2043,6 +2234,24 @@
       if (ev.target.closest && (ev.target.closest('#sidebar') || ev.target.closest('#sidebarExpand'))) return;
       setSidebar('rail');
     });
+    /* 窄栏空档填充钮：展开浮动层并把焦点交给搜索输入框（focusin 会冒泡，迁移期间抑制重开判断） */
+    el('wlRailBtn').addEventListener('click', function () {
+      suppressHover = false;
+      setSidebar('open');
+      var input = el('wlForm').querySelector('input');
+      if (input) { focusMute = true; input.focus({preventScroll: true}); focusMute = false; }
+    });
+    /* 标签页切换/窗口失焦不派发鼠标事件，悬停展开态会悬置：显式收回窄栏并复位悬停抑制，
+       指针仍在栏上时回来移动鼠标即可再次展开（新交互回合） */
+    function reclaimHoverOpen() {
+      if (sbMode() !== 'open') return;
+      setSidebar('rail');
+      suppressHover = false;
+    }
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) reclaimHoverOpen();
+    });
+    window.addEventListener('blur', reclaimHoverOpen);
   }
 
   // ---------- 初始化 ----------
@@ -2071,6 +2280,15 @@
     Array.prototype.forEach.call(el('signalScope').querySelectorAll('button'), function (b) {
       b.classList.toggle('active', b.dataset.scope === state.signalScope);
     });
+    /* res-bar 只留一行只读摘要，两组 seg 收进「图层与规则」浮层；
+       摘要随 seg 同函数刷新，任何 state 变更路径（含绕过 click 的）都不会脱节 */
+    el('ruleSummary').textContent = ruleLabelText();
+  }
+  /* 成笔标准/提示范围的展示文案只有这一份映射：res-bar 摘要与详情副题共用 */
+  function ruleLabelText() {
+    var profile = state.ruleProfile === 'relaxed' ? '宽松' : '严格';
+    var scope = state.signalScope === 'standard' ? '标准' : '扩展';
+    return profile + '成笔 · ' + scope + '提示';
   }
   syncRuleControl();
   el('ruleProfile').addEventListener('click', function (e) {
@@ -2110,6 +2328,7 @@
   function wireCardsNav() {
     el('cardsPrev').onclick = function () { showEvidence(evidenceIdx - 1); };
     el('cardsNext').onclick = function () { showEvidence(evidenceIdx + 1); };
+    el('evidenceBtn').onclick = function () { openDetail('card', evidenceList[evidenceIdx], this); };
     el('cardsDock').addEventListener('keydown', function (ev) {
       if (ev.key === 'ArrowLeft') { ev.preventDefault(); showEvidence(evidenceIdx - 1); }
       else if (ev.key === 'ArrowRight') { ev.preventDefault(); showEvidence(evidenceIdx + 1); }
@@ -2119,7 +2338,7 @@
   wireSubSeg();
   wireCardsNav();
 
-  // AI 完全分类标题行：点击（或聚焦后 Enter/Space）弹玻璃浮层看全文；遮罩/×/Esc 关闭
+  // AI 完全分类标题行：点击（或聚焦后 Enter/Space）在右栏滑出详情层看全文；返回钮/Esc 关闭
   function wireAiPopup() {
     el('aiPanel').addEventListener('click', function (ev) {
       var row = ev.target.closest('.ai-row');
@@ -2133,22 +2352,67 @@
       openAiPopup(+row.dataset.i, row);
     });
     var aiPop = el('aiPop');
-    /* 非模态：弹层罩布不拦指针，点弹层外关闭但不吞这次点击（依据卡等下层控件照常响应） */
-    document.addEventListener('mousedown', function (ev) {
-      if (aiPop.hidden) return;
-      if (ev.target.closest && ev.target.closest('#aiPop .sheet')) return;
-      closeAiPopup();
-    });
-    el('aiPopClose').onclick = closeAiPopup;
+    el('aiPopBack').onclick = closeAiPopup;
     document.addEventListener('keydown', function (ev) {
-      if (ev.key === 'Escape' && !aiPop.hidden) closeAiPopup();
+      if (ev.key === 'Escape' && aiPop.classList.contains('open')) {
+        closeAiPopup();
+        ev.stopImmediatePropagation();  // 上层先消费 Esc：rulesPop 等下层浮层不同键连关
+      }
     });
   }
   wireAiPopup();
+
+  // 「图层与规则」浮层：摘要与软边框按钮同为入口，Esc/外点关闭，关闭后焦点归还按钮
+  function wireRulesPopover() {
+    var pop = el('rulesPop'), btn = el('rulesBtn'), summary = el('ruleSummary');
+    function setOpen(open, refocus) {
+      var restore = pop.contains(document.activeElement);
+      pop.classList.toggle('open', open);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      summary.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (!open && refocus && restore) btn.focus({ preventScroll: true });
+    }
+    function toggle() {
+      var open = !pop.classList.contains('open');
+      setOpen(open);
+      if (open) pop.querySelector('button').focus({ preventScroll: true });
+    }
+    btn.addEventListener('click', toggle);
+    summary.addEventListener('click', toggle);
+    summary.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      ev.preventDefault();
+      toggle();
+    });
+    /* 非模态：点浮层以外关闭，不吞这次点击（图表、共振条等下层控件照常响应）。
+       焦点归还延后一拍：图表库自身的 mousedown 处理器与浏览器默认焦点迁移都在本
+       处理之后执行；落点没交给别的控件（body/空/刚隐藏的浮层内）时交还按钮。 */
+    document.addEventListener('mousedown', function (ev) {
+      if (!pop.classList.contains('open')) return;
+      var t = ev.target;
+      if (t.closest && (t.closest('#rulesPop') || t.closest('#rulesBtn') || t.closest('#ruleSummary'))) return;
+      setOpen(false);
+      setTimeout(function () {
+        var a = document.activeElement;
+        if (!a || a === document.body || pop.contains(a)) btn.focus({ preventScroll: true });
+      }, 0);
+    });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Escape' || !pop.classList.contains('open')) return;
+      if (el('aiPop').classList.contains('open') || !el('subSegPop').hidden) return;  // 上层浮层先消费 Esc（其 handler 已 stopImmediatePropagation，此处仅兜底）
+      setOpen(false, true);
+    });
+  }
+  wireRulesPopover();
 
   renderTabs();
   renderStatus();
   el('supplySelect').onchange = renderSupply;
   el('supplySwitch').onclick = switchSupply;
-  initSupply().then(function () { loadWatchlist(); loadQuotes(); });
+  initSupply().then(function () {
+    var preselected = !!state.code;
+    if (preselected) load();  // URL ?code= 已给：chart 与 watchlist 并发，省一跳串行
+    loadWatchlist({ skipLoad: preselected });
+    loadQuotes();
+  });
 })();

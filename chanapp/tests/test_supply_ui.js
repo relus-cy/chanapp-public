@@ -143,10 +143,10 @@ function makeAnalysisLoaderHarness() {
   const nodes = {}, pending = [], shown = [], chartShown = [];
   const context = {
     state:{code:'a',freq:'day',ruleProfile:'strict',signalScope:'expanded'}, supplyState:{generation:2}, supplyBusy:false, supplyRange:null,
-    chartAbort:null, charts:null, loadedTarget:null, AbortController,
+    chartAbort:null, charts:null, loadedTarget:null, detailKind:null, AbortController,
     CHART_TIMEOUT_MS:25000, ANALYSIS_TIMEOUT_MS:35000,
     setTimeout:() => 1, clearTimeout(){},
-    fetch:(url) => new Promise((resolve, reject) => pending.push({url,resolve,reject})),
+    fetch:(url) => new Promise((resolve, reject) => pending.push({url,resolve:body => resolve({headers:{get:()=>null}, ...body}),reject})),
     el:id => nodes[id] || (nodes[id] = {classList:{add(){},remove(){}}}),
     renderAnalysis:(body,note) => shown.push({body,note}), renderChart:body => chartShown.push(body),
     ensureCharts(){}, updateAiTitle(){}, setStatus(){}, hideChartError(){}, loadF10(){}, closeAiPopup(){},
@@ -157,6 +157,8 @@ function makeAnalysisLoaderHarness() {
   vm.runInContext(source.slice(source.indexOf('  var pendingAnalysis ='),
     source.indexOf('  // ---------- 数据口径条')), context);
   vm.runInContext(source.slice(source.indexOf('  function refreshRangePlan('), source.indexOf('  // 图表渲染主路径')), context);
+  vm.runInContext(source.slice(source.indexOf('  var chartEtag = null;'),
+    source.indexOf('  // ---------- UI 骨架 ----------')), context);
   vm.runInContext(source.slice(source.indexOf('  function load('),
     source.indexOf('  // ---------- 交易时段自动刷新')), context);
   return {context,pending,shown,chartShown};

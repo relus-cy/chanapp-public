@@ -4,6 +4,7 @@ GET /api/chart?code=sh000001&freq=day|m30|m60&rule_profile=strict|relaxed&signal
 返回 {kline, macd{rows}, structure{bi,xd,zs,zs_xd,forming}, signals,
       rule_profile, calculation_id, evidence, channels, resonance, meta{source, fqf,
       fetch_time, degraded, degraded_note, from_cache, stale, stale_age_s, bars}}
+响应带强 ETag（整包哈希）与 Cache-Control: no-cache；If-None-Match 命中回 304 空体。
 meta.stale：K 线缓存已过 TTL 但本次回的是旧数据（stale-while-revalidate，后台异步
 刷新中），stale_age_s 为距缓存写入的秒数；新鲜数据 stale=False 且无 stale_age_s。
 resonance：多周期摘要（日/60/30 分别列出最新笔/段点位、状态及中枢），
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
+import hashlib
 import json
 import logging
 import os
@@ -41,8 +43,8 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -100,7 +102,7 @@ async def lifespan(app: FastAPI):
             supply_state.stop_runtime()
 
 
-app = FastAPI(title="chanapp", version="1.6.5", docs_url=None, redoc_url=None, lifespan=lifespan)
+app = FastAPI(title="chanapp", version="1.7.1", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -128,7 +130,8 @@ app.include_router(supply_api.router)
 
 
 @app.get("/api/chart")
-def api_chart(code: str = Query(..., min_length=2),
+def api_chart(request: Request,
+              code: str = Query(..., min_length=2),
               freq: str = Query("day", pattern="^(day|m30|m60|m15|m5)$"),
               rule_profile: Annotated[Literal["strict", "relaxed"], Query()] = "strict",
               signal_scope: Annotated[Literal["standard", "expanded"], Query()] = "expanded"):
@@ -146,11 +149,17 @@ def api_chart(code: str = Query(..., min_length=2),
     except Exception as e:
         log.exception("chart calculation failed code=%s freq=%s profile=%s", code, freq, rule_profile)
         raise HTTPException(status_code=502, detail="结构计算暂不可用") from e
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    etag = '"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:32] + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
     t_end = time.monotonic()
-    log.info("[timing] chart code=%s freq=%s bars=%dms compute=%dms resonance=%dms total=%dms",
+    hit = request.headers.get("if-none-match") == etag
+    log.info("[timing] chart code=%s freq=%s bars=%dms compute=%dms resonance=%dms total=%dms etag=%s",
              code, freq, int((t_bars - t0) * 1000), timings["compute_ms"],
-             timings["resonance_ms"], int((t_end - t0) * 1000))
-    return payload
+             timings["resonance_ms"], int((t_end - t0) * 1000), "304" if hit else "200")
+    if hit:
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 # ---------- 联想搜索（自选股添加） ----------

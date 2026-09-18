@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 
 from chanapp.engine import channels as engine_channels
 from chanapp.engine import compute_cache as engine_compute_cache
@@ -60,18 +59,14 @@ def _level_summary(code: str, freq: str,
 
 
 def _resonance(code: str, get_bars_fn: Callable | None = None, rule_profile: str = "strict", signal_scope: str = "expanded") -> list[dict]:
-    """三级别并行摘要（pool.map 保序）；单级失败返回 None → 该级缺省，不拖垮主响应。"""
+    """三级别摘要顺序执行（v1.3.1 后三级 get_bars 均为本地读，线程池在 GIL 下无收益）；
+    单级失败返回 None → 该级缺省，不拖垮主响应。"""
     snapshot = supply.current()
     permit = supply.capture_write_permit()
-
-    def summarize(freq):
-        with supply.use(snapshot, permit):
-            return _level_summary(code, freq, get_bars_fn, rule_profile, signal_scope)
-
-    with ThreadPoolExecutor(max_workers=len(RESONANCE_FREQS),
-                            thread_name_prefix="resonance") as pool:
-        summaries = list(pool.map(summarize,
-                                  RESONANCE_FREQS))
+    summaries = []
+    with supply.use(snapshot, permit):
+        for freq in RESONANCE_FREQS:
+            summaries.append(_level_summary(code, freq, get_bars_fn, rule_profile, signal_scope))
     return [s for s in summaries if s is not None]
 
 
@@ -159,3 +154,23 @@ def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
         "resonance": resonance,
         "meta": meta,
     }
+
+
+def warm_compute(code: str, freq: str, dataset: dict) -> None:
+    """后台刷新落盘后预热默认 profile 的结构计算缓存，让下一次 /api/chart 直接命中。
+    只算 strict/expanded（默认口径）；其他 profile 仍按需现算。"""
+    identity = profile_identity("strict", "expanded")
+    bars = dataset["bars"]
+    if not bars:
+        return
+    data_version = engine_compute_cache.dataset_version(dataset)
+    if engine_compute_cache.get(code, freq, data_version, identity["calculation_id"]) is not None:
+        return
+    structure = engine_structure.compute_structure(bars, code, freq, rule_profile="strict", signal_scope="expanded")
+    sig = engine_signals.compute_signals(bars, structure)
+    evidence = engine_evidence.build_evidence(sig["signals"], structure)
+    engine_compute_cache.put(code, freq, data_version, structure, sig, evidence,
+                             calculation_id=identity["calculation_id"])
+
+
+engine_data.on_refreshed = warm_compute

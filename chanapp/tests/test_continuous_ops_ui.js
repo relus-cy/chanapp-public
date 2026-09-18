@@ -205,9 +205,9 @@ function mkEl(tag) {
     const context = {
       state: { code: 'a', freq: 'day', ruleProfile: 'strict', signalScope: 'expanded' },
       supplyState: { generation: 1, epoch: 'e' }, supplyBusy: false, supplyRange: null,
-      chartAbort: null, AbortController, activeChartVersion: null,
+      chartAbort: null, AbortController, activeChartVersion: null, detailKind: null,
       CHART_TIMEOUT_MS: 25000, setTimeout: () => 1, clearTimeout() {},
-      fetch: url => new Promise(resolve => pending.push({ url, resolve })),
+      fetch: url => new Promise(resolve => pending.push({ url, resolve: body => resolve({ headers: { get: () => null }, ...body }) })),
       el: id => nodes[id] || (nodes[id] = { classList: { add() {}, remove() {} } }),
       charts: {
         main: { timeScale: () => ({ getVisibleLogicalRange: () => lr, setVisibleLogicalRange: r => calls.ranges.push(r) }) },
@@ -221,6 +221,7 @@ function mkEl(tag) {
     };
     vm.createContext(context);
     vm.runInContext(source.slice(source.indexOf('  function refreshRangePlan('), source.indexOf('  // 图表渲染主路径')), context);
+    vm.runInContext(source.slice(source.indexOf('  var chartEtag = null;'), source.indexOf('  // ---------- UI 骨架 ----------')), context);
     vm.runInContext(source.slice(source.indexOf('  function load('), source.indexOf('  // ---------- 交易时段自动刷新')), context);
     return { context, pending, calls, nodes, setRange(range) { lr = range; }, bars };
   }

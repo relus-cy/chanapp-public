@@ -1,0 +1,12 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const source = fs.readFileSync(path.join(__dirname, '../web/app.js'), 'utf8');
+const start = source.indexOf('  setInterval(function () {');
+const end = source.indexOf('}, 60000);', start);
+assert.ok(start > 0 && end > start, '须存在 60s setInterval');
+const body = source.slice(start, end);
+const firstStmt = body.split('\n')[1].trim();
+assert.equal(firstStmt, 'if (document.hidden) return;  // 后台标签不轮询：回前台等下一跳，stale 由后端 SWR 兜底', '轮询首行须先判 document.hidden');
+console.log('poll visibility UI checks passed');

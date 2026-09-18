@@ -83,28 +83,26 @@ class TestResonance(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual([x["freq"] for x in r.json()["resonance"]], ["day"])
 
-    def test_levels_run_in_parallel(self):
-        """三级别并行取数：并发峰值 ≥2（串行实现下恒为 1）。计时无关，防 flaky。"""
-        import threading
-        import time
-        cur = peak = 0
-        lk = threading.Lock()
+    def test_resonance_runs_sequentially_without_thread_pool(self):
+        """SWR 后三级 get_bars 均为本地读，_resonance 顺序执行，不再创建线程池。"""
+        from chanapp.engine import chart_payload
+        with mock.patch("chanapp.engine.chart_payload.ThreadPoolExecutor", create=True) as pool:
+            res = chart_payload._resonance("sh000001", get_bars_fn=fake_dataset)
+        pool.assert_not_called()
+        self.assertEqual([x["freq"] for x in res], ["day", "m60", "m30"])
 
-        def timed(code, freq="day"):
-            nonlocal cur, peak
-            with lk:
-                cur += 1
-                peak = max(peak, cur)
-            time.sleep(0.2)
-            with lk:
-                cur -= 1
-            return fake_dataset(code, freq)
-
-        with mock.patch("chanapp.api.main.engine_data.get_bars",
-                        side_effect=timed):
-            r = self.c.get("/api/chart?code=sh000001&freq=day")
-        self.assertEqual(r.status_code, 200)
-        self.assertGreaterEqual(peak, 2)
+    def test_warm_compute_fills_compute_cache(self):
+        """data.on_refreshed → chart_payload.warm_compute：默认 profile 的结构计算进 compute_cache。"""
+        from chanapp.engine import chart_payload, compute_cache, data as engine_data
+        from chanapp.engine.chanpy_profiles import profile_identity
+        compute_cache.clear()
+        self.addCleanup(compute_cache.clear)
+        dataset = fake_dataset("sh000001", "day")
+        self.assertIs(engine_data.on_refreshed, chart_payload.warm_compute)
+        chart_payload.warm_compute("sh000001", "day", dataset)
+        version = compute_cache.dataset_version(dataset)
+        cid = profile_identity("strict", "expanded")["calculation_id"]
+        self.assertIsNotNone(compute_cache.get("sh000001", "day", version, cid))
 
 
 if __name__ == "__main__":

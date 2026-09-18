@@ -27,14 +27,16 @@ function mkContext(savedVal, narrow) {
   const pin = { classList: mkClassList(), setAttribute() {}, addEventListener(ev, fn) { listeners['pin:' + ev] = fn; },
     focus() { if (listeners['sidebar:focusin']) listeners['sidebar:focusin']({}); } };
   const sidebar = { addEventListener(ev, fn) { listeners['sidebar:' + ev] = fn; },
-    contains(node) { return !!(node && node.inSidebar); }, matches() { return false; },
+    contains(node) { return !!(node && node.inSidebar); }, matches() { return !!sidebar._hover; }, _hover: false,
     querySelectorAll(sel) { return sel === '.item' ? items : []; } };
-  const nodes = { sidebarPin: pin, sidebar, sidebarExpand: { addEventListener() {}, focus() {} } };
+  const nodes = { sidebarPin: pin, sidebar, sidebarExpand: { addEventListener() {}, focus() {} },
+    wlRailBtn: { addEventListener(ev, fn) { listeners['railbtn:' + ev] = fn; } },
+    wlForm: { querySelector() { return { focus() {} }; } } };
   const context = {
-    document: { body, activeElement: null, addEventListener(ev, fn) { listeners['doc:' + ev] = fn; } },
+    document: { body, activeElement: null, hidden: false, addEventListener(ev, fn) { listeners['doc:' + ev] = fn; } },
     el: id => nodes[id],
     localStorage: { getItem: k => saved[k] || null, setItem: (k, v) => { saved[k] = v; } },
-    window: { matchMedia: () => ({ matches: !!narrow }) },
+    window: { matchMedia: () => ({ matches: !!narrow }), addEventListener(ev, fn) { listeners['win:' + ev] = fn; } },
     setTimeout, clearTimeout,
     _listeners: listeners, _saved: saved, _items: items,
   };
@@ -109,6 +111,41 @@ console.log('B. sidebar restore checks passed');
   console.log('D. sidebar focus-migration regression checks passed');
 }
 
+// ---------- G. 回归：标签页切换/窗口失焦收回悬停展开态，且不卡死再次悬停 ----------
+{
+  const ctx = mkContext('rail', false);
+  ctx.initSidebar();
+  const b = ctx.document.body.classList, L = ctx._listeners;
+  L['sidebar:mousemove']();
+  assert.equal(b.contains('sb-open'), true, '窄栏悬停 → 浮动展开');
+  ctx.el('sidebar')._hover = true;  /* 指针仍停在栏上：切标签页没有 mouseleave，收回会读到 :hover 并置 suppressHover */
+  ctx.document.hidden = true;
+  L['doc:visibilitychange']();
+  assert.equal(b.contains('sb-rail'), true, '标签页切走（document.hidden）悬停展开收回窄栏');
+  assert.equal(b.contains('sb-open'), false);
+  assert.equal(ctx.suppressHover, false, '收回后 suppressHover 显式复位（新交互回合）');
+  L['sidebar:mousemove']();
+  assert.equal(b.contains('sb-open'), true, '回来后指针移动即可再次悬停展开，未被卡死');
+  /* window blur 同路收回 */
+  L['win:blur']();
+  assert.equal(b.contains('sb-rail'), true, '窗口失焦同样收回悬停展开');
+  assert.equal(ctx.suppressHover, false, 'blur 收回同样复位 suppressHover');
+  /* pinned 态不受 visibilitychange / blur 影响 */
+  ctx.setSidebar('pinned');
+  L['doc:visibilitychange']();
+  L['win:blur']();
+  assert.equal(!b.contains('sb-rail') && !b.contains('sb-open'), true, '固定展开不受切标签页/失焦影响');
+  /* visible 回来（hidden=false）不触发收回 */
+  ctx.setSidebar('rail');
+  ctx.suppressHover = false;
+  L['sidebar:mousemove']();
+  assert.equal(b.contains('sb-open'), true);
+  ctx.document.hidden = false;
+  L['doc:visibilitychange']();
+  assert.equal(b.contains('sb-open'), true, '回前台（visible）不收回');
+  console.log('G. visibilitychange/blur reclaim checks passed');
+}
+
 // ---------- C. 结构：侧栏通高分组、供数收底、单图钉钮、行内 SVG 图标 ----------
 {
   assert.match(html, /<aside id="sidebar">/, 'watchlist becomes a full-height sidebar');
@@ -134,13 +171,13 @@ console.log('B. sidebar restore checks passed');
 // CSS 不变量：两态等高、文字交错淡入、图钉窄栏大/展开小并随形态过渡
 {
   assert.match(html, /body\.sb-rail \.wl-head \{ visibility: hidden; \}/, 'wl-head 占位隐藏而非 display:none');
-  assert.doesNotMatch(html, /sb-rail #sidebar \.sb-group \{ padding: 2px 0/, '窄栏不再收窄分组内边距');
-  assert.match(html, /sb-rail #sidebar \.item \.row > span:first-child \{[^}]*line-height: calc\(1\.6 \* 13px\)/,
-    '窄栏名称行高对齐展开 row1（13×1.6）');
-  assert.match(html, /sb-rail #sidebar \.item \.chg \{[^}]*line-height: calc\(1\.6 \* 12px\); margin-top: 1px/,
-    '窄栏涨幅行高对齐展开 row2（12×1.6 + 1px 间距）');
-  assert.match(html, /#sidebar \.item \.row \{[^}]*height: calc\(1\.6 \* 13px\)/, '展开 row1 固定行高（基线/按钮不再撑行）');
-  assert.match(html, /#sidebar \.item \.row2 \{[^}]*height: calc\(1\.6 \* 12px\)/, '展开 row2 固定行高');
+  assert.match(html, /sb-rail #sidebar \.sb-group \{ padding: 0 5px; \}/, '窄栏分组左右 5px、上下 0（沿用皮肤 watchlist 配平）');
+  assert.match(html, /sb-rail #sidebar \.item \.row > span:first-child \{[^}]*text-align: center; text-overflow: clip/,
+    '窄栏名称居中硬截断（13px/1.55 与展开态同一口径）');
+  assert.match(html, /sb-rail #sidebar \.item \.chg \{[^}]*height: 13px; line-height: 13px; text-align: center; margin-top: 6px/,
+    '窄栏涨幅行盒顶替被隐藏的 row2（height 固定：空报价时行高不塌，守 rail/open 逐行等高）');
+  assert.match(html, /#sidebar \.item \.row \{[^}]*height: calc\(1\.55 \* 13px\)/, '展开 row1 固定行高（基线/按钮不再撑行）');
+  assert.match(html, /#sidebar \.item \.row2 \{[^}]*font: 10px\/13px var\(--mono\)[^}]*height: 13px/, '展开 row2 固定行高');
   assert.match(html, /body\.sb-rail #sidebar \.item \.row \{[^}]*height: auto/, '窄栏行高由两行堆叠行高之和决定');
   assert.match(html, /@keyframes sbTextIn/, '文字淡入关键帧存在');
   assert.match(html, /body\.sb-anim-in #sidebar \.item \.row2 \{ animation: sbTextIn \.26s cubic-bezier\(\.16, 1, \.3, 1\) \.09s both; \}/,
@@ -148,6 +185,36 @@ console.log('B. sidebar restore checks passed');
   assert.match(html, /#sidebarPin svg \{ width: 17px; height: 17px;/, '展开态图钉 17px');
   assert.match(html, /body\.sb-rail #sidebarPin svg \{ width: 22px; height: 22px; \}/, '窄栏图钉 22px');
   console.log('E2. geometry invariants and animation CSS checks passed');
+}
+// 皮肤卡片化（Phase B）：卡片参数、选中态投影（金条已删）、钮透明度方案、计数/搜索框/品牌块
+{
+  assert.match(html, /#sidebar \.item \{\s*padding: 12px 11px; margin-bottom: 3px; border-radius: var\(--radius-m\)/,
+    '卡片化参数（12px 纵向 padding + 3px 底距 + 8px 圆角）');
+  assert.match(html, /#sidebar \.item\.active \{ background: var\(--panel\); box-shadow: 0 1px 3px rgba\(0,0,0,\.035\); \}/,
+    '选中态 panel 底 + 轻投影（无金条）');
+  assert.doesNotMatch(html, /inset 3px 0 0 var\(--gold\)/, '选中金条已全部移除');
+  assert.match(html, /:root\[data-theme="dark"\] #sidebar \.item\.active \{ box-shadow: 0 1px 3px rgba\(0,0,0,\.32\); \}/,
+    '暗色主题选中态换暗色投影');
+  assert.match(html, /#sidebar \.item \.del, #sidebar \.item \.star \{[^}]*opacity: 0; pointer-events: none/,
+    '星/删钮默认透明度隐身且不接收指针');
+  assert.match(html, /#sidebar \.item\.active \.del, #sidebar \.item\.active \.star \{ opacity: 1; pointer-events: auto; \}/,
+    '选中态星/删钮显现');
+  assert.match(html, /@media \(hover: none\) \{ #sidebar \.item \.del, #sidebar \.item \.star \{ opacity: 1; pointer-events: auto; \} \}/,
+    '触屏星/删钮常显');
+  assert.match(html, /class="wl-count" id="wlCount"/, '「自选股 NN」计数元素存在');
+  assert.match(html, /#sidebar \.wl-add \{\s*margin: 10px 12px 18px; display: flex; align-items: center; gap: 8px/,
+    '搜索/添加框皮肤化（margin/flex/gap）');
+  assert.match(html, /id="wlForm"><button id="wlRailBtn"[\s\S]*?<\/button><\/div>\s*<div class="wl-head">/, '搜索框槽位含 rail 版按钮，位于标签行与列表之上（皮肤顺序）');
+  assert.match(html, /class="brand-mark">/, '品牌块金色软底 mark 存在');
+  assert.match(html, /class="brand-caption">缠论结构 · 投研工作台</, '品牌副题文案');
+  assert.doesNotMatch(html, /padding: 4px; visibility: hidden/, '星/删钮不再用 visibility 方案');
+  /* rail 空档填充：占位槽内 rail 版内容 absolute 出流、互斥显隐，总高两态不变 */
+  assert.match(html, /\.wl-count-rail, #wlRailBtn \{ position: absolute; visibility: hidden; \}/, 'rail 版内容默认隐藏且出流');
+  assert.match(html, /body\.sb-rail \.wl-count-rail, body\.sb-rail #wlRailBtn \{ visibility: visible; \}/, 'rail 版内容仅窄栏可见');
+  assert.match(html, /#wlRailBtn \{[^}]*width: calc\(var\(--rail-width\) - 1px\)/, 'rail 版按钮与窄栏同宽');
+  assert.match(html, /class="wl-count-rail" id="wlCountRail"/, '窄栏自选计数元素存在');
+  assert.match(html, /body\.sb-rail #sidebarPin \.sb-chev \{ transform: rotate\(180deg\); \}/, '收起/展开图标 chevron 两态翻转');
+  console.log('F. sidebar skin CSS checks passed');
 }
 // 行为：rail→open / rail→pinned 触发交错淡入并按时清理；reduced-motion 整体跳过
 (async () => {
