@@ -246,6 +246,10 @@ def current() -> Snapshot:
     return bound if bound is not None else snapshot()
 
 
+def live_current() -> Snapshot:
+    return snapshot()
+
+
 @contextmanager
 def use(state: Snapshot, permit: WritePermit | None = None) -> Iterator[Snapshot]:
     if permit is None:

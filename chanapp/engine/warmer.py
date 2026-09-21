@@ -1,9 +1,10 @@
 """交易时段自选股缓存预热：daemon 线程每 60s 唤醒一次，cn/hk 任一在开市时
-遍历 watchlist × (day, m30, m60, m15, m5) 调 get_bars——TTL 内命中仅本地读（~2ms）；
-过期 key 由 get_bars 秒回旧数据并触发后台异步刷新（同 key 防踩踏，v1.3.1 起），
-预热职责由后台线程完成，warm_once 本身不再现场等抓取（errors 仅含首冷失败）。
-单条异常记录不中断；切换提交后旧身份当轮立即终止（obsolete）。版本缓存的
-保留清理由本循环每日最多执行一轮（cache_store.collect_versions）。
+遍历 watchlist × (day, m30, m60, m15, m5)——退役 freq（在 CHANAPP_DERIVED_READ 内）
+走 warm_upstream 保温（驱动同一刷新链，CSV 发布与事实层双写不掉队），其余调
+get_bars——TTL 内命中仅本地读（~2ms）；过期 key 秒回旧数据并触发后台异步刷新
+（同 key 防踩踏，v1.3.1 起），预热职责由后台线程完成，warm_once 本身不再现场等
+抓取（errors 仅含首冷失败）。单条异常记录不中断；切换提交后旧身份当轮立即终止
+（obsolete）。版本缓存的保留清理由本循环每日最多执行一轮（cache_store.collect_versions）。
 
 开关：WARMER_ENABLED（默认 1，置 0 关闭；测试与本地调试时关闭）。
 """
@@ -63,7 +64,12 @@ def warm_once(now: datetime | None = None,
         for code in codes_fn():
             for freq in freqs:
                 try:
-                    get_bars_fn(code, freq)
+                    derived = getattr(engine_data, "DERIVED_READ", frozenset())
+                    upstream = getattr(engine_data, "warm_upstream", None)
+                    if freq in derived and upstream is not None:
+                        upstream(code, freq)      # 退役 freq：保温 CSV+历史库，读侧已派生
+                    else:
+                        get_bars_fn(code, freq)
                     ok += 1
                 except _Obsolete:
                     # 切换已提交：以旧身份继续预热无意义，当轮到此为止

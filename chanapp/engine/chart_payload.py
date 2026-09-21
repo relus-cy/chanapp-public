@@ -45,6 +45,16 @@ def _level_summary(code: str, freq: str,
                                      sig, evidence, calculation_id=identity["calculation_id"])
         latest = {s["level"]: s for s in sig["signals"]}
         zs = structure["zs"][-1] if structure["zs"] else None
+        try:
+            record_fn = getattr(engine_data, "record_calc_run", None)
+            if record_fn is not None:
+                record_fn(code, freq,
+                          input_start=bars[0]["dt"], input_end=bars[-1]["dt"],
+                          input_data_version=data_version,
+                          calculation_id=identity["calculation_id"],
+                          signals=sig["signals"])
+        except Exception:
+            log.warning("结论历史记录失败 code=%s freq=%s", code, freq, exc_info=True)
         close = bars[-1]["close"]
         return {
             "freq": freq, **identity,
@@ -97,6 +107,18 @@ def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
                                  calculation_id=identity["calculation_id"])
     else:
         structure, sig, evidence = cached["structure"], cached["sig"], cached["evidence"]
+    # 结论历史挂在发布点（非 compute_cache）：warm_compute 预填命中同样是对外发布，
+    # 幂等键去重使重复记录零成本（spec §2.7）。
+    try:
+        record_fn = getattr(engine_data, "record_calc_run", None)
+        if record_fn is not None and bars:
+            record_fn(code, freq,
+                      input_start=bars[0]["dt"], input_end=bars[-1]["dt"],
+                      input_data_version=data_version,
+                      calculation_id=identity["calculation_id"],
+                      signals=sig["signals"])
+    except Exception:
+        log.warning("结论历史记录失败 code=%s freq=%s", code, freq, exc_info=True)
     t_compute = time.monotonic()
 
     kline = [

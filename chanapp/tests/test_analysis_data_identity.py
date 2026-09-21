@@ -3,10 +3,11 @@ import copy
 import hashlib
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from chanapp.api import analysis
-from chanapp.engine import chart_payload, compute_cache, supply
+from chanapp.engine import chart_payload, compute_cache, data as engine_data, supply
 from chanapp.tests.test_compute_cache import load_bars
 
 
@@ -18,6 +19,12 @@ class TestAnalysisDataIdentity(unittest.TestCase):
         patch = mock.patch.dict('os.environ', {'ANALYSIS_CACHE_DIR': self.tmp.name})
         patch.start()
         self.addCleanup(patch.stop)
+        # 结论记录会写 CACHE_DIR/kline.sqlite：隔离 CACHE_DIR，防 .cache/ 真实库被测试写入
+        # 公开演示门面无 CACHE_DIR（无真实缓存写），此时跳过隔离
+        if hasattr(engine_data, "CACHE_DIR"):
+            cache_patch = mock.patch.object(engine_data, "CACHE_DIR", Path(self.tmp.name))
+            cache_patch.start()
+            self.addCleanup(cache_patch.stop)
 
     def test_resonance_workers_use_bound_snapshot(self):
         old = supply.Snapshot('baseline', 4)

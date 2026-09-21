@@ -4,6 +4,7 @@
 只验证字段形状与降级行为，不验证跨级别语义）。
 """
 import csv
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -33,6 +34,15 @@ class TestResonance(unittest.TestCase):
         import os
         os.environ["WARMER_ENABLED"] = "0"
         self.addCleanup(os.environ.pop, "WARMER_ENABLED")
+        # 结论记录会写 CACHE_DIR/kline.sqlite：隔离 CACHE_DIR，防 .cache/ 真实库被测试写入
+        # 公开演示门面无 CACHE_DIR（无真实缓存写），此时跳过隔离
+        self._cache_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._cache_tmp.cleanup)
+        from chanapp.engine import data as engine_data
+        if hasattr(engine_data, "CACHE_DIR"):
+            cache_patch = mock.patch.object(engine_data, "CACHE_DIR", Path(self._cache_tmp.name))
+            cache_patch.start()
+            self.addCleanup(cache_patch.stop)
         from chanapp.api.main import app
         self.c = TestClient(app)
 

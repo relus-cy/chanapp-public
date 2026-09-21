@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from pathlib import Path
 from chanapp.engine import compute_cache
 from chanapp.tests.test_compute_cache import load_bars
 
@@ -19,6 +20,13 @@ class TestRuleProfilesAPI(unittest.TestCase):
                                            "ANALYSIS_CACHE_DIR": self.temp.name})
         self.env.start()
         self.addCleanup(self.env.stop)
+        # 结论记录会写 CACHE_DIR/kline.sqlite：隔离 CACHE_DIR，防 .cache/ 真实库被测试写入
+        # 公开演示门面无 CACHE_DIR（无真实缓存写），此时跳过隔离
+        from chanapp.engine import data as engine_data
+        if hasattr(engine_data, "CACHE_DIR"):
+            self.cache_patch = patch.object(engine_data, "CACHE_DIR", Path(self.temp.name))
+            self.cache_patch.start()
+            self.addCleanup(self.cache_patch.stop)
         from chanapp.api.main import app
         self.client = TestClient(app)
 

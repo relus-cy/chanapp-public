@@ -182,6 +182,14 @@ class SupplyStateTests(unittest.TestCase):
                 self.assertEqual(supply.current(), old)
             self.assertEqual(supply.current().generation, 1)
 
+    def test_live_current_ignores_bound_operation_context(self):
+        with patch.object(supply, '_default_manager', self.manager):
+            old = supply.snapshot()
+            with supply.use(old):
+                supply.switch('primary_candidate', 0, lambda _: {})
+                self.assertEqual(supply.current(), old)
+                self.assertEqual(supply.live_current(), supply.Snapshot('primary_candidate', 1))
+
 
 class DataIdentityTests(unittest.TestCase):
     def test_canonical_keys_complete_content_and_identity(self):

@@ -36,6 +36,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -96,6 +97,12 @@ async def lifespan(app: FastAPI):
                 log.error("Supply recovery required: %s", exc.reason)
             else:
                 warmer.start()
+        reconcile = getattr(engine_data, "reconcile_factstore", None)
+        if reconcile:
+            try:
+                reconcile()
+            except Exception:
+                log.warning("Historical storage reconciliation failed during startup", exc_info=True)
         yield
     finally:
         if owned:
@@ -128,13 +135,30 @@ app.include_router(supply_api.router)
 
 # ---------- /api/chart（组装逻辑在 engine/chart_payload.py，Pages 推送平面共用） ----------
 
+_BEFORE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([ ]\d{2}:\d{2}(:\d{2})?)?$")
+
+
+def _normalize_before(before: str) -> str:
+    """before 游标归一：ISO 'T' 转库内空格格式（字符串比较口径一致）；
+    非法形态明确 400 降级，不静默按无参返回最新整窗。"""
+    normalized = before.replace("T", " ")
+    if not _BEFORE_RE.match(normalized):
+        raise HTTPException(status_code=400,
+                            detail="before 格式无效（YYYY-MM-DD[ HH:mm[:ss]]）")
+    return normalized
+
 
 @app.get("/api/chart")
 def api_chart(request: Request,
               code: str = Query(..., min_length=2),
               freq: str = Query("day", pattern="^(day|m30|m60|m15|m5)$"),
               rule_profile: Annotated[Literal["strict", "relaxed"], Query()] = "strict",
-              signal_scope: Annotated[Literal["standard", "expanded"], Query()] = "expanded"):
+              signal_scope: Annotated[Literal["standard", "expanded"], Query()] = "expanded",
+              before: str | None = Query(None),
+              limit: int = Query(520, ge=1, le=2000)):
+    if before is not None:
+        return _chart_history(request, code, freq, _normalize_before(before), limit)
+
     t0 = time.monotonic()
     try:
         dataset = engine_data.get_bars(code, freq)
@@ -149,6 +173,33 @@ def api_chart(request: Request,
     except Exception as e:
         log.exception("chart calculation failed code=%s freq=%s profile=%s", code, freq, rule_profile)
         raise HTTPException(status_code=502, detail="结构计算暂不可用") from e
+    cursor_fn = getattr(engine_data, "history_cursor", None)
+    try:
+        expected = {
+            "source": dataset.get("source"),
+            "normalization": dataset.get("normalization", "baseline-v1"),
+            "fqf": dataset.get("fqf"),
+        }
+        # 窗口内容锚点：客户端拿本页最老行的 (dt, close) 回传核验，
+        # 事实层核验不到（修订/换源交错）→ cursor None → 客户端整窗重载。
+        if dataset.get("bars"):
+            oldest = dataset["bars"][0]
+            expected["oldest_dt"] = oldest["dt"]
+            expected["close_at_oldest"] = oldest["close"]
+        payload["meta"]["history_cursor"] = (
+            cursor_fn(code, freq, expected=expected) if cursor_fn else None)
+    except Exception:
+        log.warning("Chart history cursor unavailable code=%s freq=%s", code, freq, exc_info=True)
+        payload["meta"]["history_cursor"] = None
+    basis_fn = getattr(engine_data, "basis_annotation", None)
+    try:
+        payload["meta"]["basis"] = (basis_fn(
+            code, freq, source=dataset.get("source"),
+            normalization=dataset.get("normalization", "baseline-v1"),
+            fqf=dataset.get("fqf")) if basis_fn else None)
+    except Exception:
+        log.warning("Chart basis annotation unavailable code=%s freq=%s", code, freq, exc_info=True)
+        payload["meta"]["basis"] = None
     body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
     etag = '"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:32] + '"'
     headers = {"ETag": etag, "Cache-Control": "no-cache"}
@@ -158,6 +209,55 @@ def api_chart(request: Request,
              code, freq, int((t_bars - t0) * 1000), timings["compute_ms"],
              timings["resonance_ms"], int((t_end - t0) * 1000), "304" if hit else "200")
     if hit:
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="application/json", headers=headers)
+
+
+def _chart_history(request: Request, code: str, freq: str, before: str, limit: int):
+    # m60 历史分页由派生读开关放行；flag 关时带 before 的 m60 仍 400 降级，不静默忽略
+    derived_read = getattr(engine_data, "DERIVED_READ", frozenset())
+    if freq not in ("day", "m30") and not (freq == "m60" and "m60" in derived_read):
+        raise HTTPException(status_code=400, detail="该周期暂不支持历史分页")
+    getter = getattr(engine_data, "get_bars_history", None)
+    page = getter(code, freq, before, limit) if getter else None
+    if page is None:
+        raise HTTPException(status_code=503, detail="历史分页不可用")
+    basis_fn = getattr(engine_data, "basis_annotation", None)
+    basis = None
+    if basis_fn is not None:
+        try:
+            basis = basis_fn(code, freq)
+        except Exception:
+            log.warning("基准标注读取失败 code=%s freq=%s", code, freq, exc_info=True)
+    # segments 携带旧基准段（重建窗口内）时前端据以标注「重建中」
+    pending_rebuild = bool((basis or {}).get("pending_rebuild")) or any(
+        seg.get("basis_id") != page["basis_id"] for seg in page.get("segments") or [])
+    body = json.dumps({
+        "code": code,
+        "freq": freq,
+        "kline": [{
+            "time": bar["dt"],
+            "open": bar["open"],
+            "high": bar["high"],
+            "low": bar["low"],
+            "close": bar["close"],
+            "volume": bar["volume"],
+        } for bar in page["bars"]],
+        "meta": {
+            "history": True,
+            "has_more": page["has_more"],
+            "oldest_dt": page["oldest_dt"],
+            "basis_id": page["basis_id"],
+            "revision_gen": page["revision_gen"],
+            "segments": page["segments"],
+            "incomplete_days": page["incomplete_days"],
+            "basis": basis,
+            "pending_rebuild": pending_rebuild,
+        },
+    }, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    etag = 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest()[:32] + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
     return Response(content=body, media_type="application/json", headers=headers)
 

@@ -53,6 +53,13 @@ class TestChartAnalysisReuse(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         os.environ["ANALYSIS_CACHE_DIR"] = self._tmp.name
         self.addCleanup(os.environ.pop, "ANALYSIS_CACHE_DIR")
+        # 结论记录会写 CACHE_DIR/kline.sqlite：隔离 CACHE_DIR，防 .cache/ 真实库被测试写入
+        # 公开演示门面无 CACHE_DIR（无真实缓存写），此时跳过隔离
+        from chanapp.engine import data as engine_data
+        if hasattr(engine_data, "CACHE_DIR"):
+            cache_patch = mock.patch.object(engine_data, "CACHE_DIR", Path(self._tmp.name))
+            cache_patch.start()
+            self.addCleanup(cache_patch.stop)
         os.environ["WARMER_ENABLED"] = "0"
         self.addCleanup(os.environ.pop, "WARMER_ENABLED")
         os.environ["LLM_API_KEY"] = "k"

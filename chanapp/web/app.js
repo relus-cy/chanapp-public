@@ -203,9 +203,14 @@
   var klineData = [];    // 当前 K 线原始数据（time 为原始字符串，供图例/指标计算）
   var klineByTime = {};  // toTime(time) → {bar, prev}，十字光标定位用
   var macdRowsRaw = [];  // 后端 MACD 行（原始 dt 字符串）
+  var historyState = { loading: false, hasMore: false, revisionGen: null, basisId: null,
+    seamTime: null, reqId: 0 };
+  // 可左拉周期：day/m30 恒可，m60 由派生读开关在服务端放行（游标为 null 时天然不触发，flag 关无害）
+  var HISTORY_FREQS = { day: 1, m30: 1, m60: 1 };
   var lastChartData = null;  // 最近一次 /api/chart 响应，主题切换时原路径重渲染
   var loadedTarget = null;   // 当前图表内容归属 {code, freq}，后台刷新据此判定是否保留可视区间
   var chartEtag = null;  // {code, freq, profile, scope, etag}：最近一次 200 的 /api/chart ETag，60s 自动刷新带 If-None-Match
+  var lastBasisKey = null;  // {target: code|freq, key: +basis_id}：复权重建一次性提示按基准指纹去重
   function rememberEtag(code, freq, profile, scope, etag) {
     chartEtag = etag ? { code: code, freq: freq, profile: profile, scope: scope, etag: etag } : null;
   }
@@ -765,6 +770,9 @@
     var macdChart = LW.createChart(el('sub'), Object.assign(withAxis(), { autoSize: true }));
     // 轴左端绝对日期锚点跟随可视区间
     main.timeScale().subscribeVisibleLogicalRangeChange(updateAxisAnchor);
+    if (typeof onMainRangeChanged === 'function') {
+      main.timeScale().subscribeVisibleLogicalRangeChange(onMainRangeChanged);
+    }
 
     var candleSeries = main.addSeries(LW.CandlestickSeries, {
       upColor: P.up, downColor: P.down, wickUpColor: P.up, wickDownColor: P.down, borderVisible: false,
@@ -846,6 +854,7 @@
   var activeMa = { 5: true, 13: true, 20: true };
   var maSeries = {};
   var maData = {};
+  var indicatorStart = 0;
 
   function computeMAs() {
     maData = {};
@@ -853,8 +862,10 @@
     MA_PERIODS.forEach(function (n) {
       var out = [], s = 0;
       for (var i = 0; i < closes.length; i++) {
-        s += closes[i]; if (i >= n) s -= closes[i - n];
-        out.push(i >= n - 1 ? s / n : null);
+        if (i < indicatorStart) { out.push(null); continue; }
+        s += closes[i];
+        if (i >= indicatorStart + n) s -= closes[i - n];
+        out.push(i >= indicatorStart + n - 1 ? s / n : null);
       }
       maData[n] = out;
     });
@@ -915,20 +926,23 @@
 
   function rsiArr(n) {
     var closes = klineData.map(function (b) { return b.close; });
-    var out = [], ag = 0, al = 0;
-    for (var i = 1; i < closes.length; i++) {
+    var start = typeof indicatorStart === 'number' ? indicatorStart : 0;
+    var out = closes.map(function () { return null; }), ag = 0, al = 0;
+    for (var i = start + 1; i < closes.length; i++) {
       var ch = closes[i] - closes[i - 1], g = Math.max(ch, 0), l = Math.max(-ch, 0);
-      if (i <= n) { ag += g / n; al += l / n; out.push(null); }
-      else { ag = (ag * (n - 1) + g) / n; al = (al * (n - 1) + l) / n; out.push(al ? 100 - 100 / (1 + ag / al) : 100); }
+      var offset = i - start;
+      if (offset <= n) { ag += g / n; al += l / n; }
+      else { ag = (ag * (n - 1) + g) / n; al = (al * (n - 1) + l) / n; out[i] = al ? 100 - 100 / (1 + ag / al) : 100; }
     }
-    out.unshift(null);
     return out;
   }
 
   function kdjArr() {
     var K = [], D = [], J = [], k = 50, d = 50;
+    var start = typeof indicatorStart === 'number' ? indicatorStart : 0;
     for (var i = 0; i < klineData.length; i++) {
-      var s = Math.max(0, i - 8), hh = -1e18, ll = 1e18;
+      if (i < start) { K.push(null); D.push(null); J.push(null); continue; }
+      var s = Math.max(start, i - 8), hh = -1e18, ll = 1e18;
       for (var j = s; j <= i; j++) { hh = Math.max(hh, klineData[j].high); ll = Math.min(ll, klineData[j].low); }
       var rsv = hh === ll ? 50 : (klineData[i].close - ll) / (hh - ll) * 100;
       k = 2 / 3 * k + 1 / 3 * rsv; d = 2 / 3 * d + 1 / 3 * k;
@@ -939,9 +953,10 @@
 
   function bollArr(n, k) {
     var closes = klineData.map(function (b) { return b.close; });
+    var start = typeof indicatorStart === 'number' ? indicatorStart : 0;
     var mid = [], up = [], lo = [];
     for (var i = 0; i < closes.length; i++) {
-      if (i < n - 1) { mid.push(null); up.push(null); lo.push(null); continue; }
+      if (i < start + n - 1) { mid.push(null); up.push(null); lo.push(null); continue; }
       var s = 0;
       for (var j = i - n + 1; j <= i; j++) s += closes[j];
       var m = s / n, v = 0;
@@ -1657,9 +1672,11 @@
     lastMeta = meta;
     renderStatus();
     var bar = el('metaBar');
+    var basis = meta.basis || null;
     var parts = [
       {text: '数据源：' + meta.source},
-      {text: '复权：' + meta.fqf},
+      {text: '复权：' + meta.fqf + (basis && basis.since ? ' · 基准 ' + basis.since : ''),
+       badge: basis && basis.pending_rebuild ? ' · <b>重建中</b>' : ''},
       {text: '抓取：' + meta.fetch_time, badge: cacheBadge(meta)},
       {text: 'K线：' + meta.bars + ' 根', title: meta.first_dt + ' ~ ' + meta.last_dt},
     ];
@@ -1903,18 +1920,161 @@
     };
   }
 
+  function mergeWithHistory(incoming, cursor, previousRevision, currentBars) {
+    currentBars = currentBars || klineData;
+    if (!cursor || cursor.revision_gen !== previousRevision || !currentBars.length || !incoming.length ||
+        toTime(currentBars[0].time) >= toTime(incoming[0].time)) return incoming;
+    var incomingFirst = toTime(incoming[0].time);
+    var older = currentBars.filter(function (b) { return toTime(b.time) < incomingFirst; });
+    return older.length ? older.concat(incoming) : incoming;
+  }
+
+  // 重建期防御残留：全链重建到位后页内不再含旧基准段，本机制仅在 adjust_rebuild
+  // 深链重取追平前的窗口内生效（指标不跨缝）。
+  function applyHistorySeam() {
+    indicatorStart = 0;
+    if (!historyState.seamTime) return;
+    var start = klineData.findIndex(function (bar) {
+      return toTime(bar.time) >= toTime(historyState.seamTime);
+    });
+    if (start >= 0) indicatorStart = start;
+  }
+
+  // 重建期防御残留：同上，MACD 副图裁剪到缝后。
+  function trimMacdToHistorySeam() {
+    if (!historyState.seamTime) return;
+    macdRowsRaw = macdRowsRaw.filter(function (row) {
+      return toTime(row.time) >= toTime(historyState.seamTime);
+    });
+  }
+
+  // 重建期防御残留：跨基准分段仅在重建追平窗口内出现，缝位登记见上两条注释。
+  // 派生读同基准多段（minute_fact + day_backfill 缝合）不是缝——只在页内确有
+  // 异基准段时才登记缝位，否则指标会被错误地裁到分钟链深度以内。
+  function applyHistorySegments(segments) {
+    if (segments && segments.length > 1 && segments[0].basis_id === historyState.basisId &&
+        segments.some(function (s) { return s.basis_id !== historyState.basisId; })) {
+      historyState.seamTime = segments[0].from_dt;
+    }
+    applyHistorySeam();
+    trimMacdToHistorySeam();
+  }
+
+  function onMainRangeChanged(range) {
+    if (!range || !historyState.hasMore || historyState.loading) return;
+    if (!HISTORY_FREQS[state.freq]) return;
+    if (historyState.revisionGen == null || !klineData.length) return;
+    if (range.from > 8) return;
+    loadHistoryPage();
+  }
+
+  function loadHistoryPage() {
+    var request = {
+      code: state.code, freq: state.freq,
+      generation: supplyState.generation, epoch: supplyState.epoch || '',
+      firstTime: klineData[0].time, reqId: ++historyState.reqId,
+    };
+    historyState.loading = true;
+    var failed = false;
+    setStatus('加载历史…');
+    fetch('/api/chart?code=' + encodeURIComponent(request.code) + '&freq=' + request.freq +
+          '&before=' + encodeURIComponent(request.firstTime) + '&limit=520')
+      .then(function (r) {
+        if (!r.ok) throw new Error('history ' + r.status);
+        return r.json();
+      })
+      .then(function (page) {
+        if (historyState.reqId !== request.reqId || state.code !== request.code || state.freq !== request.freq ||
+            supplyState.generation !== request.generation || (supplyState.epoch || '') !== request.epoch ||
+            !klineData.length || klineData[0].time !== request.firstTime) return;
+        if (!page || !page.meta || !page.meta.history) return;
+        if (page.meta.revision_gen !== historyState.revisionGen) {
+          historyState.loading = false;
+          setStatus('');
+          historyState.reqId++;
+          load({ refresh: true });
+          return;
+        }
+        prependHistory(page);
+      })
+      .catch(function () { failed = true; })
+      .finally(function () {
+        if (historyState.reqId !== request.reqId || state.code !== request.code || state.freq !== request.freq ||
+            supplyState.generation !== request.generation || (supplyState.epoch || '') !== request.epoch) return;
+        historyState.loading = false;
+        setStatus(failed ? '历史加载失败' : '');
+      });
+  }
+
+  function prependHistory(page) {
+    var first = toTime(klineData[0].time);
+    var older = page.kline.filter(function (b) { return toTime(b.time) < first; });
+    historyState.hasMore = !!page.meta.has_more;
+    if (!older.length) return;
+    var segments = page.meta.segments || [];
+    var range = charts.main.timeScale().getVisibleLogicalRange();
+    klineData = older.concat(klineData);
+    // 首次跨入全旧基准页（segments 首段已非当前基准且尚无全局缝位）：
+    // 缝 = prepend 前视图首行，即视图内新基准最老一根，指标/连线不跨缝。
+    // 重建期防御残留：仅在 adjust_rebuild 深链重取追平前的窗口内生效。
+    if (!historyState.seamTime && segments.length &&
+        segments[0].basis_id !== historyState.basisId) {
+      historyState.seamTime = klineData[older.length].time;
+    }
+    klineByTime = {};
+    klineData.forEach(function (b, i) {
+      klineByTime[toTime(b.time)] = { bar: b, prev: i > 0 ? klineData[i - 1] : null, i: i };
+    });
+    charts.candleSeries.setData(klineData.map(function (b) {
+      return { time: toTime(b.time), open: b.open, high: b.high, low: b.low, close: b.close };
+    }));
+    charts.volumeSeries.setData(klineData.map(function (b) {
+      return { time: toTime(b.time), value: b.volume, color: b.close >= b.open ? P.upA : P.downA };
+    }));
+    applyHistorySegments(segments);
+    computeMAs();
+    refreshMaSeries();
+    showInd(curInd);
+    if (range) {
+      var shifted = { from: range.from + older.length, to: range.to + older.length };
+      charts.main.timeScale().setVisibleLogicalRange(shifted);
+      charts.macdChart.timeScale().setVisibleLogicalRange(shifted);
+    }
+    charts.markers.setMarkers(buildMarkers(lastChartData.signals));
+    lastChartData = Object.assign({}, lastChartData, { kline: klineData });
+    if (lastChartData.meta && lastChartData.meta.history_cursor) {
+      lastChartData.meta = Object.assign({}, lastChartData.meta, {
+        history_cursor: Object.assign({}, lastChartData.meta.history_cursor, { has_more: historyState.hasMore }),
+      });
+    }
+  }
+
   // 图表渲染主路径：fetch 后与主题切换共用（opts.resetRange=false 时保留可视区间）
   function renderChart(data, opts) {
     var c = ensureCharts();
     opts = opts || {};
-    var kline = data.kline;
+    var cursor = data.meta && data.meta.history_cursor;
+    var previousRevision = historyState.revisionGen;
+    var nextReqId = historyState.reqId + 1;
+    var kline = opts.mergedKline || (opts.resetRange === false
+      ? mergeWithHistory(data.kline, cursor, previousRevision, klineData)
+      : data.kline);
+    var seamTime = (opts.resetRange === false && cursor && cursor.revision_gen === previousRevision)
+      ? historyState.seamTime : null;
+    historyState = (cursor && HISTORY_FREQS[state.freq])
+      ? { loading: false, hasMore: !!cursor.has_more, revisionGen: cursor.revision_gen,
+          basisId: cursor.basis_id, seamTime: seamTime, reqId: nextReqId }
+      : { loading: false, hasMore: false, revisionGen: null, basisId: null,
+          seamTime: null, reqId: nextReqId };
     klineData = kline;
+    applyHistorySeam();
     klineByTime = {};
     kline.forEach(function (b, i) {
       klineByTime[toTime(b.time)] = { bar: b, prev: i > 0 ? kline[i - 1] : null, i: i };
     });
     macdRowsRaw = data.macd.rows;
-    lastChartData = data;
+    trimMacdToHistorySeam();
+    lastChartData = Object.assign({}, data, { kline: kline });
 
     c.candleSeries.setData(kline.map(function (b) {
       return { time: toTime(b.time), open: b.open, high: b.high, low: b.low, close: b.close };
@@ -2047,8 +2207,17 @@
             state.code === refreshTarget.code && state.freq === refreshTarget.freq && klineData.length) {
           keep = captureRefreshRange(charts.main.timeScale().getVisibleLogicalRange(), klineData);
         }
-        var plan = keep ? refreshRangePlan(keep, data.kline) : null;
-        renderChart(data, { resetRange: !saved && !plan });
+        var cursor = data.meta && data.meta.history_cursor;
+        var currentRevision = typeof historyState === 'undefined' ? null : historyState.revisionGen;
+        var incomingKline = data.kline || [];
+        var sameLoadedTarget = loadedTarget && loadedTarget.code === state.code && loadedTarget.freq === state.freq;
+        var allowHistoryMerge = !!saved || !!(refreshTarget && sameLoadedTarget);
+        var currentKline = allowHistoryMerge && typeof klineData !== 'undefined' ? klineData : incomingKline;
+        var mergedKline = allowHistoryMerge
+          ? mergeWithHistory(incomingKline, cursor, currentRevision, currentKline)
+          : incomingKline;
+        var plan = keep ? refreshRangePlan(keep, mergedKline) : null;
+        renderChart(data, { resetRange: !saved && !plan, mergedKline: mergedKline });
         if (saved) {
           charts.main.timeScale().setVisibleRange(saved);
           charts.macdChart.timeScale().setVisibleRange(saved);
@@ -2066,6 +2235,21 @@
         activeChartVersion = {code: state.code, freq: state.freq, epoch: epoch || '', generation: generation, calculation_id: data.calculation_id, data_version: data.data_version || data.meta.data_version};
         updateAnalysisFreshness();
         setStatus('');
+        // 复权重建一次性提示（会话级）：同一 code|freq 的基准指纹变化时提示一次，8s 自动消退
+        var basis = data.meta && data.meta.basis;
+        var basisTarget = state.code + '|' + state.freq;
+        var basisKey = basis && basis.basis_id ? basisTarget + '|' + basis.basis_id : null;
+        var prevBasisKey = lastBasisKey && lastBasisKey.target === basisTarget ? lastBasisKey.key : null;
+        if (basisKey && prevBasisKey && basisKey !== prevBasisKey) {
+          var rebuildMsg = basis.pending_rebuild
+            ? '检测到除权：历史正按新基准重建，早期段落暂按旧基准显示'
+            : '历史已按除权事件重建到新基准 ' + (basis.since || '');
+          setStatus(rebuildMsg);
+          (function (msg) {
+            setTimeout(function () { if (statusMsg === msg) setStatus(''); }, 8000);
+          })(rebuildMsg);
+        }
+        if (basisKey) lastBasisKey = { target: basisTarget, key: basisKey };
       })
       .catch(function (e) {
         if (e && e.name === 'AbortError') return;  // 被新请求中止，静默

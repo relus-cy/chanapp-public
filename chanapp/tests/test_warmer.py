@@ -22,6 +22,13 @@ class TestWarmOnce(unittest.TestCase):
         os.environ["WATCHLIST_PATH"] = str(p)
         self.addCleanup(os.environ.pop, "WATCHLIST_PATH")
         self.calls = []
+        # 本类测 warm_once 循环机制（会话门/异常隔离/快照绑定），非派生退役分派——
+        # 分派覆盖在 test_derived_read.TestM30DirectRead；这里钉空 DERIVED_READ 保持原语义。
+        from chanapp.engine import data as engine_data
+        derived_patch = mock.patch.object(engine_data, "DERIVED_READ", frozenset(),
+                                          create=True)
+        derived_patch.start()
+        self.addCleanup(derived_patch.stop)
 
     def _gb(self, code, freq):
         self.calls.append((code, freq))
