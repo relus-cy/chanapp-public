@@ -11,8 +11,8 @@ import json
 import os
 from pathlib import Path
 import sys
-import tempfile
 
+from chanapp.engine import atomic_file
 from chanapp.engine.kline import collector, ingest, instance
 from chanapp.engine.kline.rows import CalendarRow, InstrumentRow
 
@@ -75,18 +75,7 @@ def _temporary(path):
 
 def _publish(target, content):
     """0600 临时文件写完并落盘后硬链接到目标；目标已存在则保留原文件。"""
-    fd, temporary = tempfile.mkstemp(prefix=f'.{target.name}.', suffix='.tmp', dir=target.parent)
-    try:
-        with os.fdopen(fd, 'wb') as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        try:
-            os.link(temporary, target)
-        except FileExistsError:
-            pass
-    finally:
-        os.unlink(temporary)
+    atomic_file.publish_if_absent(target, content)
 
 
 def main(argv=None):

@@ -8,9 +8,10 @@ import logging
 import math
 import os
 from pathlib import Path
-import tempfile
 import time
 import uuid
+
+from chanapp.engine import atomic_file
 
 log = logging.getLogger(__name__)
 
@@ -38,25 +39,10 @@ def valid_timestamp(stamp):
 
 def atomic_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix='.', suffix='.tmp', dir=path.parent)
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-            json.dump(payload, stream, ensure_ascii=False, sort_keys=True, allow_nan=False)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(name, path)
-        try:
-            descriptor = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-        except OSError:
-            # Replacement already committed. Do not claim zero publication.
-            log.warning('cache publication committed; directory durability unconfirmed')
-    finally:
-        if os.path.exists(name):
-            os.unlink(name)
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False).encode('utf-8')
+    if not atomic_file.replace(path, data, sync_dir=True):
+        # Replacement already committed. Do not claim zero publication.
+        log.warning('cache publication committed; directory durability unconfirmed')
 
 
 def _quarantine(path):

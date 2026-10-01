@@ -10,9 +10,10 @@ import json
 import logging
 import os
 from pathlib import Path
-import tempfile
 import threading
 import uuid
+
+from chanapp.engine import atomic_file
 
 PERIOD_LABELS = {'day': '日线', 'week': '周线', 'm60': '60分', 'm30': '30分'}
 PERIODS = tuple(PERIOD_LABELS)
@@ -39,16 +40,7 @@ def capabilities(minute_frequencies):
 
 def _write(path, state):
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix='.periods-', suffix='.tmp', dir=path.parent)
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-            json.dump(state, stream, ensure_ascii=False)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    atomic_file.replace(path, json.dumps(state, ensure_ascii=False).encode('utf-8'))
 
 
 class Conflict(ValueError):

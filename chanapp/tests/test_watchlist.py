@@ -91,7 +91,7 @@ class TestWatchlist(unittest.TestCase):
         original = [{"code": "sh600000", "name": "浦发银行", "starred": False, "tags": []}]
         path.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
 
-        with mock.patch.object(main.os, "replace", side_effect=OSError("replace failed")):
+        with mock.patch.object(os, "replace", side_effect=OSError("replace failed")):
             with self.assertRaisesRegex(OSError, "replace failed"):
                 main._save_watchlist([
                     {"code": "sh600519", "name": "贵州茅台", "starred": False, "tags": []},

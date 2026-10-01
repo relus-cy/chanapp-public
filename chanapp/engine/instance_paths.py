@@ -20,10 +20,11 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+
+from chanapp.engine import atomic_file
 
 PKG_ROOT = Path(__file__).resolve().parent.parent
 WATCHLIST_SEED = PKG_ROOT / "watchlist.json"
@@ -82,19 +83,7 @@ def initialize(paths: InstancePaths) -> None:
         directory.mkdir(parents=True, exist_ok=True)
     if paths.watchlist.exists() or not seed.is_file():
         return
-    fd, temporary = tempfile.mkstemp(prefix=f".{paths.watchlist.name}.", suffix=".tmp",
-                                     dir=paths.watchlist.parent)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(seed.read_bytes())
-            stream.flush()
-            os.fsync(stream.fileno())
-        try:
-            os.link(temporary, paths.watchlist)       # 目标已存在即失败：并发初始化也不覆盖
-        except FileExistsError:
-            pass
-    finally:
-        os.unlink(temporary)
+    atomic_file.publish_if_absent(paths.watchlist, seed.read_bytes())   # 并发初始化也不覆盖
 
 
 _active_instance_dir: Path | None = None

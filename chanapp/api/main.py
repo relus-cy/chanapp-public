@@ -52,10 +52,8 @@ from typing import Annotated, Literal
 import hashlib
 import json
 import logging
-import os
 import re
 import sys
-import tempfile
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -76,6 +74,7 @@ if str(_PKG_ROOT.parent) not in sys.path:
 import chanapp  # noqa: E402
 from chanapp.api import analysis as api_analysis  # noqa: E402
 from chanapp.api import view_log as api_view_log  # noqa: E402
+from chanapp.engine import atomic_file  # noqa: E402
 from chanapp.engine import chart_payload as engine_chart_payload  # noqa: E402
 from chanapp.engine import data as engine_data  # noqa: E402
 from chanapp.engine import data_identity  # noqa: E402
@@ -392,16 +391,7 @@ def _save_watchlist(items: list[dict]) -> None:
     with _WATCHLIST_LOCK:
         path = _state_paths().watchlist
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                stream.write(json.dumps(items, ensure_ascii=False, indent=2) + "\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+        atomic_file.replace(path, (json.dumps(items, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
 
 
 class WatchItem(BaseModel):
