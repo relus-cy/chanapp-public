@@ -2,14 +2,12 @@
 /* 显示层：行情/F10 状态注记、资金流口径注记，以及真实 loadQuotes/loadF10 的接纳规则
    （行情是自选级数据，不随当前 code/freq/adjust 门控；F10 只接纳请求发出时仍是当前代码的响应）。 */
 const assert = require('node:assert/strict');
-const vm = require('node:vm');
-const { appSource: source, mkEl, tick, runSlices } = require('./support/dom.js');
+const { mkEl, tick, runSlices } = require('./support/dom.js');
 const { appContext } = require('./support/app.js');
 
 {
   const context = {hhmmss: x => x};
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  function displayDataNote('), source.indexOf('  function loadQuotes()')), context);
+  runSlices(context, ['displayDataNote']);
   assert.equal(typeof context.displayDataNote, 'function');
   assert.equal(context.displayDataNote({}), '');
   assert.match(context.displayDataNote({degraded:true,fetch_time:'10:00'}), /10:00.*缓存/);

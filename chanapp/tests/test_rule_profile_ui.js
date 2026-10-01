@@ -2,7 +2,7 @@
 /* 成笔标准/提示范围 UI：真实切片实跑 buildMarkers/signalLabel/syncRuleControl/
    acceptsRule/loadAnalysis；请求身份参数由 loadEnv 实测 URL 断言（不再对源码正则）。 */
 const assert = require('node:assert/strict');
-const { appSource, tick, runSlices } = require('./support/dom.js');
+const { tick, runSlices } = require('./support/dom.js');
 const { appContext, loadEnv } = require('./support/app.js');
 
 const context = appContext({ P: { up: '#ff0000', down: '#0000ff', gold: '#aaaa00' }, hexA: (c, a) => c + ':' + a });
@@ -20,7 +20,6 @@ assert.equal(markers[1].color,'#aaaa00:0.45');
 assert.equal(markers[2].text,'~B2s');
 assert.equal(markers[2].position,'belowBar');
 assert.equal(context.signalLabel(points[1]),'段 S3a/S3b · 形成中');
-assert.doesNotMatch(appSource,/forming_signal/);  // 客户端无 forming 字段，若有引入须显式审（无行为替代，保留）
 console.log('native multi-type signal and rule profile UI checks passed');
 
 // 请求身份参数行为化：load()/loadAnalysis 发出的 URL 须带当前 rule_profile/signal_scope

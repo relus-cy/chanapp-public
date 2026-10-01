@@ -141,6 +141,34 @@ class MairuiTests(unittest.TestCase):
         with self.assertRaises(raw.ProviderConnectionError):
             p.day_history("sh600036", "2026-09-01", "2026-09-02")
 
-    def test_native_adjusted_paths_are_unreachable(self):
-        source = Path(mairui.__file__).read_text()
-        self.assertNotRegex(source, r"/(f|fr)/\{L\}")
+    def test_every_public_fetch_requests_only_unadjusted_endpoints(self):
+        # 原生 f/fr 复权在 300209 重整上错误：任何公开取数方法实际请求的路径都不得带复权段
+        p, t = self.provider((200, {}))
+        now = datetime(2026, 9, 28, 10)
+        for code in ("sz300209", "sh000001"):
+            p.day_history(code, "2026-09-01", "2026-09-02")
+            for freq in ("m15", "m5"):
+                p.minute_history(code, freq, "2026-09-01 09:30", "2026-09-01 15:00", now=now)
+                p.minute_live(code, freq, now=now)
+        p.preopen_ref("sh600036", "2026-09-28")
+        p.calendar(2026)
+        p.instruments()
+        p.instrument("sh600036")
+        paths = [path for path, _ in t.calls]
+        self.assertEqual([path for path in paths if {"f", "fr"} & set(path.split("/"))], [])
+        self.assertEqual(paths, [
+            "/hsstock/history/300209.SZ/d/n/{L}",
+            "/hsstock/history/300209.SZ/15/n/{L}",
+            "/hsstock/latest/300209.SZ/15/n/{L}",
+            "/hsstock/history/300209.SZ/5/n/{L}",
+            "/hsstock/latest/300209.SZ/5/n/{L}",
+            "/hsindex/history/000001.SH/d/{L}",
+            "/hsindex/history/000001.SH/15/{L}",
+            "/hsindex/latest/000001.SH/15/{L}",
+            "/hsindex/history/000001.SH/5/{L}",
+            "/hsindex/latest/000001.SH/5/{L}",
+            "/hsstock/real/time/600036/{L}",
+            "/tcalendar/list/2026/{L}",
+            "/hslt/list/{L}",
+            "/hsstock/instrument/600036.SH/{L}",
+        ])

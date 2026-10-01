@@ -1,13 +1,10 @@
 'use strict';
 const assert=require('node:assert/strict');
-const fs=require('node:fs');
-const vm=require('node:vm');
-const source=fs.readFileSync(require('node:path').join(__dirname,'../web/app.js'),'utf8');
+const {runSlices}=require('./support/dom.js');
 const removed=[],series=[];
 const channels=[{upper:{t0:'2026-01-01',t1:'2026-09-01',y0:42,y1:-90000},lower:{t0:'2026-01-01',t1:'2026-09-01',y0:41,y1:-100000}}];
 const context={c:{channelSeries:['old'],main:{removeSeries:s=>removed.push(s),addSeries:(type,options)=>{const s={options,setData(data){this.data=data;}};series.push(s);return s;}}},data:{channels},P:{goldA:'gold'},LightweightCharts:{LineSeries:{},LineStyle:{Dashed:2}},toTime:x=>x};
-vm.createContext(context);
-vm.runInContext(source.slice(source.indexOf('    c.channelSeries.forEach('),source.indexOf('    if (opts.resetRange !== false)')),context);
+runSlices(context,['channelSeries']);
 assert.deepEqual(removed,['old']);
 assert.equal(series.length,2);
 for(const [index,s] of series.entries()) {

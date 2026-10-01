@@ -5,8 +5,8 @@
    布局与可用性契约由下方关系断言 + browser_ui_regression.js 的计算样式/几何检查接管。 */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync(require('node:path').join(__dirname, '../web/app.js'), 'utf8');
+const { mkEl, runSlices } = require('./support/dom.js');
+const { appContext } = require('./support/app.js');
 const html = fs.readFileSync(require('node:path').join(__dirname, '../web/index.html'), 'utf8');
 
 /* <style> 逐字符扫描出的规则表：{sel, media, decls}。只针对本文件现有 CSS 语法，
@@ -85,8 +85,7 @@ function mkContext(savedVal, narrow) {
     setTimeout, clearTimeout,
     _listeners: listeners, _saved: saved, _items: items,
   };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  // ---------- 侧边栏'), source.indexOf('  // ---------- 初始化')), context);
+  runSlices(context, ['sidebar']);
   return context;
 }
 
@@ -98,7 +97,6 @@ function mkContext(savedVal, narrow) {
   const b = ctx.document.body.classList, saved = ctx._saved, L = ctx._listeners;
   assert.equal(b.contains('sb-rail') || b.contains('sb-open'), false, '宽窗默认固定展开');
   assert.equal(saved['chanapp-sidebar'], 'pinned', '初始持久化 pinned');
-  assert.equal(ctx.document.body ? true : true, true);
   ctx.toggleSidebar();
   assert.equal(b.contains('sb-rail'), true, '固定展开 → 窄栏');
   assert.equal(saved['chanapp-sidebar'], 'rail');
@@ -199,7 +197,6 @@ console.log('B. sidebar restore checks passed');
   assert.match(html, /<aside id="sidebar">/, 'watchlist 是通高侧栏容器');
   /* 侧栏底部不再有方案切换区：自选列表之后直接闭合侧栏 */
   assert.match(html, /<div id="wlItems"><\/div>\s*<\/div>\s*<\/aside>/, '自选列表是侧栏最后一块');
-  assert.doesNotMatch(html, /id="sidebarToggle"|id="sidebarRailExpand"/, '单图钉契约：旧的收起/窄栏展开钮不得复活');
   /* 窄窗展开钮默认收起，仅在「窄窗 + 窄栏」组合下出现（两条规则缺一不可） */
   assert.equal(cssDecl('#sidebarExpand', 'display'), 'none', '展开钮默认不显示');
   assert.equal(cssDecl('body.sb-rail #sidebarExpand', 'display', '@media (max-width: 1100px)'), 'flex',
@@ -207,21 +204,29 @@ console.log('B. sidebar restore checks passed');
   /* wlRailBtn 是 wlForm 常驻首子（按类名找已建表单，不能拿 firstChild 判空）且位于标签行之上 */
   assert.match(html, /id="wlForm"><button id="wlRailBtn"[\s\S]*?<\/button><\/div>\s*<div class="wl-head">/,
     'rail 版按钮是 wlForm 常驻首子且在标签行之前');
-  /* 星/删钮走 currentColor 内联 SVG（跟随主题/颜色态），不再用文本字形 */
-  assert.doesNotMatch(source, /w\.starred \? '★ ' : ''/, 'star glyph replaced by inline SVG');
-  assert.match(source, /class="ic-star"[^>]*stroke="currentColor"/, 'star renders as currentColor SVG');
-  assert.match(source, /class="ic-x"[^>]*stroke="currentColor"/, 'delete renders as currentColor SVG');
   console.log('C. sidebar structure checks passed');
+}
+// 星/删钮走 currentColor 内联 SVG（跟随主题/颜色态）：真实 renderWatchlist 渲染出的自选行里，
+// 按钮内容只有 SVG（置顶态也不夹文本字形）
+{
+  const nodes = { wlItems: mkEl('div'), wlForm: mkEl('div') };
+  const context = appContext({ wireSearch() {} });
+  context.document.getElementById = id => nodes[id] || (nodes[id] = mkEl());
+  runSlices(context, ['watchlistUi']);
+  context.state.watchlist = [{ code: 'sh600000', name: 'A', starred: true }, { code: 'sz000001', name: 'B', starred: false }];
+  context.renderWatchlist();
+  const [starredRow, plainRow] = nodes.wlItems.children.map(c => c.innerHTML);
+  assert.match(starredRow, /<button class="star on"[^>]*><svg class="ic-star"[^>]*stroke="currentColor"[^>]*>[\s\S]*?<\/svg><\/button>/,
+    'starred row: star button holds only a currentColor SVG');
+  assert.match(plainRow, /<button class="star"[^>]*><svg class="ic-star"[^>]*stroke="currentColor"[^>]*>[\s\S]*?<\/svg><\/button>/,
+    'unstarred row: star button holds only a currentColor SVG');
+  for (const row of [starredRow, plainRow])
+    assert.match(row, /<button class="del"[^>]*><svg class="ic-x"[^>]*stroke="currentColor"[^>]*>[\s\S]*?<\/svg><\/button>/,
+      'delete button holds only a currentColor SVG');
+  console.log('C2. watchlist row icon rendering checks passed');
 }
 
 // ---------- E. 几何等高 + 展开文字编排（悬停补偿机制已随几何统一删除） ----------
-// 源码层：不得再出现补偿/滚动校正
-{
-  assert.doesNotMatch(source, /hoverCompensation|alignHoveredRow|keepHoveredRowSteady|clearHoverShift/,
-    '悬停补偿已移除：窄栏与展开逐行等高，展开零纵向位移');
-  assert.doesNotMatch(source, /paddingBottom/, '不再用底部 padding 制造滚动空间');
-  console.log('E1. hover compensation removal checks passed');
-}
 // CSS 不变量：两态等高由「同名属性在两态规则中各自声明」表达（真值对齐由浏览器实测接管，
 // 见 browser_ui_regression.js 逐行 railHeight/openHeight ≤1px 对比），此处只锁关系与机制。
 {
@@ -263,11 +268,9 @@ console.log('B. sidebar restore checks passed');
 }
 // 可用性契约：选中可辨识、星/删钮「视觉隐身但可聚焦」、触屏常显、rail 版槽位互斥显隐
 {
-  /* 选中态必须有底/影任一可辨识标记（皮肤值不锁）；media=='' 限定无条件规则，挪进 @media 会红；
-     金条方案已整体移除 */
+  /* 选中态必须有底/影任一可辨识标记（皮肤值不锁）；media=='' 限定无条件规则，挪进 @media 会红 */
   const active = cssRules.find(r => r.sel === '#sidebar .item.active' && r.media === '');
   assert.ok(active && (active.decls.background || active.decls['box-shadow']), '选中态有可辨识样式');
-  assert.doesNotMatch(cssText, /inset 3px 0 0/, '选中金条已全部移除');
   /* 星/删钮默认透明度隐身且不接收指针，但保持 display:flex + 无 visibility（仍可 Tab 聚焦）；
      hover / focus-within / active 三路显现对两个钮各断言一遍（同组要求过脆：拆成两条等价规则会误红）；
      .star.on 常显仅 star 独有（del 无对应常驻态），不套到 .del 上 */

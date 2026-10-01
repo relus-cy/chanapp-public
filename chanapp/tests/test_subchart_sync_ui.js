@@ -3,9 +3,7 @@
    会在清空后触发 时间轴 null→自动适配 瞬变（axis_probe 实测事件序列），双向同步必须有
    subRebuild 抑制，且重建后恢复原可视区间。假 chart 按实测行为建模这两个瞬变。 */
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync(require('node:path').join(__dirname, '../web/app.js'), 'utf8');
+const { runSlices } = require('./support/dom.js');
 
 function mkEl() {
   return {
@@ -77,9 +75,7 @@ const context = {
   macdRowsRaw: [{ time: '2026-09-01', hist: 0, dif: 0, dea: 0 }],
   toTime: t => t,
 };
-vm.createContext(context);
-vm.runInContext(source.slice(source.indexOf('  function chartOpts()'), source.indexOf('  // ---------- 日间/夜间主题')), context);
-vm.runInContext(source.slice(source.indexOf('  // ---------- 副图指标'), source.indexOf('  // ---------- 多级别共振角标')), context);
+runSlices(context, ['chartSetup', 'subChart']);
 
 const charts = context.ensureCharts();
 const [main, macd] = made;

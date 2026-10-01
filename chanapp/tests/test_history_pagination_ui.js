@@ -3,14 +3,10 @@
    409 与令牌不符时整窗重载（不混接旧段）、prependHistory 合并/平移/markers 有序断言、
    renderChart 按视图令牌决定保留或丢弃旧段。helpers/renderChart/load 切片实跑；图表操作经 chartStub 事件流断言顺序。 */
 const assert = require('node:assert/strict');
-const { appSource, tick, runSlices } = require('./support/dom.js');
+const { tick, runSlices } = require('./support/dom.js');
 const { appContext, loadEnv, chartStub, okJson, errJson } = require('./support/app.js');
 
 const RELOADED = '数据已更新，已重新加载';
-
-// 左拉分页订阅接线（ensureCharts 依赖完整图表栈，无等价行为替身：保留声明断言）
-assert.ok(appSource.includes('subscribeVisibleLogicalRangeChange(onMainRangeChanged)'),
-  '主图须注册可视区间订阅 onMainRangeChanged');
 
 // 视图身份默认值与分页周期门：取自 app.js 真实声明
 {

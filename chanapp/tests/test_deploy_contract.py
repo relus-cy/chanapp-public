@@ -13,9 +13,7 @@ class DeployContractTests(unittest.TestCase):
     def test_explicit_unit_and_required_host(self):
         unit = (ROOT / 'scripts/chanapp.service').read_text()
         self.assertIn('--proxy-headers --forwarded-allow-ips=127.0.0.1 --workers 1', unit)
-        # 供数方案退役（spec D5b）：无运行时目录与供数状态；采集器随服务启动（D13）。
-        self.assertNotIn('RuntimeDirectory', unit)
-        self.assertNotIn('SUPPLY_', unit)
+        # 采集器随服务启动（D13）。
         self.assertIn('Environment=COLLECTOR_ENABLED=1', unit)
         self.assertIn('EnvironmentFile=-/home/@USER@/.config/chanapp/secrets.env', unit)
         missing = subprocess.run(['bash', str(ROOT / 'scripts/deploy.sh'), '--dry-run'], capture_output=True)

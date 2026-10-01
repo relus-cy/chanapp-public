@@ -1,8 +1,6 @@
 'use strict';
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync(require('node:path').join(__dirname, '../web/app.js'), 'utf8');
+const { runSlices } = require('./support/dom.js');
 async function refreshFailure(pending) {
   const nodes = {}, events = [];
   const context = {
@@ -16,9 +14,7 @@ async function refreshFailure(pending) {
     fetchAnalysisSample:()=>Promise.reject(new Error('sample offline')),
     closeAiPopup:()=>events.push('closed'),
   };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  var AI_SLOT_MAX ='), source.indexOf('  var ruleSwitchNote =')), context);
-  vm.runInContext(source.slice(source.indexOf('  function loadAnalysis('), source.indexOf('  // ---------- 数据口径条')), context);
+  runSlices(context, ['aiSlots', 'loadAnalysis']);
   context.loadAnalysis({manual:true,refresh:true});
   await new Promise(resolve=>setImmediate(resolve));
   assert.match(nodes.aiPanel.innerHTML,/完全分类不可用/);

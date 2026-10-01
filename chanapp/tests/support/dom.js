@@ -95,10 +95,21 @@ const slices = {
   indicators:  ['  function computeMAs()', '  function wireMaSeg()'],
   subInd:      ['  function rsiArr(', '  function lastVal('],
   subChart:    ['  // ---------- 副图指标', '  // ---------- 多级别共振角标'],
+  chartSetup:  ['  function chartOpts()', '  // ---------- 日间/夜间主题'],
   ruleControl: ['  function syncRuleControl()', '  // 依据卡浮层左右切换'],
   aiRefresh:   ["  el('aiRefresh').onclick", '  // 依据卡浮层左右切换'],
   formingLines:['    c.biSeries.setData(', '    c.zsOverlay.setBoxes('],
   fmtVol:      ['  // 成交量单位是股', '  // 图例/依据卡/AI 缓存行日期口径'],
+  loadWatchlist:   ['  function loadWatchlist(', '  // 左栏行情快照'],
+  boot:            ['  // ---------- 启动 ----------', '})();'],
+  aiSlots:         ['  var AI_SLOT_MAX =', '  var ruleSwitchNote ='],
+  loadAnalysis:    ['  function loadAnalysis(', '  // ---------- 数据口径条'],
+  locateRange:     ['  function locateEvidenceRange(', '  function locateBar('],
+  resonanceRender: ['  function renderResonance(', '  // ---------- 原生信号标注'],
+  renderAnalysis:  ['  function renderAnalysis(', '  // 后验置信徽章'],
+  analysisFreshness: ['  function updateAnalysisFreshness(', '  function queueAnalysis('],
+  channelSeries:   ['    c.channelSeries.forEach(', '    if (opts.resetRange !== false)'],
+  displayDataNote: ['  function displayDataNote(', '  function loadQuotes()'],
 };
 
 function sliceSource(name, srcOverride) {

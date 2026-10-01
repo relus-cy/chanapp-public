@@ -3,8 +3,7 @@
    迟到结果丢弃）、请求携带 adjust 与主图给出的分析令牌、409 整窗重载且不自动重发。
    身份 = 股票 + 成笔标准 + 提示范围 + 复权模式；aiPanel/helpers/etag/load 切片实跑。 */
 const assert = require('node:assert/strict');
-const vm = require('node:vm');
-const { appSource: source, tick, runSlices } = require('./support/dom.js');
+const { tick, runSlices } = require('./support/dom.js');
 const { appContext, okJson, errJson } = require('./support/app.js');
 
 const REANALYZE = '数据已更新，请重新分析';
@@ -15,8 +14,7 @@ const REANALYZE = '数据已更新，请重新分析';
   const context = {el: () => note, currentAnalysisIdentity: () => 'same',
     pendingAnalysis: {identity:'same',body:{data_versions:{day:'old',m60:'same'}}},
     activeChartVersion:{code:'a',freq:'day',data_version:'new'}};
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  function updateAnalysisFreshness('),source.indexOf('  function queueAnalysis(')),context);
+  runSlices(context, ['analysisFreshness']);
   assert.equal(typeof context.updateAnalysisFreshness,'function');
   context.updateAnalysisFreshness();
   assert.equal(note.hidden,false);

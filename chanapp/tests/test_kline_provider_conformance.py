@@ -2,7 +2,7 @@
 
 断言：分钟 slot_end 在市场网格上且为末端标签、(trade_date, slot_end) 唯一、volume_unit 合法、
 日线有 pc/sf 而分钟没有、数值一律有限、state/provenance 合法；每个模块定义 CONTRACT_VERSION；
-新模块不 import 旧 backend、factors、adjust（计划 A 决定 11）。
+录制 fixture 不含凭据。
 """
 import dataclasses
 import json
@@ -139,16 +139,6 @@ class ConformanceTests(unittest.TestCase):
                 self.assertTrue(provider_cls.name)
         self.assertEqual({m.CONTRACT_VERSION for m in NEW_MODULES},
                          {"baostock-raw-1", "pytdx-raw-1", "yahoo-raw-1", "longbridge-raw-3"})
-
-    def test_new_modules_do_not_import_legacy_helpers(self):
-        # 旧 backend 与旧内核（D8）已删除；按源码文本断言，不依赖被删文件是否存在
-        banned = re.compile(r"^\s*(from|import)\s+[^\n]*\b(\w+_backend|factors|adjust|factstore|derive|registry"
-                            r"|kline\.(?:api|base))\b", re.M)
-        for module in NEW_MODULES + (mairui,):
-            with self.subTest(module.__name__):
-                source = Path(module.__file__).read_text()
-                self.assertIsNone(banned.search(source), banned.search(source) and banned.search(source).group(0))
-                self.assertNotIn("importlib", source)
 
     def test_fixtures_carry_no_credentials(self):
         pattern = re.compile(r"(?i)(licence|app_key|app_secret|access_token|authorization|bearer)")

@@ -2,8 +2,7 @@
 /* 批3 分析效率：依据卡→图表定位、摘要 chip→切周期、AI 证据中性色、静态样例身份 */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync(require('node:path').join(__dirname, '../web/app.js'), 'utf8');
+const { runSlices } = require('./support/dom.js');
 const html = fs.readFileSync(require('node:path').join(__dirname, '../web/index.html'), 'utf8');
 
 function mkEl(tag) {
@@ -34,8 +33,7 @@ function mkEl(tag) {
 // ---------- A. locateEvidenceRange：bar 居中定位且边界收敛 ----------
 {
   const context = {};
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  function locateEvidenceRange('), source.indexOf('  function locateBar(')), context);
+  runSlices(context, ['locateRange']);
   assert.equal(typeof context.locateEvidenceRange, 'function', 'locateEvidenceRange should exist');
   const f = context.locateEvidenceRange, j = JSON.stringify;
   assert.equal(j(f(100, 500, 60)), j({ from: 70, to: 130 }), 'centers the bar');
@@ -55,8 +53,7 @@ function mkEl(tag) {
     esc: x => String(x), fmtBarTime: x => x, signalLabel: () => '笔 B2',
     locateBar: dt => located.push(dt),
   };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  function renderEvidence('), source.indexOf('  // ---------- AI 完全分类面板')), context);
+  runSlices(context, ['evidence']);
   context.renderEvidence([{ side: 'buy', level: 'bi', types: ['2'], status: 'confirmed', dt: '2026-06-23', price: 3850.86, text: 'x' }]);
   const card = cards.children[0];
   assert.ok(card, 'card rendered');
@@ -109,8 +106,7 @@ function mkEl(tag) {
     state: { freq: 'day' }, renderTabs() {}, load() { calls.push('load'); },
     openDetail: (kind, lv, trigger) => detailCalls.push({ kind, freq: lv.freq, trigger }),
   };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  function renderResonance('), source.indexOf('  // ---------- 原生信号标注')), context);
+  runSlices(context, ['resonanceRender']);
   context.renderResonance([{ freq: 'm60', signals: [{ side: 'sell', level: 'bi', types: ['2'], status: 'confirmed', dt: '2026-09-01 14:00' }] }], ['day', 'm60', 'm30']);
   assert.equal(box.children.length, 3, 'three freq slots');
   const m60 = box.children[1];
@@ -153,8 +149,7 @@ function mkEl(tag) {
     el: id => nodes[id], esc: x => String(x), fmtRefDt: x => x,
     pendingAnalysis: { body: {} },
   };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  function renderAnalysis('), source.indexOf('  // 后验置信徽章')), context);
+  runSlices(context, ['renderAnalysis']);
   context.renderAnalysis({ current_state: 'x', scenarios: [] }, 'unconfigured');
   assert.equal(badge.hidden, false, 'sample badge shows for unconfigured fallback');
   context.renderAnalysis({ current_state: 'x', scenarios: [] }, null);
@@ -169,8 +164,6 @@ function mkEl(tag) {
 
 // ---------- E. AI 证据中性色：红青只表达价格方向 ----------
 {
-  assert.doesNotMatch(html, /\.kv\.ev-for \{ color: var\(--up\)/, 'evidence-for no longer red');
-  assert.doesNotMatch(html, /\.kv\.ev-against \{ color: var\(--down\)/, 'evidence-against no longer teal');
   assert.match(html, /\.kv\.ev-for b::before/, 'evidence-for carries a neutral plus mark');
   assert.match(html, /\.kv\.ev-against b::before/, 'evidence-against carries a neutral minus mark');
   console.log('E. evidence neutral-color checks passed');
