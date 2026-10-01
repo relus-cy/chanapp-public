@@ -1,8 +1,6 @@
 """结构计算缓存：命中/末bar失效/LRU 淘汰 + /api/chart→/api/analysis 复用集成。"""
 import csv
 import json
-import os
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -10,6 +8,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from chanapp.engine import compute_cache, structure as real_structure
+from chanapp.tests import cache_support, facade_support
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sh000001_day_qfq.csv"
 
@@ -49,35 +48,27 @@ class TestChartAnalysisReuse(unittest.TestCase):
 
     def setUp(self):
         compute_cache.clear()
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        os.environ["ANALYSIS_CACHE_DIR"] = self._tmp.name
-        self.addCleanup(os.environ.pop, "ANALYSIS_CACHE_DIR")
-        # 结论记录会写 CACHE_DIR/kline.sqlite：隔离 CACHE_DIR，防 .cache/ 真实库被测试写入
-        # 公开演示门面无 CACHE_DIR（无真实缓存写），此时跳过隔离
-        from chanapp.engine import data as engine_data
-        if hasattr(engine_data, "CACHE_DIR"):
-            cache_patch = mock.patch.object(engine_data, "CACHE_DIR", Path(self._tmp.name))
-            cache_patch.start()
-            self.addCleanup(cache_patch.stop)
-        os.environ["WARMER_ENABLED"] = "0"
-        self.addCleanup(os.environ.pop, "WARMER_ENABLED")
-        os.environ["LLM_API_KEY"] = "k"
-        self.addCleanup(os.environ.pop, "LLM_API_KEY")
+        tmp = cache_support.temp_dir(self)
+        cache_support.set_env(self, "ANALYSIS_CACHE_DIR", tmp)
+        cache_support.isolate_cache_dir(self, tmp)
+        cache_support.set_env(self, "COLLECTOR_ENABLED", "0")
+        cache_support.set_env(self, "LLM_API_KEY", "k")
         from chanapp.api.main import app
         self.c = TestClient(app)
 
     def test_analysis_reuses_chart_computation(self):
         dataset = {"bars": load_bars(), "meta": {"source": "fixture"}}
         payload = json.dumps({"current_state": "s", "scenarios": []})
-        with mock.patch("chanapp.api.main.engine_data.get_bars", return_value=dataset), \
-             mock.patch("chanapp.api.analysis.engine_data.get_bars", return_value=dataset), \
+        with facade_support.fake_facade(return_value=dataset), \
              mock.patch("chanapp.api.analysis.engine_llm.analyze", return_value=payload), \
              mock.patch("chanapp.engine.structure.compute_structure",
                         wraps=real_structure.compute_structure) as m:
             r1 = self.c.get("/api/chart?code=sh000001&freq=day")
             self.assertEqual(r1.status_code, 200)
-            r2 = self.c.get("/api/analysis?code=sh000001&freq=day")
+            # AI 请求带主图给出的 analysis_tokens（与共振同一次读取）
+            r2 = self.c.get("/api/analysis", params={
+                "code": "sh000001", "freq": "day",
+                "tokens": json.dumps(r1.json()["meta"]["analysis_tokens"])})
             self.assertEqual(r2.status_code, 200)
         # chart 算 day + 共振 m60/m30 共 3 次；analysis 命中缓存未重算（否则应为 4 次）
         self.assertEqual(m.call_count, 3)

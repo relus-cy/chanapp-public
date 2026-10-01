@@ -1,11 +1,12 @@
 'use strict';
+/* 成笔标准/提示范围 UI：真实切片实跑 buildMarkers/signalLabel/syncRuleControl/
+   acceptsRule/loadAnalysis；请求身份参数由 loadEnv 实测 URL 断言（不再对源码正则）。 */
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync(require('node:path').join(__dirname, '../web/app.js'), 'utf8');
-const context = {P:{up:'#ff0000',down:'#0000ff',gold:'#aaaa00'},toTime:x=>x,hexA:(c,a)=>c+':'+a};
-vm.createContext(context);
-vm.runInContext(source.slice(source.indexOf('  function signalLabel('),source.indexOf('  // ---------- 依据卡')),context);
+const { appSource, tick, runSlices } = require('./support/dom.js');
+const { appContext, loadEnv } = require('./support/app.js');
+
+const context = appContext({ P: { up: '#ff0000', down: '#0000ff', gold: '#aaaa00' }, hexA: (c, a) => c + ':' + a });
+runSlices(context, ['markers']);
 const points = [
  {side:'buy',level:'bi',types:['1p','2'],status:'confirmed',dt:'2026-01-01'},
  {side:'sell',level:'seg',types:['3a','3b'],status:'provisional',dt:'2026-01-01'},
@@ -19,11 +20,31 @@ assert.equal(markers[1].color,'#aaaa00:0.45');
 assert.equal(markers[2].text,'~B2s');
 assert.equal(markers[2].position,'belowBar');
 assert.equal(context.signalLabel(points[1]),'段 S3a/S3b · 形成中');
-assert.match(source,/rule_profile=' \+ encodeURIComponent\(profile\)/);
-assert.doesNotMatch(source,/forming_signal/);
-assert.match(source,/signal_scope=' \+ encodeURIComponent\(scope\)/);
-assert.match(source,/schema_version === 'chanpy_v2'/);
+assert.doesNotMatch(appSource,/forming_signal/);  // 客户端无 forming 字段，若有引入须显式审（无行为替代，保留）
 console.log('native multi-type signal and rule profile UI checks passed');
+
+// 请求身份参数行为化：load()/loadAnalysis 发出的 URL 须带当前 rule_profile/signal_scope
+{
+  const env = loadEnv();
+  env.load();
+  assert.ok(env._harness.pending[0].url.includes('rule_profile=strict'), 'load URL 携带成笔标准');
+  assert.ok(env._harness.pending[0].url.includes('signal_scope=expanded'), 'load URL 携带提示范围');
+  env.state.ruleProfile = 'relaxed'; env.state.signalScope = 'standard';
+  env.load();
+  assert.ok(env._harness.pending[1].url.includes('rule_profile=relaxed'), '切换后 URL 携带新标准');
+  assert.ok(env._harness.pending[1].url.includes('signal_scope=standard'), '切换后 URL 携带新范围');
+}
+// acceptsRule 行为：chanpy_v2 schema + 非空 calculation_id 是硬门（正则断言已有等价行为替代）
+{
+  const env = appContext({ state: { ruleProfile: 'strict', signalScope: 'expanded' } });
+  runSlices(env, ['aiPanel']);
+  const ok = { rule_profile: 'strict', signal_scope: 'expanded', schema_version: 'chanpy_v2', calculation_id: 'x' };
+  assert.equal(env.acceptsRule(ok, 'strict', 'expanded'), true);
+  assert.equal(env.acceptsRule({ ...ok, schema_version: 'chanpy_v1' }, 'strict', 'expanded'), false,
+    '旧 schema 响应不得被接受');
+  assert.equal(env.acceptsRule({ ...ok, rule_profile: 'relaxed' }, 'strict', 'expanded'), false);
+  assert.equal(env.acceptsRule({ ...ok, calculation_id: '' }, 'strict', 'expanded'), false);
+}
 
 const nodes = {}, saved = {}, range = {from:10,to:20};
 const scopeBtns = [{dataset:{scope:'standard'},classList:{toggle(){}}},{dataset:{scope:'expanded'},classList:{toggle(){}}}];
@@ -42,12 +63,12 @@ Object.assign(context, {
  ruleSwitchNote:null,
  renderEvidence(items){context.evidence=items;},load(){context.loads=(context.loads||0)+1;}
 });
-vm.runInContext(source.slice(source.indexOf('  function syncRuleControl()'),source.indexOf("  el('aiRefresh').onclick")),context);
+runSlices(context, ['ruleControl']);
 const oldSlot=context.analysisSlots.old;
 nodes.__ruleHandler({target:{closest:()=>ruleBtns[1]}});
 assert.equal(saved['chanapp-rule-profile'],'relaxed');
 assert.equal(context.state.code,'a'); assert.equal(context.state.freq,'m30');
-assert.equal(context.supplyRange.range,range);
+assert.equal(context.restoreRange.range,range);
 assert.equal(context.pendingAnalysis,null); assert.equal(context.analysisIdentity,null,'switch hands the panel to the new rule identity');
 assert.equal(oldSlot.abort.signal.aborted,false,'switch keeps the old identity request alive for its slot');
 assert.equal(context.evidence.length,0,'switch clears the evidence model as well as the displayed card');
@@ -65,8 +86,7 @@ const lineContext = {
                   xd:[{dt0:'a',dt1:'b',y0:1,y1:2},{dt0:'x',dt1:'y',y0:5,y1:9,forming:true},{dt0:'p',dt1:'q',y0:7,y1:4,forming:true}]}},
  segsToPoints:x=>x, toTime:x=>x, P:{goldA:'g',biForming:'bf'},
  LightweightCharts:{LineSeries:function(){},LineStyle:{Dashed:1}}};
-vm.createContext(lineContext);
-vm.runInContext(source.slice(source.indexOf('    c.biSeries.setData('),source.indexOf('    c.zsOverlay.setBoxes(data.structure.zs')),lineContext);
+runSlices(lineContext, ['formingLines']);
 assert.equal(lineContext.c.biSeries.v.length,1);
 assert.equal(lineContext.c.xdSeries.v.length,1);
 assert.equal(lineContext.c.formingBiSegs.length,1);
@@ -84,17 +104,17 @@ for (const profile of ['strict','relaxed']) {
     assert.equal(context.state.signalScope,scope); assert.equal(context.state.ruleProfile,profile);
     assert.equal(saved['chanapp-signal-scope'],scope); assert.equal(context.analysisIdentity,null);
     assert.equal(slot.abort.signal.aborted,false,'scope switch keeps the old identity request alive for its slot');
-    assert.equal(context.supplyRange.range,range); assert.match(nodes.aiPanel.innerHTML,/提示范围已切换/);
+    assert.equal(context.restoreRange.range,range); assert.match(nodes.aiPanel.innerHTML,/提示范围已切换/);
   }
 }
 console.log('four orthogonal rule and scope selections preserve range and hand the AI panel over');
 
 const evidenceCards=[];
 context.document={createElement:()=>({dataset:{},setAttribute(){},focus(){}})};
-context.esc=x=>String(x); context.fmtBarTime=x=>x;
+context.fmtBarTime=x=>x;
 context.el('cards').appendChild=card=>evidenceCards.push(card);
 nodes.cards.contains=()=>false;
-vm.runInContext(source.slice(source.indexOf('  function renderEvidence('),source.indexOf('  // ---------- AI 完全分类面板')),context);
+runSlices(context, ['evidence']);
 context.renderEvidence([{...points[0],price:10,text:'力度算法：MACD同向柱峰值。原生力度比 1.2（增强）。力度仅作标注，不作硬过滤。'}]);
 assert.equal(evidenceCards.length,1,'stronger native point remains visible');
 assert.match(evidenceCards[0].innerHTML,/原生力度比 1.2（增强）/);
@@ -102,10 +122,9 @@ assert.match(evidenceCards[0].innerHTML,/MACD同向柱峰值/);
 assert.equal(context.buildMarkers([{...points[0],strength:{value:1.2,state:'stronger'}}])[0].text,'B1p/B2','strength remains in evidence, not short chart label');
 console.log('native strength evidence text renders without filtering or marker label inflation');
 
-const stateInit=source.slice(source.indexOf('  var state ='),source.indexOf('  (function () {\n    var qs'));
 for (const stored of [null,'standard','expanded','invalid']) {
-  const initial={localStorage:{getItem:key=>key==='chanapp-signal-scope'?stored:null}};
-  vm.createContext(initial); vm.runInContext(stateInit,initial);
+  const initial = appContext({ localStorage: { getItem: key => key === 'chanapp-signal-scope' ? stored : null } });
+  runSlices(initial, ['stateInit']);
   assert.equal(initial.state.signalScope,stored==='standard'?'standard':'expanded');
   assert.equal(initial.state.ruleProfile,'strict');
 }

@@ -11,11 +11,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from urllib.parse import quote
+
 from fastapi.testclient import TestClient
 
 from chanapp.engine import llm as engine_llm
+from chanapp.tests import facade_support
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sh000001_day_qfq.csv"
+TOKENS = quote(facade_support.tokens())
 
 
 def load_bars():
@@ -59,13 +63,12 @@ class TestAnalysisFailureCache(unittest.TestCase):
     def test_failure_writes_cache_and_suppresses_retry(self):
         """analyze 抛 LLMError → 502 + 失败条目落盘；TTL 内第二次直接 502 不重试。"""
         c = self._client()
-        with mock.patch("chanapp.api.analysis.engine_data.get_bars",
-                        return_value=self._dataset()), \
+        with facade_support.fake_facade(return_value=self._dataset()), \
              mock.patch("chanapp.api.analysis.engine_llm.analyze",
                         side_effect=engine_llm.LLMError("deepseek down")) as an:
-            r1 = c.get("/api/analysis?code=sh000001&freq=day")
+            r1 = c.get(f"/api/analysis?code=sh000001&freq=day&tokens={TOKENS}")
             self.assertEqual(r1.status_code, 502)
-            r2 = c.get("/api/analysis?code=sh000001&freq=m30")
+            r2 = c.get(f"/api/analysis?code=sh000001&freq=m30&tokens={TOKENS}")
             self.assertEqual(r2.status_code, 502)
             self.assertEqual(an.call_count, 1)  # 第二次未重试
 
@@ -79,34 +82,32 @@ class TestAnalysisFailureCache(unittest.TestCase):
     def test_stale_failure_retries(self):
         """失败条目过期（≥600s）→ 恢复重试 LLM。"""
         c = self._client()
-        with mock.patch("chanapp.api.analysis.engine_data.get_bars",
-                        return_value=self._dataset()), \
+        with facade_support.fake_facade(return_value=self._dataset()), \
              mock.patch("chanapp.api.analysis.engine_llm.analyze",
                         side_effect=engine_llm.LLMError("deepseek down")) as an:
-            self.assertEqual(c.get("/api/analysis?code=sh000001&freq=day").status_code, 502)
+            self.assertEqual(c.get(f"/api/analysis?code=sh000001&freq=day&tokens={TOKENS}").status_code, 502)
             self.assertEqual(an.call_count, 1)
             # 把失败条目的 fetched_at 改老 601s
             f = self._cache_files()[0]
             entry = json.loads(f.read_text(encoding="utf-8"))
             entry["fetched_at"] = time.time() - 601
             f.write_text(json.dumps(entry), encoding="utf-8")
-            self.assertEqual(c.get("/api/analysis?code=sh000001&freq=day").status_code, 502)
+            self.assertEqual(c.get(f"/api/analysis?code=sh000001&freq=day&tokens={TOKENS}").status_code, 502)
             self.assertEqual(an.call_count, 2)  # 过期后重试
 
     def test_success_overwrites_failure_entry(self):
         """失败后 LLM 恢复：正常结果覆写同一哈希文件，后续命中正常缓存。"""
         c = self._client()
         ok_payload = json.dumps({"current_state": "s", "scenarios": []})
-        with mock.patch("chanapp.api.analysis.engine_data.get_bars",
-                        return_value=self._dataset()), \
+        with facade_support.fake_facade(return_value=self._dataset()), \
              mock.patch("chanapp.api.analysis.engine_llm.analyze",
                         side_effect=[engine_llm.LLMError("down"), ok_payload]) as an:
-            self.assertEqual(c.get("/api/analysis?code=sh000001&freq=day").status_code, 502)
+            self.assertEqual(c.get(f"/api/analysis?code=sh000001&freq=day&tokens={TOKENS}").status_code, 502)
             f = self._cache_files()[0]
             entry = json.loads(f.read_text(encoding="utf-8"))
             entry["fetched_at"] = time.time() - 601  # 让失败条目过期
             f.write_text(json.dumps(entry), encoding="utf-8")
-            r = c.get("/api/analysis?code=sh000001&freq=day")
+            r = c.get(f"/api/analysis?code=sh000001&freq=day&tokens={TOKENS}")
             self.assertEqual(r.status_code, 200)
             self.assertEqual(r.json()["status"], "ok")
             entry2 = json.loads(self._cache_files()[0].read_text(encoding="utf-8"))

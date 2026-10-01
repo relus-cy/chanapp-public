@@ -9,7 +9,7 @@
 document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') || 'light';
 </script>
 <style>
-  /* ---------- tokens：日间（默认）/ 夜间，口径同 docs/v1.2.0-demo ---------- */
+  /* ---------- tokens：日间（默认）/ 夜间 ---------- */
   :root, :root[data-theme="light"] {
     --bg: #f5f4f0;
     --panel: #ffffff;
@@ -74,8 +74,34 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .freq button:active { transform: scale(.96); }
   @media (hover:hover) { .freq button:hover { color: var(--fg); } }
   .freq button.active { color: var(--gold); background: var(--raise); }
+  .freq button[hidden] { display: none; }
+  .freq button:disabled { cursor: not-allowed; }
+  .freq button:disabled:not(.active) { opacity: .45; }
   .freq { flex-shrink: 0; }
+  .period-dialog { color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 24px; width: min(480px, calc(100vw - 32px)); }
+  .period-dialog::backdrop { background: rgba(0,0,0,.35); }
+  .period-dialog h2 { font-size: 17px; margin: 0 0 12px; }
+  .period-dialog p { font-size: 12px; color: var(--faint); line-height: 1.7; }
+  .period-option { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .period-option small { color: var(--faint); margin-left: auto; max-width: 70%; }
+  .period-option:has(input:disabled) { color: var(--faint); }
+  .period-option input { accent-color: var(--gold); }
+  .period-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 16px; }
+  #periodError { color: var(--up); }
+  #center.period-empty #chart, #center.period-empty #ohlc, #center.period-empty #axisAnchor,
+  #center.period-empty #subWrap, #rail.period-empty #railScroll, #rail.period-empty #cardsDock { visibility: hidden; }
+
   #status { min-width: 0; overflow: hidden; white-space: nowrap; margin-left: auto; color: var(--dim); font-size: 12px; font-family: var(--mono); }
+  /* 页头文字钮（加入自选 / 重拉）：与主题钮同高同描边 */
+  .hd-btn {
+    height: 24px; padding: 0 9px; flex-shrink: 0; background: transparent; cursor: pointer;
+    border: 1px solid var(--line2); border-radius: var(--radius-s); color: var(--dim); font-size: 12px; white-space: nowrap;
+    transition: transform .1s ease-out, color .1s ease-out, border-color .1s ease-out;
+  }
+  .hd-btn[hidden] { display: none; }
+  .hd-btn:active { transform: scale(.96); }
+  @media (hover:hover) { .hd-btn:hover { color: var(--gold); border-color: var(--gold-dim); } }
+  #trackBtn { color: var(--gold); border-color: var(--gold-line); }
   #themeBtn {
     position: relative; width: 30px; height: 24px; padding: 0;
     background: transparent; border: 1px solid var(--line2); border-radius: var(--radius-s);
@@ -136,13 +162,13 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   body.sb-rail .sb-top { padding: 0; justify-content: center; }
   body.sb-rail #sidebar .sb-top .brand { display: none; }
   /* 窄栏与展开纵向几何逐行等高：展开只是水平裁切揭示 + 文字淡入，不做任何滚动补偿。
-     不变量：#wlForm、.wl-head 与底部 .sb-supply 都占位隐藏；行盒 = padding 24 + 20.15 + 19 + margin 3 = 66.15px，两态一致。
+     不变量：#wlForm 与 .wl-head 都占位隐藏；行盒 = padding 24 + 20.15 + 19 + margin 3 = 66.15px，两态一致。
      占位层内再放 rail 版内容（visibility 显隐与槽位同机制）：.wl-head 槽位叠放自选计数，
      #wlForm 槽位叠放搜索/添加钮；两份内容互斥显隐，槽位总高两态不变。 */
   body.sb-rail .wl-head { visibility: hidden; }
   /* 保留控件占位：展开时控件不能盖住窄栏中正被悬停的股票。 */
-  body.sb-rail #wlForm, body.sb-rail .sb-supply { visibility: hidden; pointer-events: none; }
-  #wlForm, .sb-supply { width: calc(var(--expanded-width) - 1px); }
+  body.sb-rail #wlForm { visibility: hidden; pointer-events: none; }
+  #wlForm { width: calc(var(--expanded-width) - 1px); }
   .wl-head, #wlForm { position: relative; }
   /* rail 版内容不排版占高（absolute 出流），槽位高度仍由展开版行盒决定：等高不变量由结构保证而非数值复刻 */
   .wl-count-rail, #wlRailBtn { position: absolute; visibility: hidden; }
@@ -183,7 +209,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   body.sb-anim-in #sidebar .wl-head,
   body.sb-anim-in #sidebar .sb-top .brand-copy,
   body.sb-anim-in #sidebar #wlForm { animation: sbFadeIn .28s ease-out .08s both; }
-  /* 品牌块（皮肤 web-next .side-top）：金色软底土星 mark + 双行文字；图钉钮原位保留 */
+  /* 品牌块（皮肤原型 web-next/index.html 的 .side-top；原型已删除，见 git e811a6d）：金色软底土星 mark + 双行文字；图钉钮原位保留 */
   .sb-top {
     flex: 0 0 64px; height: 64px; display: flex; align-items: center; justify-content: space-between;
     padding: 0 8px 0 18px;  /* 无分隔线，与 ChatGPT 边栏头部一致 */
@@ -220,19 +246,6 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   body.sb-rail #sidebarPin svg { width: 22px; height: 22px; }
   body.sb-rail #sidebarPin .sb-chev { transform: rotate(180deg); }
   #sidebarPin.on { color: var(--gold); }
-  .sb-supply { flex-shrink: 0; border-top: 1px solid var(--line); }
-  .sb-supply summary {
-    display: flex; align-items: center; gap: 6px; height: 35px; padding: 0 12px; cursor: pointer;
-    font-size: 11px; color: var(--faint); letter-spacing: .12em; list-style: none; user-select: none;
-  }
-  .sb-supply summary::-webkit-details-marker { display: none; }
-  .sb-supply summary::before {
-    content: ''; width: 0; height: 0; border: 4px solid transparent; border-left-color: currentColor;
-    transition: transform .12s ease-out;
-  }
-  .sb-supply[open] summary::before { transform: rotate(90deg); }
-  .sb-supply summary .sb-scheme { margin-left: auto; color: var(--dim); letter-spacing: 0; font-family: var(--mono); }
-  .sb-supply .supply-control { padding: 0 12px 10px; }
 
   /* 窄窗：侧栏变浮层抽屉，半透明毛玻璃浮于图表之上，保持浮动卡片形态 */
   @media (max-width: 1100px) {
@@ -247,13 +260,25 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     #page, body.sb-open #page, body.sb-rail #page { margin-left: 0; }
   }
 
-  /* 「自选股 NN」标签行（皮肤 web-next .side-label）：左标题右计数，列表渲染处更新 */
+  /* 「自选股 NN」标签行（皮肤原型 .side-label）：左标题右计数，列表渲染处更新 */
   #sidebar .wl-head {
     padding: 0 20px 8px; display: flex; align-items: center; justify-content: space-between;
     font-size: 11px; color: var(--dim); white-space: nowrap;
   }
   #sidebar .wl-count { font-size: 10px; color: var(--faint); }
-  /* 自选股卡片（皮肤 web-next .watch-item 值映射到生产 .item 结构） */
+  /* 「自选股 / 最近查看」切换：沿用标签行 11px 行盒，不加内边距，保持窄栏/展开两态槽位等高 */
+  #sidebar .wl-tabs { display: flex; gap: 12px; }
+  #sidebar .wl-tabs button {
+    padding: 0; border: 0; background: none; cursor: pointer; font-size: 11px; line-height: inherit; color: var(--faint);
+  }
+  #sidebar .wl-tabs button.on { color: var(--fg); }
+  @media (hover:hover) { #sidebar .wl-tabs button:hover { color: var(--dim); } #sidebar .wl-tabs button.on:hover { color: var(--fg); } }
+  #sidebar .wl-empty { padding: 12px 11px; font-size: 11px; color: var(--faint); }
+  #sidebar .item .tag-watched {
+    font-size: 10px; color: var(--gold); border: 1px solid var(--gold-line);
+    border-radius: 3px; padding: 0 3px; margin-left: 4px; line-height: 14px; white-space: nowrap;
+  }
+  /* 自选股卡片（皮肤原型 .watch-item 值映射到生产 .item 结构） */
   #sidebar .item {
     padding: 12px 11px; margin-bottom: 3px; border-radius: var(--radius-m); position: relative;
     cursor: pointer; transition: background-color 140ms ease-out; overflow: hidden;
@@ -266,32 +291,33 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #sidebar .item .chg { font-family: var(--mono); font-size: 11px; margin-left: auto; flex-shrink: 0; white-space: nowrap; }
   #sidebar .item .row2 { display: flex; justify-content: space-between; align-items: center; font: 10px/13px var(--mono); color: var(--faint); margin-top: 6px; height: 13px; }
   #sidebar .item .px { color: var(--dim); font-size: 11px; }
-  #sidebar .up, #f10Sec .up, #flowSec .up, .legend .up { color: var(--up); }
-  #sidebar .down, #f10Sec .down, #flowSec .down, .legend .down { color: var(--down); }
-  #sidebar .flat, #f10Sec .flat, #flowSec .flat { color: var(--dim); }
+  #sidebar .up, #quoteSec .up, #f10Sec .up, #flowSec .up, .legend .up { color: var(--up); }
+  #sidebar .down, #quoteSec .down, #f10Sec .down, #flowSec .down, .legend .down { color: var(--down); }
+  #sidebar .flat, #quoteSec .flat, #f10Sec .flat, #flowSec .flat { color: var(--dim); }
   #sidebar .item .tag-limit {
     font-size: 10px; color: var(--up); border: 1px solid var(--up);
     border-radius: 3px; padding: 0 3px; margin-left: 4px; line-height: 14px; white-space: nowrap;
   }
   #sidebar .item .btns { display: flex; align-items: center; gap: 1px; flex-shrink: 0; }
   /* 星/删钮默认隐身（透明度方案，键盘仍可聚焦）：hover / focus-within / 选中态显现；触屏常显 */
-  #sidebar .item .del, #sidebar .item .star {
+  #sidebar .item .del, #sidebar .item .star, #sidebar .item .add {
     display: flex; align-items: center; justify-content: center;
     background: transparent; border: none; color: var(--dim); border-radius: 4px;
     cursor: pointer; padding: 4px; opacity: 0; pointer-events: none;
     transition: opacity .14s ease-out;
   }
-  #sidebar .item .del svg, #sidebar .item .star svg { width: 12px; height: 12px; }
+  #sidebar .item .del svg, #sidebar .item .star svg, #sidebar .item .add svg { width: 12px; height: 12px; }
   #sidebar .item .star.on svg { fill: currentColor; }
-  #sidebar .item:hover .del, #sidebar .item:hover .star,
-  #sidebar .item:focus-within .del, #sidebar .item:focus-within .star,
-  #sidebar .item.active .del, #sidebar .item.active .star { opacity: 1; pointer-events: auto; }
-  @media (hover: none) { #sidebar .item .del, #sidebar .item .star { opacity: 1; pointer-events: auto; } }
+  #sidebar .item:hover .del, #sidebar .item:hover .star, #sidebar .item:hover .add,
+  #sidebar .item:focus-within .del, #sidebar .item:focus-within .star, #sidebar .item:focus-within .add,
+  #sidebar .item.active .del, #sidebar .item.active .star, #sidebar .item.active .add { opacity: 1; pointer-events: auto; }
+  @media (hover: none) { #sidebar .item .del, #sidebar .item .star, #sidebar .item .add { opacity: 1; pointer-events: auto; } }
+  #sidebar .item .add:hover { color: var(--gold); }
   #sidebar .item:focus-visible { outline: 1px solid var(--gold); outline-offset: -1px; }
   #sidebar .item .del:hover { color: var(--up); }
   #sidebar .item .star.on { opacity: 1; pointer-events: auto; color: var(--gold); }
   #sidebar .item .star:hover { color: var(--gold); }
-  /* 搜索/添加框（皮肤 web-next .side-search）：圆角面板底内嵌左图标；候选浮层（.side-cands）向下展开 */
+  /* 搜索/添加框（皮肤原型 .side-search）：圆角面板底内嵌左图标；候选浮层（.side-cands）向下展开 */
   #sidebar .wl-add {
     margin: 10px 12px 18px; display: flex; align-items: center; gap: 8px; position: relative;
     border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--panel); padding: 7px 10px;
@@ -316,6 +342,15 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #sidebar .wl-drop .cand:hover, #sidebar .wl-drop .cand.active { background: var(--raise); }
   #sidebar .wl-drop .cand .c-code { color: var(--faint); font-size: 10px; font-family: var(--mono); flex-shrink: 0; }
   #sidebar .wl-drop .cand.none { color: var(--faint); cursor: default; font-size: 11px; }
+  /* 候选行默认动作是查看；右侧「加自选」是显式加入，已在自选的只标注 */
+  #sidebar .wl-drop .cand .c-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #sidebar .wl-drop .cand .c-code { margin-left: auto; }
+  #sidebar .wl-drop .cand .c-add {
+    margin-left: 6px; flex-shrink: 0; padding: 1px 6px; font-size: 10px; cursor: pointer;
+    background: transparent; color: var(--dim); border: 1px solid var(--line2); border-radius: 3px;
+  }
+  @media (hover:hover) { #sidebar .wl-drop .cand .c-add:not(:disabled):hover { color: var(--gold); border-color: var(--gold-line); } }
+  #sidebar .wl-drop .cand .c-add:disabled { cursor: default; color: var(--faint); border-color: transparent; }
   #sidebar .wl-drop .cand.none:hover { background: none; }
 
   /* 切换标的/周期/规则后、新数据到达前：旧内容降为旧数据标记（失败时保留至重试成功） */
@@ -394,6 +429,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   @media (hover:hover) { .rule-option button:hover { color: var(--fg); } }
   .rule-option button.active { background: var(--panel); color: var(--gold); box-shadow: 0 1px 3px rgba(0,0,0,.06); }
   .resonance { flex: 1; display: flex; gap: 6px; align-items: center; min-width: 0; height: 25px; overflow: hidden; }
+  .resonance .res-note { flex-shrink: 0; color: var(--faint); font-size: 11px; white-space: nowrap; }
   .res-chip {
     display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--mono);
     background: var(--raise); border: 1px solid transparent; border-radius: var(--radius-s);
@@ -457,19 +493,21 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
 
   /* ---------- right rail ---------- */
   #rail { width: 322px; border-left: 1px solid var(--line); background: var(--panel); flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; position: relative; }
-  /* F10 摘要与资金流固定在右栏顶部，只有 AI 区滚动 */
-  #rail > #f10Sec, #rail > #flowSec { flex-shrink: 0; }
+  /* 价格卡、F10 摘要与资金流固定在右栏顶部，只有 AI 区滚动；价格卡独立于 F10（F10 慢或失败不挡价格） */
+  #rail > #quoteSec, #rail > #f10Sec, #rail > #flowSec { flex-shrink: 0; }
+  #quoteSec + #f10Sec { padding-top: 0; }
   #railScroll { flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--line); }
   .sec { padding: 12px; }
   .sec + .sec { padding-top: 16px; }
   .sec > h3, .sec .ai-head h3 { margin: 0 0 6px; font-size: 11px; color: var(--faint); font-weight: 600; letter-spacing: .12em; }
 
   /* F10 摘要 */
-  #f10Sec .f10-top { display: flex; justify-content: space-between; align-items: baseline; }
-  #f10Sec .nm { font-size: 16px; font-weight: 600; }
-  #f10Sec .cd { color: var(--faint); font-family: var(--mono); font-size: 11px; margin-left: 6px; }
-  #f10Sec .px { font-family: var(--mono); font-size: 18px; font-weight: 600; }
-  #f10Sec .chg { font-family: var(--mono); font-size: 12px; margin-left: 6px; }
+  #quoteSec .f10-top { display: flex; justify-content: space-between; align-items: baseline; }
+  #quoteSec .nm { font-size: 16px; font-weight: 600; }
+  #quoteSec .cd { color: var(--faint); font-family: var(--mono); font-size: 11px; margin-left: 6px; }
+  #quoteSec .px { font-family: var(--mono); font-size: 18px; font-weight: 600; }
+  #quoteSec .px.stale { opacity: .55; }
+  #quoteSec .chg { font-family: var(--mono); font-size: 12px; margin-left: 6px; }
   #f10Sec .tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
   .chip {
     font-size: 11px; color: var(--dim); background: var(--raise); border: 1px solid transparent; border-radius: 3px;
@@ -614,15 +652,8 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #cardsDock #cards { flex: 1; min-width: 0; }
   #cardsDock #cards .card { margin: 0; }
 
-  .supply-control { padding: 10px; font-size: 12px; }
-  .supply-actions { display: flex; gap: 6px; margin: 6px 0; }
-  .supply-actions select, .supply-actions button { min-width: 0; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line2); border-radius: var(--radius-s); padding: 3px 6px; }
-  .supply-actions select { flex: 1; }
-  .supply-actions button:active { transform: scale(.96); }
-  .supply-actions :disabled { opacity: .5; }
-  .supply-control p { margin: 0; color: var(--dim); overflow-wrap: anywhere; }
-  .supply-actions select:focus-visible { outline: 1px solid var(--gold); }
-  #center.supply-loading #chart, #center.supply-loading #sub, #center.supply-loading #axisAnchor { visibility: hidden; }
+  /* 规则切换重载期间先隐藏旧图，新图提交后按原时间区间恢复 */
+  #center.chart-reloading #chart, #center.chart-reloading #sub, #center.chart-reloading #axisAnchor { visibility: hidden; }
   /* ---------- footer ---------- */
   footer {
     height: 36px; padding: 0 14px; align-items: center; border-top: 1px solid var(--line); background: var(--panel);
@@ -657,7 +688,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     #center .resonance, #center #chartWrap, #rail, #aiPop { transition: none; }
     .rules-pop, .soft-btn, .rule-option button, #ruleSummary { transition: none; }
     .rules-pop.open { animation: none; }
-    #sidebar .item, #sidebar .wl-add, #sidebar .item .del, #sidebar .item .star { transition: none; }
+    #sidebar .item, #sidebar .wl-add, #sidebar .item .del, #sidebar .item .star, #sidebar .item .add, .hd-btn { transition: none; }
   }
   .data-status { display: inline-block; margin-left: 6px; color: var(--faint); font-size: 10px; font-weight: 400; cursor: help; }
   .data-status[hidden] { display: none; }
@@ -676,40 +707,26 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/><g class="sb-chev"><path d="M16.5 9l-3 3 3 3"/></g></svg>
     </button>
   </div>
-  <div id="wlForm"><button id="wlRailBtn" type="button" aria-label="搜索或添加自选股" title="搜索或添加自选股"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg></button></div>
-  <div class="wl-head"><span>自选股</span><span class="wl-count" id="wlCount">--</span><span class="wl-count-rail" id="wlCountRail" aria-hidden="true">--</span></div>
+  <div id="wlForm"><button id="wlRailBtn" type="button" aria-label="搜索股票" title="搜索股票"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg></button></div>
+  <div class="wl-head"><span class="wl-tabs" role="tablist" aria-label="侧栏列表"><button type="button" role="tab" id="wlTabWatch" class="on" aria-selected="true">自选股</button><button type="button" role="tab" id="wlTabRecent" aria-selected="false">最近查看</button></span><span class="wl-count" id="wlCount">--</span><span class="wl-count-rail" id="wlCountRail" aria-hidden="true">--</span></div>
   <div class="sb-group">
     <div id="wlItems"></div>
   </div>
-  <details class="sb-supply" id="supplyWrap">
-    <summary>供数方案<span class="sb-scheme" id="supplyScheme"></span></summary>
-    <section id="supplyControl" class="supply-control" aria-label="供数方案" hidden>
-      <div id="supplyCurrent"></div>
-      <div class="supply-actions">
-        <select id="supplySelect" aria-label="选择供数方案" aria-describedby="supplyReasons">
-          <option value="baseline">现有方案</option>
-          <option value="primary_candidate">候选方案</option>
-        </select>
-        <button id="supplySwitch" type="button">切换</button>
-      </div>
-      <p id="supplyReasons"></p>
-      <p id="supplyStatus" role="status" aria-live="polite"></p>
-    </section>
-  </details>
 </aside>
 <div id="page">
 <header>
   <button id="sidebarExpand" class="sb-btn" aria-label="展开侧边栏" title="展开侧边栏（[）">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M9.5 4.5v15"/><path d="M13 12h6M16 9l3 3-3 3"/></svg>
   </button>
-  <div class="freq" id="freqTabs">
-    <button data-freq="day" class="active">日线</button>
-    <button data-freq="m60">60分</button>
-    <button data-freq="m30">30分</button>
-    <button data-freq="m15">15分</button>
-    <button data-freq="m5">5分</button>
+  <div class="freq" id="freqTabs"></div>
+  <button id="periodBtn" class="hd-btn" type="button" aria-haspopup="dialog">展示周期</button>
+  <div class="freq" id="adjustTabs" role="group" aria-label="复权模式">
+    <button data-adjust="qfq" class="active">前复权</button>
+    <button data-adjust="raw">不复权</button>
   </div>
   <span id="status"></span>
+  <button id="trackBtn" class="hd-btn" type="button" hidden>加入自选</button>
+  <button id="refetchBtn" class="hd-btn" type="button" title="重新请求当前分析窗口（不改变自选状态）">重拉</button>
   <button id="themeBtn" aria-label="切换日间/夜间主题">
     <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>
     <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>
@@ -769,11 +786,13 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     </div>
   </div>
   <div id="rail">
-    <div class="sec" id="f10Sec" style="display:none">
+    <div class="sec" id="quoteSec" style="display:none">
       <div class="f10-top">
         <div><span class="nm" id="f10Name"></span><span class="cd" id="f10Code"></span><span id="f10Stale" class="data-status" tabindex="0" hidden></span></div>
         <div><span class="px" id="f10Px"></span><span class="chg" id="f10Chg"></span></div>
       </div>
+    </div>
+    <div class="sec" id="f10Sec" style="display:none">
       <div class="tags" id="f10Tags"></div>
       <div class="grid" id="f10Grid"></div>
     </div>
@@ -808,10 +827,20 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     </section>
   </div>
 </main>
+<dialog id="periodDialog" class="period-dialog" aria-labelledby="periodTitle" aria-describedby="periodDescription">
+  <h2 id="periodTitle">展示周期</h2>
+  <p id="periodDescription"></p>
+  <p id="periodChanges"></p>
+  <div id="periodOptions"></div>
+  <p id="periodError" role="alert"></p>
+  <div class="period-actions">
+    <button id="periodCancel" class="soft-btn" type="button">取消</button>
+    <button id="periodSave" class="soft-btn" type="button">保存并继续</button>
+  </div>
+</dialog>
 <footer id="metaBar"></footer>
 </div>
 <script src="/vendor/lightweight-charts.standalone.production.js"></script>
-<script src="/supply.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

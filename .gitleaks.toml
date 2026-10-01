@@ -1,0 +1,24 @@
+# 提交前（chanapp/scripts/git-hooks）与 CI 共用的凭据扫描配置：沿用 gitleaks 默认规则，另拦本项目来源凭据与本机用户目录路径。
+# 维护者可用 `git config chanapp.gitleaksConfig <路径>` 指向扩展了本文件的本地配置，追加只在本机使用的个人标识规则。
+title = "chanapp"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "mairui-licence"
+description = "麦蕊证书（环境变量赋值或请求 URL 路径中）"
+regex = '''(?i)(?:MAIRUI_LICENCE\s*[=:]\s*["']?|mairuiapi\.com/\S*?/)([a-z0-9-]{16,})'''
+secretGroup = 1
+keywords = ["mairui"]
+
+[[rules]]
+id = "local-home-path"
+description = "本机用户目录路径（macOS、Linux、Windows）"
+regex = '''(?i)(?:/Users/|/home/|[a-z]:\\Users\\)([a-z0-9._-]+)'''
+secretGroup = 1
+keywords = ["/users/", "/home/", "\\users\\"]
+
+[[rules.allowlists]]
+description = "通用部署模板的默认账户"
+regexes = ['''^ubuntu$''']

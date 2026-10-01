@@ -1,32 +1,23 @@
 """Rule identity must isolate chart, summaries and analysis on identical bars."""
 import json
-import os
-import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.parse import quote
 
 from fastapi.testclient import TestClient
-from pathlib import Path
 from chanapp.engine import compute_cache
+from chanapp.tests import cache_support, facade_support
 from chanapp.tests.test_compute_cache import load_bars
 
 
 class TestRuleProfilesAPI(unittest.TestCase):
     def setUp(self):
         compute_cache.clear()
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.env = patch.dict(os.environ, {"WARMER_ENABLED": "0", "LLM_API_KEY": "test",
-                                           "ANALYSIS_CACHE_DIR": self.temp.name})
-        self.env.start()
-        self.addCleanup(self.env.stop)
-        # 结论记录会写 CACHE_DIR/kline.sqlite：隔离 CACHE_DIR，防 .cache/ 真实库被测试写入
-        # 公开演示门面无 CACHE_DIR（无真实缓存写），此时跳过隔离
-        from chanapp.engine import data as engine_data
-        if hasattr(engine_data, "CACHE_DIR"):
-            self.cache_patch = patch.object(engine_data, "CACHE_DIR", Path(self.temp.name))
-            self.cache_patch.start()
-            self.addCleanup(self.cache_patch.stop)
+        tmp = cache_support.temp_dir(self)
+        cache_support.set_env(self, "COLLECTOR_ENABLED", "0")
+        cache_support.set_env(self, "LLM_API_KEY", "test")
+        cache_support.set_env(self, "ANALYSIS_CACHE_DIR", tmp)
+        cache_support.isolate_cache_dir(self, tmp)
         from chanapp.api.main import app
         self.client = TestClient(app)
 
@@ -47,7 +38,7 @@ class TestRuleProfilesAPI(unittest.TestCase):
     def test_chart_roundtrip_and_analysis_cache_separation(self):
         dataset = {"bars": load_bars(), "data_version": "fixed-input"}
         answer = json.dumps({"current_state": "example", "scenarios": []})
-        with patch("chanapp.engine.data.get_bars", return_value=dataset), \
+        with facade_support.fake_facade(return_value=dataset), \
              patch("chanapp.engine.llm.analyze", return_value=answer) as llm:
             responses = []
             for mode in ("strict", "relaxed", "strict"):
@@ -59,7 +50,8 @@ class TestRuleProfilesAPI(unittest.TestCase):
                 for frame in chart["resonance"]:
                     self.assertEqual(frame["calculation_id"], chart["calculation_id"])
                     self.assertTrue(all(s["level"] in ("bi", "seg") for s in frame["signals"]))
-                analysis = self.client.get(f"/api/analysis?code=sh000001&rule_profile={mode}")
+                analysis = self.client.get(f"/api/analysis?code=sh000001&rule_profile={mode}"
+                                           f"&tokens={quote(facade_support.tokens())}")
                 self.assertEqual(analysis.status_code, 200, analysis.text)
                 result = analysis.json()
                 self.assertEqual(result["calculation_id"], chart["calculation_id"])
@@ -79,7 +71,7 @@ class TestRuleProfilesAPI(unittest.TestCase):
 
     def test_scope_is_independent_and_roundtrip_cached(self):
         dataset = {"bars": load_bars(), "data_version": "same-input"}
-        with patch("chanapp.engine.data.get_bars", return_value=dataset), \
+        with facade_support.fake_facade(return_value=dataset), \
              patch("chanapp.engine.llm.analyze", return_value='{"current_state":"s","scenarios":[]}') as llm:
             identities = {}
             hashes = {}
@@ -93,7 +85,8 @@ class TestRuleProfilesAPI(unittest.TestCase):
                 self.assertEqual(body['signal_scope'], scope)
                 self.assertEqual(body['schema_version'], 'chanpy_v2')
                 self.assertTrue(all(f['signal_scope'] == scope for f in body['resonance']))
-                analysis = self.client.get('/api/analysis?' + query).json()
+                analysis = self.client.get('/api/analysis?' + query
+                                           + '&tokens=' + quote(facade_support.tokens())).json()
                 self.assertEqual(analysis['signal_scope'], scope)
                 self.assertEqual(analysis['calculation_id'], body['calculation_id'])
                 key = (profile, scope)

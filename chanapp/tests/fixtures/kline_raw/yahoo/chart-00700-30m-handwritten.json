@@ -1,0 +1,53 @@
+{
+ "source": "手写 3 行：13:00、13:30 起点（网格）与 13:41 起点（非网格，形成中尾巴形态）",
+ "chart": {
+  "result": [
+   {
+    "meta": {
+     "currency": "HKD",
+     "symbol": "0700.HK",
+     "exchangeTimezoneName": "Asia/Hong_Kong",
+     "gmtoffset": 28800,
+     "dataGranularity": "30m"
+    },
+    "timestamp": [
+     1790053200,
+     1790055000,
+     1790055660
+    ],
+    "indicators": {
+     "quote": [
+      {
+       "open": [
+        600.0,
+        601.0,
+        602.0
+       ],
+       "high": [
+        601.5,
+        602.5,
+        602.0
+       ],
+       "low": [
+        599.5,
+        600.5,
+        601.5
+       ],
+       "close": [
+        601.0,
+        602.0,
+        601.8
+       ],
+       "volume": [
+        100000,
+        90000,
+        5000
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "error": null
+ }
+}

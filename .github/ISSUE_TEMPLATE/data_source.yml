@@ -1,0 +1,16 @@
+name: 数据源与合作
+description: 接入新的数据源，或数据服务商的合作沟通
+labels: [data-source]
+body:
+  - type: textarea
+    id: source
+    attributes:
+      label: 数据源
+      description: 名称、覆盖的市场与周期、取得方式（API、SDK、文件）、使用条款链接
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: 说明
+      description: 想接入的原因，或希望沟通的合作内容。不要在这里贴凭据

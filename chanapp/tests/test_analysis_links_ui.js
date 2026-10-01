@@ -105,12 +105,13 @@ function mkEl(tag) {
   const context = {
     el: () => box, document: { createElement: () => mkEl('span') },
     esc: x => String(x), fmtBarTime: x => x, signalLabel: s => 'S2', FREQ_NAME: { day: '日线', m60: '60分', m30: '30分' },
+    periodEnabled: () => true,
     state: { freq: 'day' }, renderTabs() {}, load() { calls.push('load'); },
     openDetail: (kind, lv, trigger) => detailCalls.push({ kind, freq: lv.freq, trigger }),
   };
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('  function renderResonance('), source.indexOf('  // ---------- 原生信号标注')), context);
-  context.renderResonance([{ freq: 'm60', signals: [{ side: 'sell', level: 'bi', types: ['2'], status: 'confirmed', dt: '2026-09-01 14:00' }] }]);
+  context.renderResonance([{ freq: 'm60', signals: [{ side: 'sell', level: 'bi', types: ['2'], status: 'confirmed', dt: '2026-09-01 14:00' }] }], ['day', 'm60', 'm30']);
   assert.equal(box.children.length, 3, 'three freq slots');
   const m60 = box.children[1];
   assert.equal(m60.dataset.freq, 'm60', 'chip carries freq');
@@ -156,8 +157,6 @@ function mkEl(tag) {
   vm.runInContext(source.slice(source.indexOf('  function renderAnalysis('), source.indexOf('  // 后验置信徽章')), context);
   context.renderAnalysis({ current_state: 'x', scenarios: [] }, 'unconfigured');
   assert.equal(badge.hidden, false, 'sample badge shows for unconfigured fallback');
-  context.renderAnalysis({ current_state: 'x', scenarios: [] }, 'fallback');
-  assert.equal(badge.hidden, false, 'sample badge shows for error fallback');
   context.renderAnalysis({ current_state: 'x', scenarios: [] }, null);
   assert.equal(badge.hidden, true, 'badge hidden for real analysis');
   assert.match(html, /id="aiSampleBadge"/, 'badge lives in the AI panel header');

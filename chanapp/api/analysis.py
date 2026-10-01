@@ -1,9 +1,13 @@
-"""AI 完全分类端点：GET /api/analysis?code=&freq=
+"""AI 完全分类端点：GET /api/analysis?code=&freq=&adjust=&tokens=
 
-固定联合 day/m60/m30，组装与 /api/chart 同源的结构数据（bars/structure/signals/evidence），
+联合日线及已选可合成分钟周期，一次读事务取齐（门面 bundle），与前端回传的主图 meta.analysis_tokens 逐周期比对，
+任一不符或缺失返回 409 {"detail", "tokens": 当前令牌}，不调用模型（spec §6.3）；令牌校验先于判空，
+令牌相符而某周期无数据才 502。输入未取够默认窗口的周期照常分析，prompt 与响应 structure_short 标出。
+
+联合日线及已选可合成分钟周期，组装与 /api/chart 同源的结构数据（bars/structure/signals/evidence），
 构造完全分类 prompt 调 LLM，按 prompt 文本哈希缓存结果：
-- 缓存文件：chanapp/.cache/analysis/{sha256(prompt)}.json，
-  目录可用 ANALYSIS_CACHE_DIR 环境变量注入（测试用，同 WATCHLIST_PATH 模式）。
+- 缓存文件：<AI 缓存目录>/{sha256(prompt)}.json；目录为 ANALYSIS_CACHE_DIR，否则由实例目录派生，
+  再否则为 chanapp/.cache/analysis（engine/instance_paths.py）。
 - llm.is_configured() 为 False → 直接返回 status "unconfigured"，不取数不调 LLM。
 - LLM 输出解析不成 JSON → 降级返回 raw 文本（status 仍 "ok"，scenarios 为空）。
 
@@ -23,7 +27,6 @@ from typing import Annotated, Literal
 import hashlib
 import json
 import logging
-import os
 import re
 import time
 import threading
@@ -31,27 +34,29 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 
+from chanapp.api import view_log as api_view_log
+from chanapp.engine import chart_payload as engine_chart_payload
 from chanapp.engine import compute_cache as engine_compute_cache
 from chanapp.engine import data as engine_data
 from chanapp.engine import evidence as engine_evidence
+from chanapp.engine import instance_paths
 from chanapp.engine import llm as engine_llm
 from chanapp.engine import signals as engine_signals
 from chanapp.engine import structure as engine_structure
-from chanapp.engine import data_identity, supply
+from chanapp.engine import data_identity
 from chanapp.engine.chanpy_profiles import profile_identity
 
-_PKG_ROOT = Path(__file__).resolve().parent.parent
 
-# LLM 失败条目（status="llm_error"）短 TTL：故障期内抑制重试，避免
-# 每分钟自动刷新都重调 LLM + 30s 超时挂起；过期后自动恢复重试。
+# LLM 失败条目（status="llm_error"）短 TTL：故障期内同一输入的重复请求（手动刷新或其他调用方）
+# 直接 502，不再每次重调 LLM 并等满超时；过期后自动恢复重试。AI 分析只由手动触发，行情自动刷新不请求。
 FAILURE_CACHE_TTL = 600
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
 
-ANALYSIS_FREQS = ("day", "m60", "m30")
 ANALYSIS_SCOPE_VERSION = "multi_timeframe_chanpy_v2"
 _analysis_locks_guard = threading.Lock()
 _analysis_locks: dict[str, list] = {}
@@ -76,8 +81,7 @@ def _analysis_lock(key: str):
 
 def _cache_dir() -> Path:
     # 请求时解析，测试可通过 ANALYSIS_CACHE_DIR 注入临时目录
-    return Path(os.environ.get("ANALYSIS_CACHE_DIR")
-                or _PKG_ROOT / ".cache" / "analysis")
+    return instance_paths.current().analysis_dir
 
 
 def _strip_pct(text: str) -> str:
@@ -110,19 +114,22 @@ def _prompt_signal(s: dict) -> dict:
 
 def collect_prompt_data(code: str, freq: str, bars: list[dict],
                         structure: dict, sig: dict,
-                        evidence_cards: list[dict]) -> dict:
+                        evidence_cards: list[dict], *, structure_short: bool = False) -> dict:
     """从组装数据提取 prompt 输入。
 
     字段按稳定性排列（最易变的 last_bar 在末），依据卡旧→新（新卡尾部追加），
     让两次刷新间的 prompt 公共前缀尽可能长（DeepSeek 前缀缓存按前缀命中）。
+    structure_short 只在输入不足默认窗口时出现（输入充足时 prompt 与原来逐字节一致）。
     """
     last = bars[-1]
     zss = structure.get("zs") or []
     zs = zss[-1] if zss else None
     cards = sorted(evidence_cards, key=lambda c: c["dt"])[-5:]
+    short = {"structure_short": True} if structure_short else {}
     return _round_floats({
         "code": code,
         "freq": freq,
+        **short,
         "latest_zs": ({"dt0": zs["dt0"], "dt1": zs["dt1"],
                        "中枢上沿": zs["zg"], "中枢下沿": zs["zd"]} if zs else None),
         "recent_evidence": [
@@ -147,13 +154,27 @@ def build_prompt(data: dict) -> str:
     两次刷新只有末尾数据段变化时可命中前缀缓存。
     """
     body = json.dumps(data, ensure_ascii=False, indent=2)
+    freqs = tuple((data.get("timeframes") or {"day": data}).keys())
+    labels = {"day": "日线(day)", "m60": "60分钟(m60)", "m30": "30分钟(m30)"}
+    scope_note = (
+        "联合日线(day)、60分钟(m60)、30分钟(m30)分析，分别说明各周期结构、"
+        "共振与冲突，再给出统一情景排序。每条证据及价位必须标明所属周期，"
+        "不同周期的中枢与信号不可混用。\n"
+        if freqs == ("day", "m60", "m30") else
+        "本次分析级别：" + "、".join(labels[f] for f in freqs) + "。"
+        "仅根据本次输入分析，未提供的周期不得推断；只有日线时只说明日线结构与情景排序，"
+        "不声称跨周期共振；多周期时分别说明结构、共振与冲突，再给出统一情景排序。"
+        "每条证据及价位必须标明所属周期，不同周期的中枢与信号不可混用。\n"
+    )
+    frames = (data.get("timeframes") or {}).values()
+    short_note = ("8. 标有 structure_short 的周期输入不足默认窗口（结构尚未补齐），"
+                  "该周期的判断只能作为暂定，不能表述为完整结论。\n"
+                  if any(f.get("structure_short") for f in frames) else "")
     return (
         "你是缠论完全分类助手，用贝叶斯方式推理：先有基准判断（先验 prior），"
         "再用证据更新（后验 posterior），置信度只定性不用数字。"
         "只根据给定结构数据推理，不使用外部信息。\n"
-        "联合日线(day)、60分钟(m60)、30分钟(m30)分析，分别说明各周期结构、"
-        "共振与冲突，再给出统一情景排序。每条证据及价位必须标明所属周期，"
-        "不同周期的中枢与信号不可混用。\n"
+        + scope_note +
         "成笔标准只区分严格与宽松；原生点位是形态买卖点，不代表已通过背驰过滤。"
         "status=provisional 是形成中，不能表述为已确认；confirmed 也不是收益保证。"
         "只能解释输入已有的类型、指标及关联结构，不能补造旧锚点或背驰条件。\n"
@@ -180,7 +201,7 @@ def build_prompt(data: dict) -> str:
         "具体价位（末bar价、中枢上沿/中枢下沿、依据卡中的信号价/锚定价）。\n"
         "6. basis 必须引用 recent_evidence 中依据卡的内容（信号类型与价位）。\n"
         "7. 输出文本中的日期一律用 MM-DD 格式（需区分年份时用 MM-DD-YY），"
-        "不要写 yyyy-mm-dd。\n\n"
+        "不要写 yyyy-mm-dd。\n" + short_note + "\n"
         "数据（JSON）：\n" + body + "\n"
     )
 
@@ -217,32 +238,78 @@ def _parse_llm_output(raw: str) -> dict | None:
     return {"current_state": current, "scenarios": scenarios}
 
 
+def _parse_tokens(raw: str | None) -> dict | None:
+    """前端回传的 meta.analysis_tokens（URL 编码的 JSON 对象字符串）；缺失或无法解析为 None。"""
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+RETIRED_DETAIL = "不再提供 5 分与 15 分周期，请改用 30 分及以上"
+
+
+def reject_retired_freq(freq: str) -> None:
+    """已下线周期明确回 400（不静默改成别的周期冒充）；页面把旧链接的 m5/m15 归到 m30 后再请求。"""
+    if freq in api_view_log.RETIRED_FREQS:
+        raise HTTPException(status_code=400, detail=RETIRED_DETAIL)
+
+
 @router.get("/api/analysis")
 def api_analysis(code: str = Query(..., min_length=2),
                  freq: str = Query("day", pattern="^(day|m30|m60|m15|m5)$"),
                  rule_profile: Annotated[Literal["strict", "relaxed"], Query()] = "strict",
-                 signal_scope: Annotated[Literal["standard", "expanded"], Query()] = "expanded"):
+                 signal_scope: Annotated[Literal["standard", "expanded"], Query()] = "expanded",
+                 adjust: Annotated[Literal["qfq", "raw"], Query()] = "qfq",
+                 tokens: Annotated[str | None, Query()] = None):
+    reject_retired_freq(freq)
     t0 = time.monotonic()
-    snapshot = supply.current()
     rules = profile_identity(rule_profile, signal_scope)
-    response_identity = {**rules, "scheme": snapshot.scheme, "generation": snapshot.generation, "epoch": snapshot.epoch,
+    freqs = engine_chart_payload.analysis_periods(code)
+    response_identity = {**rules, "adjust": adjust, "tokens": None,
                          "data_version": None, "data_versions": {},
-                         "analysis_scope": "multi_timeframe", "freqs": list(ANALYSIS_FREQS)}
+                         "analysis_scope": "multi_timeframe", "freqs": list(freqs)}
+    response_identity["analysis_calculation_id"] = engine_chart_payload.analysis_calculation_id(
+        rules["calculation_id"], freqs)
+    if getattr(engine_data, "is_demo", lambda: False)():
+        return {"status": "disabled", "hash": None, "current_state": None,
+                "scenarios": [], "cached": False, **response_identity}
     if not engine_llm.is_configured():
         return {"status": "unconfigured", "hash": None,
                 "current_state": None, "scenarios": [], "cached": False, **response_identity}
 
+    bundle = engine_chart_payload.read_bundle(code, adjust)
+    freqs = tuple(bundle)
+    response_identity["freqs"] = list(freqs)
+    response_identity["analysis_calculation_id"] = engine_chart_payload.analysis_calculation_id(
+        rules["calculation_id"], freqs)
+    current = {frame: (bundle.get(frame) or {}).get("token") for frame in freqs}
+    expected = _parse_tokens(tokens)
+    # 先比令牌：页面据以分析的数据已被定稿、修订或隔离改变（或旧页面没带令牌、组合已变）时一律 409，
+    # 即使隔离后某周期已无数据（令牌仍是当前视图身份）；不调用模型，要求整窗重载（spec §6.3）。
+    # 组合未变而某周期读不出（读失败或无事实）不是数据更新：回 502，免得页面反复整窗重载
+    stale = JSONResponse(status_code=409, content={"detail": "数据已更新", "tokens": current})
+    if expected is None or set(expected) != set(freqs):
+        return stale
+    if any(bundle.get(frame) is None for frame in freqs):
+        raise HTTPException(status_code=502, detail="分析数据暂不可用")
+    if expected != current:
+        return stale
+    if any(not (bundle.get(frame) or {}).get("bars") for frame in freqs):
+        raise HTTPException(status_code=502, detail="分析数据暂不可用")
+    response_identity["tokens"] = current
+    # 输入未取够默认窗口的周期：照常分析，但在 prompt 与响应里标出，不冒充完整结论
+    short = [frame for frame in freqs if engine_chart_payload.is_structure_short(bundle[frame])]
+    response_identity["structure_short"] = short
+
     prompt_frames = {}
-    for frame in ANALYSIS_FREQS:
-        try:
-            with supply.use(snapshot):
-                dataset = engine_data.get_bars(code, frame)
-                bars = dataset["bars"]
-                if not bars:
-                    raise ValueError("empty timeframe")
-                data_version = engine_compute_cache.dataset_version(dataset)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail="分析数据暂不可用") from e
+    for frame in freqs:
+        dataset = bundle[frame]
+        bars = dataset["bars"]
+        data_version = engine_compute_cache.dataset_version(dataset)
         response_identity["data_versions"][frame] = data_version
         try:
             hit = engine_compute_cache.get(code, frame, data_version, rules["calculation_id"])
@@ -257,7 +324,8 @@ def api_analysis(code: str = Query(..., min_length=2),
         except Exception as e:
             log.exception("analysis calculation failed code=%s freq=%s", code, frame)
             raise HTTPException(status_code=502, detail="结构计算暂不可用") from e
-        prompt_frames[frame] = collect_prompt_data(code, frame, bars, structure, sig, evidence)
+        prompt_frames[frame] = collect_prompt_data(code, frame, bars, structure, sig, evidence,
+                                                   structure_short=frame in short)
 
     response_identity["data_version"] = data_identity.version([], {
         "scope": ANALYSIS_SCOPE_VERSION, "data_versions": response_identity["data_versions"]})

@@ -6,8 +6,8 @@ const source = fs.readFileSync(require('node:path').join(__dirname, '../web/app.
 async function refreshFailure(pending) {
   const nodes = {}, events = [];
   const context = {
-    state: {code:'a',ruleProfile:'strict',signalScope:'expanded'}, supplyBusy:false,
-    supplyState:{generation:1,epoch:'e'}, analysisIdentity:'same',
+    state: {code:'a',ruleProfile:'strict',signalScope:'expanded'},
+    viewState:{adjust:'qfq',token:null,analysisTokens:null}, loadedTarget:null, analysisIdentity:'same',
     currentAnalysisIdentity:()=>'same', pendingAnalysis:pending,
     ruleSwitchNote:null, AbortController, ANALYSIS_TIMEOUT_MS:150000, AI_SPIN_MIN:0,
     setTimeout:()=>1, clearTimeout(){},

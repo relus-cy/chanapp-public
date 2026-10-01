@@ -1,80 +1,23 @@
 'use strict';
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-
-const source = fs.readFileSync(path.join(__dirname, '../web/app.js'), 'utf8');
-
-function mkEl(tag) {
-  const node = {
-    tagName: String(tag || 'div').toLowerCase(), children: [], style: {}, attrs: {},
-    hidden: false, value: '', textContent: '', parentNode: null, _html: '', _cls: new Set(),
-    classList: {
-      toggle(name, on) { (on === undefined ? !node._cls.has(name) : on) ? node._cls.add(name) : node._cls.delete(name); },
-      contains(name) { return node._cls.has(name); },
-    },
-    appendChild(child) { child.parentNode = node; node.children.push(child); return child; },
-    querySelector(selector) {
-      if (!selector.startsWith('.')) return null;
-      const name = selector.slice(1);
-      for (const child of node.children) {
-        if (child.classList.contains(name)) return child;
-        const nested = child.querySelector(selector);
-        if (nested) return nested;
-      }
-      return null;
-    },
-    querySelectorAll() { return node.children; },
-    setAttribute(name, value) { node.attrs[name] = String(value); },
-    getAttribute(name) { return node.attrs[name]; }, removeAttribute(name) { delete node.attrs[name]; },
-    focus() { node.focused = true; }, blur() { if (node.onblur) node.onblur(); },
-  };
-  Object.defineProperty(node, 'className', {
-    get() { return [...node._cls].join(' '); },
-    set(value) { node._cls = new Set(String(value).split(/\s+/).filter(Boolean)); },
-  });
-  Object.defineProperty(node, 'innerHTML', {
-    get() { return node._html; },
-    set(value) {
-      node.children.forEach(child => { child.parentNode = null; });
-      node.children = [];
-      node._html = String(value);
-    },
-  });
-  Object.defineProperty(node, 'firstChild', { get() { return node.children[0] || null; } });
-  return node;
-}
-
-function deferred() {
-  let resolve;
-  const promise = new Promise(r => { resolve = r; });
-  return { promise, resolve };
-}
+const { mkEl, deferred, tick, runSlices } = require('./support/dom.js');
+const { appContext, searchEnv } = require('./support/app.js');
 
 function flush() {
-  return Promise.resolve().then(() => Promise.resolve()).then(() => new Promise(resolve => setImmediate(resolve)));
+  return Promise.resolve().then(() => Promise.resolve()).then(() => tick());
 }
 
 const checks = [];
 function check(name, fn) { checks.push({ name, fn }); }
 
 check('search clears stale candidates and ignores late results', async () => {
-  const input = mkEl('input'), drop = mkEl('div'), form = mkEl('form');
-  form.q = input;
-  form.querySelector = () => drop;
-  const timers = [], requests = [], added = [];
-  const context = {
-    esc: String,
-    addWatch(code, name) { added.push([code, name]); },
-    setStatus() {},
+  const requests = [];
+  const env = searchEnv({
     fetch(url) { const d = deferred(); requests.push({ url, ...d }); return d.promise; },
-    setTimeout(fn) { timers.push(fn); return timers.length; }, clearTimeout() {},
-    document: { createElement: tag => mkEl(tag) },
-  };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  var searchTimer'), source.indexOf('  // 点搜索区外部收起下拉')), context);
-  context.wireSearch(form);
+  });
+  const { input, drop } = env._harness.search;
+  const timers = env._harness.timers;
+  const opened = env._harness.opened;
 
   assert.equal(drop.attrs.role, 'listbox');
   assert.ok(drop.id, 'listbox has an id');
@@ -88,7 +31,8 @@ check('search clears stale candidates and ignores late results', async () => {
   input.value = 'B'; input.oninput();
   assert.equal(drop.hidden, true, 'editing the query immediately invalidates old candidates');
   input.onkeydown({ key: 'Enter', isComposing: false, keyCode: 13, preventDefault() {} });
-  assert.deepEqual(added, [], 'Enter cannot add a candidate from the previous query');
+  // 有意改写（2026-09-29 第二阶段）：回车改为打开候选，旧查询的候选同样不能被打开
+  assert.deepEqual(opened, [], 'Enter cannot open a candidate from the previous query');
 
   timers.shift()();
   input.onblur();
@@ -98,33 +42,24 @@ check('search clears stale candidates and ignores late results', async () => {
 });
 
 check('search Enter is IME-safe', async () => {
-  const input = mkEl('input'), drop = mkEl('div'), form = mkEl('form');
-  form.q = input; form.querySelector = () => drop;
-  const timers = [], added = [];
-  const context = {
-    esc: String, addWatch(code) { added.push(code); }, setStatus() {},
+  const env = searchEnv({
     fetch: async () => ({ ok: true, json: async () => [{ code: 'sh600519', name: '贵州茅台' }] }),
-    setTimeout(fn) { timers.push(fn); return timers.length; }, clearTimeout() {},
-    document: { createElement: tag => mkEl(tag) },
-  };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  var searchTimer'), source.indexOf('  // 点搜索区外部收起下拉')), context);
-  context.wireSearch(form);
+  });
+  const { input } = env._harness.search;
+  const timers = env._harness.timers;
   input.value = '茅台'; input.oninput(); timers[0](); await flush();
   input.onkeydown({ key: 'Enter', isComposing: true, keyCode: 13, preventDefault() {} });
   input.onkeydown({ key: 'Enter', isComposing: false, keyCode: 229, preventDefault() {} });
-  assert.deepEqual(added, []);
+  assert.deepEqual(env._harness.opened, []);
 });
 
 check('watchlist operations are ordered and continue after failure', async () => {
   const requests = [], statuses = [];
-  const context = {
+  const context = appContext({
     state: { watchlist: [{ code: 'sh600000' }], code: 'sh600000' },
-    renderWatchlist() {}, load() {}, setStatus(message) { statuses.push(message); },
     fetch(url, options) { const d = deferred(); requests.push({ url, options, ...d }); return d.promise; },
-  };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  var watchlistQueue'), source.indexOf('  function renderTabs')), context);
+  });
+  runSlices(context, ['watchlistOps']);
 
   const first = context.removeWatch('sh600000');
   const second = context.addWatch('sh600519', '贵州茅台', null);
@@ -137,33 +72,34 @@ check('watchlist operations are ordered and continue after failure', async () =>
   requests[1].resolve({ ok: true, status: 200, json: async () => [{ code: 'sh600000' }, { code: 'sh600519' }] });
   await second;
   assert.deepEqual(context.state.watchlist.map(w => w.code), ['sh600000', 'sh600519']);
-  assert.match(statuses[0], /删除失败 500/);
+  assert.match(context._harness.statuses[0], /删除失败 500/);
 });
 
-check('removing the last item clears content and adding the first selects it', async () => {
+// 有意改写（2026-09-29 第二阶段）：移出自选退回搜索查看——当前图表保持不动，不清空也不切到别的自选；
+// 「无当前代码时添加首个自选即选中」保持原行为。
+check('removing the current item keeps viewing it and adding the first selects it when nothing is open', async () => {
   const requests = [];
-  let clears = 0, loads = 0;
-  const context = {
-    state: { watchlist: [{ code: 'sh600000' }], code: 'sh600000' },
-    renderWatchlist() {}, setStatus() {}, clearSelection() { clears += 1; }, load() { loads += 1; },
+  const context = appContext({
+    state: { watchlist: [{ code: 'sh600000' }, { code: 'sh600519' }], code: 'sh600000' },
     fetch(url, options) { const d = deferred(); requests.push({ url, options, ...d }); return d.promise; },
-  };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  var watchlistQueue'), source.indexOf('  function renderTabs')), context);
+  });
+  runSlices(context, ['watchlistOps']);
 
   const removing = context.removeWatch('sh600000');
   await flush();
-  requests[0].resolve({ ok: true, json: async () => [] });
+  requests[0].resolve({ ok: true, json: async () => [{ code: 'sh600519' }] });
   await removing;
-  assert.equal(context.state.code, null);
-  assert.equal(clears, 1);
+  assert.equal(context.state.code, 'sh600000', 'removed code stays open as a viewed code');
+  assert.deepEqual(context.state.watchlist.map(w => w.code), ['sh600519']);
+  assert.equal(context._harness.renders.filter(r => r === 'load').length, 0, 'no reload for the same chart');
 
-  const adding = context.addWatch('sh600519', '贵州茅台', null);
+  context.state.code = null;
+  const adding = context.addWatch('sh600036', '招商银行', null);
   await flush();
-  requests[1].resolve({ ok: true, json: async () => [{ code: 'sh600519', name: '贵州茅台' }] });
+  requests[1].resolve({ ok: true, json: async () => [{ code: 'sh600036', name: '招商银行' }] });
   await adding;
-  assert.equal(context.state.code, 'sh600519');
-  assert.equal(loads, 1);
+  assert.equal(context.state.code, 'sh600036');
+  assert.equal(context._harness.renders.filter(r => r === 'load').length, 1);
 });
 
 check('tag editor keeps its code and does not replace a newer editor', async () => {
@@ -174,17 +110,16 @@ check('tag editor keeps its code and does not replace a newer editor', async () 
     for (const child of node.children) { const hit = findById(child, id); if (hit) return hit; }
     return null;
   }
-  const context = {
+  const context = appContext({
     state: { code: 'sh600000', watchlist: [
       { code: 'sh600000', tags: ['银行'] }, { code: 'sh600519', tags: ['白酒'] },
     ] },
-    el(id) { return nodes[id] || findById(box, id); }, esc: String, setStatus() {},
-    document: { createElement: tag => mkEl(tag), getElementById(id) { return nodes[id] || findById(box, id); } },
+    el(id) { return nodes[id] || findById(box, id); },
     fetch(url, options) { const d = deferred(); requests.push({ url, options, ...d }); return d.promise; },
     queueWatchlist(run) { return run(); },
-  };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('  function renderTags'), source.indexOf('  function renderFlow(')), context);
+  });
+  context.document.getElementById = id => nodes[id] || findById(box, id);
+  runSlices(context, ['tags']);
 
   context.renderTags();
   const editA = box.children.find(node => node.id === 'f10TagEdit');

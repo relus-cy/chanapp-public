@@ -29,6 +29,19 @@ class CoreContractTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             compute_structure([{**good,'dt':'2026-01-02'},good],'test')
 
+    def test_weekly_structure(self):
+        # 周线：520 根合成周线（周五标签）能跑出笔结构
+        import math
+        from datetime import date, timedelta
+        start = date(2016, 1, 8)
+        bars = []
+        for i in range(520):
+            mid = 100 + 20 * math.sin(i / 9) + i * 0.05
+            bars.append(dict(dt=(start + timedelta(weeks=i)).isoformat(), open=mid, high=mid * 1.03,
+                             low=mid * 0.97, close=mid * (1.01 if i % 2 else 0.99), volume=1000.))
+        result = compute_structure(bars, 'test', 'week')
+        self.assertGreater(len(result['bi']), 5)
+
     def test_empty_and_short(self):
         from chanapp.engine.signals import compute_signals
         for bars in ([],[dict(dt='2026-01-01',open=10.,high=11.,low=9.,close=10.,volume=1.)]):

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check chanapp service and cached data every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Unit=chanapp-selfcheck.service
+
+[Install]
+WantedBy=timers.target

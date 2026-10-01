@@ -1,0 +1,12 @@
+{
+  "mode": "demo",
+  "markets": {
+    "CN": {
+      "minute_fact_freq": "m5"
+    },
+    "HK": {
+      "minute_fact_freq": null
+    }
+  },
+  "instance_dir": "."
+}

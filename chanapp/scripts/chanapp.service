@@ -1,0 +1,24 @@
+# Rendered by deploy.sh. EnvironmentFile entries may override default runtime settings.
+[Unit]
+Description=chanapp (chan analysis web app)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@PARENT_DIR@
+Environment=TZ=@TIMEZONE@
+Environment=WATCHLIST_PATH=@PARENT_DIR@/chanapp.watchlist.json
+Environment=CHANAPP_CACHE_DIR=@APP_DIR@/.cache
+Environment=COLLECTOR_ENABLED=1
+Environment=CHANAPP_INSTANCE_CONFIG=@INSTANCE_CONFIG@
+# Source credentials (variable names in docs/configuration.md); mode 600, never synced.
+EnvironmentFile=-/home/@USER@/.config/chanapp/secrets.env
+EnvironmentFile=-@APP_DIR@/.env
+ExecStart=@APP_DIR@/.venv/bin/python -m uvicorn chanapp.api.main:app --host 127.0.0.1 --port @PORT@ --proxy-headers --forwarded-allow-ips=127.0.0.1 --workers 1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

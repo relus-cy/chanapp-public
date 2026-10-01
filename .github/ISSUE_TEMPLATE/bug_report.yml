@@ -1,0 +1,29 @@
+name: 缺陷报告
+description: 运行结果与文档或预期不符
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 现象、期望结果与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 运行模式（demo / 真实）、实例配置（去掉凭据）、操作步骤
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: 环境
+      description: 版本或 commit、操作系统、Python 版本、浏览器
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: 相关日志片段。请先删去凭据、本机路径与个人信息
+      render: text

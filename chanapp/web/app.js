@@ -1,153 +1,7 @@
 /* chanapp 前端：无框架无构建，lightweight-charts v5 standalone。
-   视觉口径对齐 docs/v1.2.0-demo：双主题 token（默认日间）、金=结构色、红涨青跌。 */
+   视觉口径：双主题 token（默认日间）、金=结构色、红涨青跌。 */
 (function () {
   'use strict';
-
-  var supplyState = { epoch: '', generation: null, scheme: 'baseline', options: [], csrf_token: null };
-  var supplyBusy = false, supplyRange = null, supplySync = null, supplySyncAt = 0;
-  var supplyRevision = 0, supplySyncSequence = 0;
-  function eligible(generation, body, epoch) {
-    var received = body && (body.generation != null ? body.generation : body.meta && body.meta.generation);
-    var receivedEpoch = body && (body.epoch || (body.meta && body.meta.epoch)) || '';
-    if (supplyState.generation == null && !receivedEpoch && Number.isInteger(received) && received >= 0) {
-      // A demo may expose versioned business data while its supply endpoint is unavailable.
-      applySupply({generation: received, scheme: body.scheme || (body.meta && body.meta.scheme) || 'baseline'});
-      return false; // Restart all initial requests under the established identity.
-    }
-    if (Number.isInteger(received) && (received !== supplyState.generation || receivedEpoch !== (supplyState.epoch || ''))) syncSupply({force:true});
-    return SupplyUI.accepts({epoch:supplyState.epoch || '',generation:supplyState.generation},
-      {epoch:epoch || '',generation:generation}, body) ||
-      (supplyState.generation == null && generation == null && received == null && !receivedEpoch);
-
-  }
-  function syncSupply(options) {
-    if (supplySync) return supplySync;
-    var force = options && options.force;
-    if (!force && (supplyBusy || Date.now() - supplySyncAt < 5000)) return Promise.resolve();
-    supplySyncAt = Date.now();
-    var startedRevision = supplyRevision, sequence = ++supplySyncSequence, retry = false;
-    supplySync = fetch('/api/supply').then(function (r) {
-      if (!r.ok) throw new Error('状态同步暂不可用');
-      return r.json();
-    }).then(function (j) {
-      if (sequence !== supplySyncSequence || startedRevision !== supplyRevision) { retry = true; return; }
-      el('supplyControl').hidden = false;
-      var sameEpoch = (j.epoch || '') === (supplyState.epoch || '');
-      if (sameEpoch && supplyState.generation != null && j.generation < supplyState.generation) {
-        el('supplyStatus').textContent = '方案状态回退异常，请停止服务并检查恢复状态';
-        return;
-      }
-      if (!sameEpoch || supplyState.generation == null || j.generation > supplyState.generation) {
-        applySupply(j);
-      } else {
-        supplyRevision++;
-        supplyState.options = j.options || [];
-        supplyState.csrf_token = j.csrf_token;
-      }
-    }).catch(function () {
-      el('supplyStatus').textContent = '方案状态同步失败，稍后重试';
-    }).finally(function () {
-      supplySync = null;
-      renderSupply();
-      if (retry) syncSupply({force:true});
-    });
-    return supplySync;
-  }
-  function supplyLabel(scheme) { return scheme === 'baseline' ? '现有方案' : '候选方案'; }
-  function renderSupply() {
-    el('supplyCurrent').textContent = '正在使用：' + supplyLabel(supplyState.scheme);
-    el('supplyScheme').textContent = supplyLabel(supplyState.scheme);
-    var candidate = supplyState.options.find(function (o) { return o.id === 'primary_candidate'; });
-    el('supplySelect').options[1].disabled = !candidate || !candidate.ready;
-    el('supplySelect').disabled = supplyBusy;
-    el('supplySwitch').disabled = supplyBusy || el('supplySelect').value === supplyState.scheme || !SupplyUI.canSwitch(el('supplySelect').value, supplyState.options);
-    el('supplySwitch').textContent = supplyBusy ? '准备中…' : '切换';
-    el('supplyReasons').textContent = !candidate || !candidate.ready ? '候选方案暂不可用' : '';
-  }
-  function initSupply() {
-    var startedRevision = supplyRevision;
-    return fetch('/api/supply').then(function (r) {
-      if (!r.ok) {
-        var rawGeneration = r.headers && r.headers.get('X-Supply-Generation');
-        var scheme = r.headers && r.headers.get('X-Supply-Scheme');
-        var generation = rawGeneration == null ? null : Number(rawGeneration);
-        if (Number.isInteger(generation) && generation >= 0 && (scheme === 'baseline' || scheme === 'primary_candidate')) {
-          supplyState.generation = generation;
-          supplyState.epoch = r.headers.get('X-Supply-Epoch') || '';
-          supplyRevision++;
-          supplyState.scheme = scheme;
-        }
-        throw new Error('supply unavailable');
-      }
-      return r.json();
-    }).then(function (j) {
-      if (startedRevision !== supplyRevision) { syncSupply({force:true}); return; }
-      supplyState = j;
-      supplyState.epoch = j.epoch || '';
-      supplyRevision++;
-      el('supplyControl').hidden = false;
-      el('supplySelect').value = j.scheme;
-      renderSupply();
-    }).catch(function () { el('supplyControl').hidden = true; });
-  }
-  function applySupply(j) {
-    supplyRange = charts ? {code: state.code, freq: state.freq, range: charts.main.timeScale().getVisibleRange()} : null;
-    if (j.options) supplyState.options = j.options;
-    if (j.csrf_token) supplyState.csrf_token = j.csrf_token;
-    supplyRevision++;
-    supplyState.epoch = j.epoch || '';
-    supplyState.scheme = j.scheme;
-    supplyState.generation = j.generation;
-    if (chartAbort) chartAbort.abort();
-    chartAbort = null;
-    Object.keys(analysisSlots).forEach(function (k) { var s = analysisSlots[k]; if (s.abort) s.abort.abort(); });
-    analysisSlots = {};
-    state.quotes = {}; f10Last = {code: null, ts: 0}; lastF10 = null;
-    lastChartData = null; lastMeta = null; loadedTarget = null;
-    pendingAnalysis = null; activeChartVersion = null;
-    hideF10Cards(); renderWatchlist(); renderEvidence([]);
-    el('metaBar').innerHTML = ''; el('resonance').innerHTML = ''; el('ohlc').innerHTML = '';
-    el('aiPanel').innerHTML = '<div class="ai-note">加载中…</div>';
-    if (typeof closeAiPopup === 'function') closeAiPopup();
-    el('center').classList.add('supply-loading');
-    supplyBusy = false;
-    el('supplySelect').value = j.scheme;
-    var missing = j.prepared && j.prepared.unavailable || [];
-    el('supplyStatus').textContent = j.durability_warning ? '方案已提交，持久化检查异常，请检查恢复状态' :
-      missing.length ? '已切回现有方案，' + (j.prepared.available ? '部分数据暂不可用' : '当前无可用数据') + '：' +
-        missing.map(function (item) { return item.code + '/' + (item.freq || item.kind); }).join('、') :
-        '已切换至' + supplyLabel(j.scheme);
-    load(); loadQuotes();
-  }
-  function switchSupply() {
-    if (supplyBusy) return;
-    var target = el('supplySelect').value;
-    var requestedEpoch = supplyState.epoch || '';
-    if (!SupplyUI.canSwitch(target, supplyState.options)) return;
-    supplyBusy = true;
-    renderSupply();
-    el('supplyStatus').textContent = '正在准备数据，当前图表继续保留…';
-    fetch('/api/supply', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Supply-CSRF': supplyState.csrf_token },
-      body: JSON.stringify({scheme: target, expected_generation: supplyState.generation, expected_epoch: supplyState.epoch, code: state.code, freq: state.freq})
-    }).then(function (r) { return r.json().then(function (j) {
-      if (!r.ok) {
-        var error = new Error(SupplyUI.errorText(r.status));
-        error.conflict = r.status === 409; error.status = r.status; throw error;
-      }
-      return j;
-    }); })
-      .then(function (j) {
-        if ((j.epoch || '') !== requestedEpoch || (supplyState.epoch || '') !== requestedEpoch ||
-            j.generation < supplyState.generation) { return syncSupply({force:true}); }
-        applySupply(j);
-      }).catch(function (e) {
-        el('supplyStatus').textContent = SupplyUI.errorText(e.status);
-        // 409 身份冲突与服务重启后 CSRF 轮换（403）都先做一次权威状态同步
-        if (e.conflict || e.status === 403) return syncSupply({force:true});
-      })
-      .finally(function () { supplyBusy = false; renderSupply(); });
-  }
 
   // ---------- 主题调色板（图表内无法走 CSS 变量，双份维护，数值同 index.html tokens） ----------
 
@@ -188,34 +42,45 @@
     return Date.parse(dt.replace(' ', 'T') + 'Z') / 1000;
   }
 
-  var state = { code: null, freq: 'day', ruleProfile: 'strict', signalScope: 'expanded', watchlist: [], quotes: {} };
+  // sideTab：侧栏显示自选（watch）还是最近查看（recent）；recent 来自 /api/views（查看记录，不代表关注状态）
+  var state = { code: null, freq: 'day', ruleProfile: 'strict', signalScope: 'expanded', watchlist: [], quotes: {},
+    sideTab: 'watch', recent: [] };
+  try { if (localStorage.getItem('chanapp-side-tab') === 'recent') state.sideTab = 'recent'; } catch (_) {}
   try { if (localStorage.getItem('chanapp-rule-profile') === 'relaxed') state.ruleProfile = 'relaxed'; } catch (_) {}
   try { if (localStorage.getItem('chanapp-signal-scope') === 'standard') state.signalScope = 'standard'; } catch (_) {}
   (function () {
     var qs = new URLSearchParams(location.search);
     if (qs.get('code')) state.code = qs.get('code');
-    if (qs.get('freq')) state.freq = qs.get('freq');
+    if (qs.get('freq')) state.freq = normalizeFreq(qs.get('freq'));  // 旧链接的 5分/15分归到 30 分
   })();
+  var periodPrefs = null; // 服务端实例偏好；确认完成前不加载图表
+  var periodSaving = false;
+  var periodLoad = null;
   var charts = null; // {main, macdChart, candleSeries, ...}
   var chartAbort = null;
   var CHART_TIMEOUT_MS = 25000;     // 冷取数正常 ~8s；25s 在病理性兜底链前切断
+  var REFETCH_TIMEOUT_MS = 120000;  // 手动重拉整段重取分析窗口（按月分片多次请求），比常规读取慢得多
   var ANALYSIS_TIMEOUT_MS = 150000; // 覆盖可配置的 LLM 最长 120s 及联合数据准备
   var klineData = [];    // 当前 K 线原始数据（time 为原始字符串，供图例/指标计算）
   var klineByTime = {};  // toTime(time) → {bar, prev}，十字光标定位用
   var macdRowsRaw = [];  // 后端 MACD 行（原始 dt 字符串）
-  var historyState = { loading: false, hasMore: false, revisionGen: null, basisId: null,
-    seamTime: null, reqId: 0 };
-  // 可左拉周期：day/m30 恒可，m60 由派生读开关在服务端放行（游标为 null 时天然不触发，flag 关无害）
-  var HISTORY_FREQS = { day: 1, m30: 1, m60: 1 };
+  // 当前视图的数据身份（与 state 的 code/freq 一起决定响应是否仍可接纳）：
+  //   adjust        请求的复权模式（qfq/raw），主图、分页、分析都带上；
+  //   token         主图视图令牌，左拉分页必带，服务端判不符返回 409 → 整窗重载；
+  //   analysisTokens 主图同次读取给出的 {day, m60, m30} 令牌，是 AI 请求令牌的唯一来源。
+  var viewState = { adjust: 'qfq', token: null, analysisTokens: null };
+  // 复权模式是用户偏好（指数由服务端恒按不复权返回，偏好不因浏览指数而改变）
+  try { if (localStorage.getItem('chanapp-adjust') === 'raw') viewState.adjust = 'raw'; } catch (_) {}
+  var historyState = { loading: false, hasMore: false, reqId: 0 };
   var lastChartData = null;  // 最近一次 /api/chart 响应，主题切换时原路径重渲染
-  var loadedTarget = null;   // 当前图表内容归属 {code, freq}，后台刷新据此判定是否保留可视区间
-  var chartEtag = null;  // {code, freq, profile, scope, etag}：最近一次 200 的 /api/chart ETag，60s 自动刷新带 If-None-Match
-  var lastBasisKey = null;  // {target: code|freq, key: +basis_id}：复权重建一次性提示按基准指纹去重
-  function rememberEtag(code, freq, profile, scope, etag) {
-    chartEtag = etag ? { code: code, freq: freq, profile: profile, scope: scope, etag: etag } : null;
+  var loadedTarget = null;   // 当前图表内容归属 {code, freq, adjust}，后台刷新据此判定是否保留可视区间
+  var restoreRange = null;   // {code, freq, range}：规则切换重载前的可视时间区间，新图提交后恢复
+  var chartEtag = null;  // {code, freq, adjust, profile, scope, etag}：最近一次 200 的 /api/chart ETag，60s 自动刷新带 If-None-Match
+  function rememberEtag(code, freq, adjust, profile, scope, etag) {
+    chartEtag = etag ? { code: code, freq: freq, adjust: adjust, profile: profile, scope: scope, etag: etag } : null;
   }
-  function conditionalHeaders(code, freq, profile, scope) {
-    if (!chartEtag || chartEtag.code !== code || chartEtag.freq !== freq ||
+  function conditionalHeaders(code, freq, adjust, profile, scope) {
+    if (!chartEtag || chartEtag.code !== code || chartEtag.freq !== freq || chartEtag.adjust !== adjust ||
         chartEtag.profile !== profile || chartEtag.scope !== scope) return {};
     return { 'If-None-Match': chartEtag.etag };
   }
@@ -228,42 +93,97 @@
 
   function el(id) { return document.getElementById(id); }
 
+  // 行情行的展示口径（自选行与右栏卡头共用，保证两处一致）：
+  // A 股行取自 K 线事实（price_label 最新/昨收；事实缺失 price_unavailable），港股行为显示层快照。
+  // 昨收时涨跌为空；不回退 F10 价格。
+  // 港股报价只带源时间戳（秒）：按北京时间（A 股、港股同为 UTC+8，无夏令时）写成与 price_time 同样的格式
+  function sourceTime(sec) {
+    if (typeof sec !== 'number' || !isFinite(sec) || sec <= 0) return '';
+    return new Date((sec + 8 * 3600) * 1000).toISOString().slice(0, 16).replace('T', ' ');
+  }
+
+  function quoteView(q) {
+    q = q || {};
+    var price = q.price == null ? null : q.price;
+    var pct = price == null || q.price_label === '昨收' ? null : (q.pct == null ? null : q.pct);
+    return { price: price, pct: pct, prevClose: price != null && q.price_label === '昨收',
+             historical: price != null && q.price_label === '历史',
+             unavailable: q.price_unavailable === true, time: q.price_time || sourceTime(q.source_ts),
+             stale: price != null && q.stale === true };
+  }
+
+  var SVG_PLUS = '<svg class="ic-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+
+  // 关注状态只认自选列表（唯一事实）；最近查看里服务端给的 watched 只是快照，渲染时不用它
+  function isWatched(code) {
+    return state.watchlist.some(function (w) { return w.code === code; });
+  }
+
+  function nameOf(code) {
+    var hit = null;
+    state.watchlist.concat(state.recent || []).some(function (w) { return w.code === code && (hit = w); });
+    return hit ? hit.name : code;
+  }
+
+  // 最近查看时刻：服务端 ISO 本地时间取「MM-DD HH:mm」；本页刚打开、尚未回读的条目显示「刚刚」
+  function viewedAt(ts) {
+    return ts ? String(ts).slice(5, 16).replace('T', ' ') : '刚刚';
+  }
+
   function renderWatchlist() {
     var box = el('wlItems');
     var focused = document.activeElement;
     var focusedRow = focused && focused.closest('.item');
     var focusedCode = focusedRow && focusedRow.dataset.code;
-    var focusedAction = focusedRow && (focused.classList.contains('star') ? 'star' : focused.classList.contains('del') ? 'del' : null);
+    var focusedAction = focusedRow && (['star', 'del', 'add'].filter(function (c) { return focused.classList.contains(c); })[0] || null);
     var restoreRow = null;
+    var recentMode = state.sideTab === 'recent';
+    var list = recentMode ? (state.recent || []) : state.watchlist;
     box.innerHTML = '';
-    state.watchlist.forEach(function (w) {
-      var q = (state.quotes || {})[w.code] || {};
-      var noPx = q.price == null;  // 上游零值/缺失行：价格与涨跌幅一并显空（v1.3.0）
-      var pctCls = q.pct > 0 ? 'up' : (q.pct < 0 ? 'down' : 'flat');
+    list.forEach(function (w) {
       var div = document.createElement('div');
       div.dataset.code = w.code;
       div.className = 'item' + (w.code === state.code ? ' active' : '');
-      div.innerHTML = '<div class="row"><span>' + esc(w.name) +
-        (q.limit_up ? '<span class="tag-limit">涨停</span>' : '') + '</span>' +
-        '<span class="chg ' + pctCls + '">' +
-        (noPx || q.pct == null ? '' : (q.pct > 0 ? '+' : '') + q.pct.toFixed(2) + '%') + '</span>' +
-        '<span class="btns">' +
-        '<button class="star' + (w.starred ? ' on' : '') + '" title="置顶" aria-label="置顶">' + SVG_STAR + '</button>' +
-        '<button class="del" title="删除" aria-label="删除">' + SVG_X + '</button></span></div>' +
-        '<div class="row2"><span class="code">' + esc(w.code) + '</span>' +
-        '<span class="px ' + pctCls + '">' + (noPx ? '' : q.price.toFixed(2)) + '</span></div>';
-      div.querySelector('.star').onclick = function (ev) {
-        ev.stopPropagation();
-        toggleStar(w.code);
-      };
-      div.querySelector('.del').onclick = function (ev) {
-        ev.stopPropagation();
-        removeWatch(w.code);
-      };
-      div.onclick = function () {
-        state.code = w.code; renderWatchlist(); load();
-        if (sbMode() === 'open') setSidebar('rail');  /* 浮动展开选中后收回窄栏，露出图表 */
-      };
+      if (recentMode) {
+        var watched = isWatched(w.code);
+        div.innerHTML = '<div class="row"><span>' + esc(w.name) +
+          (watched ? '<span class="tag-watched">已自选</span>' : '') + '</span>' +
+          '<span class="btns">' +
+          (watched ? '' : '<button class="add" title="加入自选" aria-label="加入自选">' + SVG_PLUS + '</button>') +
+          '</span></div>' +
+          '<div class="row2"><span class="code">' + esc(w.code) + '</span>' +
+          '<span class="px" title="最近查看">' + esc(viewedAt(w.last_viewed_at)) + '</span></div>';
+        if (!watched) {
+          div.querySelector('.add').onclick = function (ev) {
+            ev.stopPropagation();
+            addWatch(w.code, w.name, null);
+          };
+        }
+      } else {
+        var q = (state.quotes || {})[w.code] || {};
+        var v = quoteView(q);  // 与右栏卡头同一口径；缺价格时价格与涨跌一并显空
+        var pctCls = v.pct > 0 ? 'up' : (v.pct < 0 ? 'down' : 'flat');
+        div.innerHTML = '<div class="row"><span>' + esc(w.name) +
+          (q.limit_up ? '<span class="tag-limit">涨停</span>' : '') + '</span>' +
+          '<span class="chg ' + pctCls + '">' +
+          (v.pct == null ? '' : (v.pct > 0 ? '+' : '') + v.pct.toFixed(2) + '%') + '</span>' +
+          '<span class="btns">' +
+          '<button class="star' + (w.starred ? ' on' : '') + '" title="置顶" aria-label="置顶">' + SVG_STAR + '</button>' +
+          '<button class="del" title="移出自选" aria-label="移出自选">' + SVG_X + '</button></span></div>' +
+          '<div class="row2"><span class="code">' + esc(w.code) + '</span>' +
+          '<span class="px ' + pctCls + '"' + (v.time ? ' title="价格时刻 ' + esc(v.time) + '"' : '') + '>' +
+          (v.unavailable ? '暂无可信价格' : v.price == null ? '' : v.price.toFixed(2) + (v.historical ? ' 历史' : v.prevClose ? ' 昨收' : '') + (v.stale ? ' 延迟' : '')) +
+          '</span></div>';
+        div.querySelector('.star').onclick = function (ev) {
+          ev.stopPropagation();
+          toggleStar(w.code);
+        };
+        div.querySelector('.del').onclick = function (ev) {
+          ev.stopPropagation();
+          removeWatch(w.code);
+        };
+      }
+      div.onclick = function () { openCode(w.code, w.name); };
       div.tabIndex = 0;
       div.onkeydown = function (ev) {
         if (ev.target !== div) return;
@@ -272,9 +192,31 @@
       box.appendChild(div);
       if (w.code === focusedCode) restoreRow = div;
     });
+    if (recentMode && !list.length) {
+      var empty = document.createElement('div');
+      empty.className = 'wl-empty';
+      empty.textContent = '暂无查看记录';
+      box.appendChild(empty);
+    }
     if (restoreRow) {
       restoreRow.focus({preventScroll: true});
-      if (focusedAction) restoreRow.querySelector('.' + focusedAction).focus({preventScroll: true});
+      var action = focusedAction && restoreRow.querySelector('.' + focusedAction);
+      if (action) action.focus({preventScroll: true});
+    }
+
+    [['wlTabWatch', 'watch'], ['wlTabRecent', 'recent']].forEach(function (t) {
+      var tab = el(t[0]);
+      if (!tab) return;
+      tab.setAttribute('aria-selected', state.sideTab === t[1] ? 'true' : 'false');
+      tab.classList.toggle('on', state.sideTab === t[1]);
+      tab.onclick = function () { setSideTab(t[1]); };
+    });
+    // 当前看的不是自选：页头给显式「加入自选」入口（查看只保证近期分析窗口）
+    var track = el('trackBtn');
+    if (track) {
+      track.hidden = !state.code || isWatched(state.code);
+      track.title = sessionDemo ? '加入自选（仅查看本地样本）' : '加入自选以补完整历史，并在离开页面后持续跟踪';
+      track.onclick = function () { if (state.code) addWatch(state.code, nameOf(state.code), null); };
     }
 
     var formBox = el('wlForm');
@@ -287,23 +229,23 @@
       var form = document.createElement('form');
       form.className = 'wl-add';
       form.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>' +
-        '<input name="q" placeholder="代码 / 名称，回车添加" autocomplete="off" required>' +
+        '<input name="q" placeholder="代码 / 名称，回车查看" autocomplete="off" required>' +
         '<div class="wl-drop" hidden></div>';
       wireSearch(form);
       formBox.appendChild(form);
     }
     var wlCount = el('wlCount');
-    if (wlCount) wlCount.textContent = String(state.watchlist.length).padStart(2, '0');
+    if (wlCount) wlCount.textContent = String(list.length).padStart(2, '0');
     var wlCountRail = el('wlCountRail');
-    if (wlCountRail) wlCountRail.textContent = String(state.watchlist.length).padStart(2, '0');
+    if (wlCountRail) wlCountRail.textContent = String(list.length).padStart(2, '0');
     updateAiTitle();  // watchlist 晚于首次 load() 返回时修正标题
     if (lastF10 && lastF10.code === state.code) {
-      renderF10Header(lastF10.json.f10 || {});  // 同上，修正 F10 卡头
+      renderF10Header();  // 同上，修正卡头名称
       renderTags();
     }
   }
 
-  // ---------- 搜索式添加（防抖 300ms → /api/search，点击候选即添加） ----------
+  // ---------- 搜索（防抖 300ms → /api/search；选中候选即查看，每条候选另有「加自选」） ----------
 
   var searchTimer = null, searchRequest = 0;
 
@@ -318,7 +260,7 @@
     input.setAttribute('aria-expanded', 'false');
     input.setAttribute('aria-autocomplete', 'list');
     input.setAttribute('aria-controls', drop.id);
-    input.setAttribute('aria-label', '搜索自选股');
+    input.setAttribute('aria-label', '搜索股票');
 
     function hideDrop() {
       drop.hidden = true; drop.innerHTML = ''; cands = []; activeIdx = -1;
@@ -350,7 +292,7 @@
       if (!c) return;
       cancelSearch();
       input.value = '';
-      addWatch(c.code, c.name, null);
+      openCode(c.code, c.name);
     }
 
     function showCandidates(list) {
@@ -374,6 +316,24 @@
           ev.preventDefault();
           pick(i);
         };
+        // 显式加入自选：不打开图表；已在自选的只标注，不重复添加
+        var watched = state.watchlist.some(function (w) { return w.code === c.code; });
+        var add = document.createElement('button');
+        add.type = 'button';
+        add.className = 'c-add';
+        add.tabIndex = -1;
+        add.disabled = watched;
+        add.textContent = watched ? '已自选' : '加自选';
+        add.setAttribute('aria-label', watched ? c.name + ' 已在自选' : '加入自选 ' + c.name);
+        add.onmousedown = function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (watched) return;
+          cancelSearch();
+          input.value = '';
+          addWatch(c.code, c.name, null);
+        };
+        div.appendChild(add);
         drop.appendChild(div);
       });
       drop.hidden = false;
@@ -417,7 +377,7 @@
       }
     };
     input.onblur = cancelSearch;
-    form.onsubmit = function (ev) { ev.preventDefault(); };  // 添加只走候选（点击/回车），不整表提交
+    form.onsubmit = function (ev) { ev.preventDefault(); };  // 查看/添加只走候选（点击/回车/加自选），不整表提交
   }
 
   // 点搜索区外部收起下拉
@@ -442,13 +402,16 @@
         .then(function (r) { if (!r.ok) throw new Error('加载失败 ' + r.status); return r.json(); })
         .then(function (items) {
           state.watchlist = items;
+          if (state.code) renderF10Header();   // 价格卡按是否自选选报价通道：列表一到就重绘，不等 F10
           var corrected = false;
-          if (!items.some(function (w) { return w.code === state.code; })) {
-            state.code = items.length ? items[0].code : null;
+          // 不在自选里的代码是合法的「查看」，保持不动；只有尚未选中任何代码时才落到自选首项
+          if (!state.code && items.length) {
+            state.code = items[0].code;
             corrected = true;
           }
           renderWatchlist();
-          // 首屏若 URL 已预选 code，chart 已与本请求并发发出（skipLoad）；只有 code 被纠正时才需重新 load
+          // 首屏若 URL 已预选 code，chart 已与本请求并发发出（skipLoad）；只有 code 被补选时才需重新 load
+          // 首屏自动落到自选首项不是用户的选择，不记查看（否则每次打开页面都把它顶到最近查看最前）
           if (state.code && (!skipLoad || corrected)) load();
         });
     })
@@ -467,14 +430,33 @@
     return notes.join(' · ');
   }
 
+  // 行情按自选代码成表，与当前 code/freq/adjust 无关；只接纳最新一次请求的响应（逆序返回时较早的晚到不覆盖）
+  var quotesSeq = 0;
   function loadQuotes() {
-    var generation = supplyState.generation, epoch = supplyState.epoch;
+    var seq = ++quotesSeq;
     fetch('/api/quotes')
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) {
-        if (!j || !eligible(generation, j, epoch)) return;
+        if (!j || seq !== quotesSeq) return;
         state.quotes = j.quotes || {};
         renderWatchlist();
+        if (state.code) renderF10Header();  // 价格卡独立于 F10：F10 未到时报价也要显示
+      })
+      .catch(function () {});
+  }
+
+  // 正在看的非自选代码：单代码报价（自选由 loadQuotes 的整表覆盖）；只接纳最新一次请求的响应（逆序返回时
+  // 较早的请求晚到不覆盖），且代码仍是当前代码
+  var viewQuoteSeq = 0;
+  function loadViewQuote(code) {
+    if (!code || isWatched(code)) return;
+    var seq = ++viewQuoteSeq;
+    fetch('/api/quote?code=' + encodeURIComponent(code))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || seq !== viewQuoteSeq || code !== state.code) return;
+        state.viewQuote = { code: code, quote: j.quote || null };
+        renderF10Header();
       })
       .catch(function () {});
   }
@@ -495,7 +477,11 @@
         if (selectFirst) state.code = items[0].code;
         if (form) form.reset();
         renderWatchlist();
-        if (selectFirst) load();
+        // 报价通道切到报价表：上次成员期间残留的这一项不可信，作废并立即刷新；表到之前价格卡沿用单代码报价
+        if (state.quotes) delete state.quotes[code];
+        if (state.code) renderF10Header();
+        loadQuotes();
+        if (selectFirst) { load(); recordView(items[0].code, items[0].name); }  // 无当前代码时加入即打开：记一次查看
         setStatus('');
       });
     }).catch(function (e) { setStatus(e.message); });
@@ -509,16 +495,66 @@
           return r.json();
         })
         .then(function (items) {
-          var removedCurrent = state.code === code;
+          // 移出自选退回搜索查看：当前图表保持不动（数据与查看记录都保留），只停止后台持续跟踪
           state.watchlist = items;
-          if (removedCurrent) state.code = items.length ? items[0].code : null;
           renderWatchlist();
-          if (removedCurrent) {
-            if (state.code) load();
-            else clearSelection();
-          }
+          // 报价通道切到单代码报价：报价表里的这一项不再刷新，作废；立即重绘并取单代码报价
+          if (state.quotes) delete state.quotes[code];
+          if (state.code) renderF10Header();
+          if (state.code === code) loadViewQuote(code);
         });
     }).catch(function (e) { setStatus(e.message); });
+  }
+
+  // 用户显式打开一个代码（搜索选中、最近查看、自选行）：切图并记一次查看。
+  // 自动刷新、整窗重载、周期/复权切换都走 load()，不经这里，不记查看。
+  function openCode(code, name) {
+    state.code = code;
+    rememberRecent(code, name);
+    renderWatchlist();
+    load();
+    recordView(code, name);
+    if (sbMode() === 'open') setSidebar('rail');  /* 浮动展开选中后收回窄栏，露出图表 */
+  }
+
+  // 本页先把刚打开的代码放到最近查看首位，服务端回读后以服务端为准
+  function rememberRecent(code, name) {
+    var prev = null;
+    state.recent = (state.recent || []).filter(function (r) {
+      if (r.code === code) prev = r;
+      return r.code !== code;
+    });
+    state.recent.unshift({ code: code, name: name || (prev && prev.name) || code,
+      freq: state.freq, adjust: viewState.adjust, last_viewed_at: null });
+  }
+
+  // 查看记录是日志不是门槛：写入失败静默，不影响图表
+  function recordView(code, name) {
+    return fetch('/api/views', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: code, name: name || code, freq: state.freq, adjust: viewState.adjust }),
+    }).then(function (r) { if (r.ok) return loadRecent(); })
+      .catch(function () {});
+  }
+
+  function loadRecent() {
+    return fetch('/api/views')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j) return;
+        state.recent = j.recent || [];
+        renderWatchlist();
+      })
+      .catch(function () {});
+  }
+
+  function setSideTab(tab) {
+    if (tab !== 'watch' && tab !== 'recent') return;
+    state.sideTab = tab;
+    try { localStorage.setItem('chanapp-side-tab', tab); } catch (_) {}
+    renderWatchlist();
+    if (tab === 'recent') loadRecent();
   }
 
   function toggleStar(code) {
@@ -535,27 +571,224 @@
     }).catch(function (e) { setStatus(e.message); });
   }
 
-  function renderTabs() {
-    var btns = el('freqTabs').querySelectorAll('button');
-    btns.forEach(function (b) {
-      b.classList.toggle('active', b.dataset.freq === state.freq);
-      b.onclick = function () { state.freq = b.dataset.freq; renderTabs(); load(); };
+  // ---------- 展示周期偏好 ----------
+  function periodAvailable(freq) {
+    var market = /^hk/.test(state.code || '') ? 'hk' : 'cn';
+    return !!periodPrefs && !!periodPrefs.markets[market] &&
+      periodPrefs.markets[market].available.indexOf(freq) >= 0;
+  }
+
+  function periodEnabled(freq) {
+    return !!periodPrefs && !periodPrefs.notice && periodPrefs.selected.indexOf(freq) >= 0 && periodAvailable(freq);
+  }
+
+  function clearPeriodView(message) {
+    if (chartAbort) chartAbort.abort();
+    chartAbort = null;
+    Object.keys(analysisSlots).forEach(function (key) {
+      if (analysisSlots[key].abort) analysisSlots[key].abort.abort();
+      analysisSlots[key].abort = null;
     });
+    analysisSlots = {};
+    analysisIdentity = null;
+    pendingAnalysis = null;
+    closeAiPopup();
+    el('aiPanel').innerHTML = '';
+    historyState.loading = false;
+    historyState.reqId++;
+    historyState.hasMore = false;
+    viewState.token = null;
+    viewState.analysisTokens = null;
+    chartEtag = null;
+    loadedTarget = null;
+    lastChartData = null;
+    activeChartVersion = null;
+    el('center').classList.add('period-empty');
+    el('rail').classList.add('period-empty');
+    el('resonance').innerHTML = '';
+    el('metaBar').textContent = '';
+    el('chartError').innerHTML = '';
+    el('chartError').appendChild(document.createTextNode(message + ' '));
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = periodPrefs ? '选择展示周期' : '重试';
+    button.onclick = function () { if (periodPrefs) openPeriodDialog(); else loadPeriodPrefs(); };
+    el('chartError').appendChild(button);
+    el('chartError').hidden = false;
+    setStatus(message);
+  }
+
+  function openPeriodDialog() {
+    if (!periodPrefs) { loadPeriodPrefs(); return; }
+    var dialog = el('periodDialog'), market = /^hk/.test(state.code || '') ? 'hk' : 'cn';
+    var capability = periodPrefs.markets[market];
+    el('periodTitle').textContent = !periodPrefs.notice ? '展示周期' :
+      periodPrefs.notice.kind === 'first_use' ? '选择展示周期' : '可用周期已变化';
+    el('periodDescription').textContent = '勾选保存在此实例。当前查看市场：' + (market === 'hk' ? '港股' : 'A 股') + '。不可用项保留原勾选，恢复能力后自动启用。';
+    var changes = (periodPrefs.notice && periodPrefs.notice.changes || []).map(function (change) {
+      return (change.market === 'hk' ? '港股' : 'A 股') + ' ' + FREQ_NAME[change.freq] + (change.available ? '现已可用' : '现已不可用');
+    });
+    el('periodChanges').textContent = changes.join('；');
+    el('periodOptions').innerHTML = '';
+    periodPrefs.catalog.forEach(function (period) {
+      var freq = period.freq;
+      var label = document.createElement('label'), input = document.createElement('input');
+      input.type = 'checkbox';
+      input.value = freq;
+      input.checked = periodPrefs.selected.indexOf(freq) >= 0;
+      input.disabled = capability.available.indexOf(freq) < 0;
+      label.className = 'period-option';
+      label.appendChild(input);
+      label.appendChild(document.createTextNode(period.label));
+      if (input.disabled) {
+        var reason = document.createElement('small');
+        reason.textContent = capability.reasons[freq] || '当前市场不支持此周期';
+        label.appendChild(reason);
+      }
+      el('periodOptions').appendChild(label);
+    });
+    el('periodError').textContent = '';
+    el('periodCancel').hidden = !!periodPrefs.notice;
+    if (!dialog.open) dialog.showModal();
+  }
+
+  function loadPeriodPrefs(options) {
+    if (options && options.sync && periodSaving) return Promise.resolve(null);
+    if (periodLoad) return periodLoad;
+    var requestedRevision = periodPrefs && periodPrefs.revision;
+    periodLoad = fetch('/api/periods', {cache: 'no-store'}).then(function (r) {
+      if (!r.ok) throw new Error('周期偏好读取失败，请重试');
+      return r.json();
+    }).then(function (data) {
+      // 保存前已发出的读请求不可在保存期间/之后覆盖新选择。
+      if (options && options.sync && (periodSaving || (periodPrefs && periodPrefs.revision) !== requestedRevision)) return null;
+      var previous = periodPrefs;
+      var editing = el('periodDialog').open;
+      var changed = !previous || previous.revision !== data.revision;
+      if (!changed && options && options.sync) return false;
+      periodPrefs = data;
+      FREQ_NAME = Object.fromEntries(data.catalog.map(function (p) { return [p.freq, p.label]; }));
+      if (previous && changed) clearPeriodView('展示周期已更新');
+      renderTabs();
+      if (data.notice || editing) {
+        openPeriodDialog();
+        if (changed && editing && !data.notice) el('periodError').textContent = '周期设置已更新，请重新确认。';
+      }
+      load();
+      return changed;
+    }).catch(function (error) {
+      if (options && options.sync && (periodSaving || (periodPrefs && periodPrefs.revision) !== requestedRevision)) return null;
+      periodPrefs = null;
+      el('periodDialog').close();
+      renderTabs();
+      clearPeriodView('周期偏好读取失败，请重试');
+      return null;
+    })
+      .finally(function () { periodLoad = null; });
+    return periodLoad;
+  }
+
+  function savePeriodPrefs() {
+    if (periodSaving) return;
+    if (!periodPrefs) { loadPeriodPrefs(); return; }
+    var selected = Array.from(el('periodOptions').querySelectorAll('input')).filter(function (input) {
+      return input.checked;
+    }).map(function (input) { return input.value; });
+    periodSaving = true;
+    el('periodSave').disabled = true;
+    el('periodCancel').disabled = true;
+    el('periodError').textContent = '';
+    fetch('/api/periods', {method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({selected: selected, revision: periodPrefs.revision})
+    }).then(function (r) {
+      if (r.status === 409) {
+        return loadPeriodPrefs().then(function (changed) {
+          if (changed === null) return null;
+          openPeriodDialog();
+          el('periodError').textContent = '周期设置已变化，已读取最新设置，请重新确认。';
+          return null;
+        });
+      }
+      if (!r.ok) throw new Error('保存失败，请重试');
+      return r.json();
+    }).then(function (data) {
+      if (!data) return;
+      periodPrefs = data;
+      FREQ_NAME = Object.fromEntries(data.catalog.map(function (p) { return [p.freq, p.label]; }));
+      // 废弃正在返回的图表/分页/分析结果，取消的周期不可保留在旧画面上。
+      clearPeriodView('正在应用展示周期');
+      el('periodDialog').close();
+      renderTabs();
+      load();
+    }).catch(function (error) { el('periodError').textContent = error.message; })
+      .finally(function () {
+        periodSaving = false;
+        el('periodSave').disabled = false;
+        el('periodCancel').disabled = false;
+      });
+  }
+
+  function renderTabs() {
+    var box = el('freqTabs');
+    var catalog = (periodPrefs && periodPrefs.catalog) || [];
+    var signature = JSON.stringify(catalog);
+    if (box.dataset.catalog !== signature) {
+      box.innerHTML = '';
+      catalog.forEach(function (period) {
+        var button = document.createElement('button');
+        button.dataset.freq = period.freq;
+        button.textContent = period.label;
+        if (period.freq === 'week') button.title = '周线不参与共振/AI';
+        box.appendChild(button);
+      });
+      box.dataset.catalog = signature;
+    }
+    var btns = box.querySelectorAll('button');
+    btns.forEach(function (b) {
+      b.hidden = !periodEnabled(b.dataset.freq);
+      b.classList.toggle('active', b.dataset.freq === state.freq);
+      b.onclick = function () { if (!periodEnabled(b.dataset.freq)) return; state.freq = b.dataset.freq; renderTabs(); load(); };
+    });
+    renderAdjust();
+  }
+
+  function isIndexCode(code) { return /^(sh000|sz399)/.test(code || ''); }
+
+  // 前复权/不复权切换：指数恒为不复权，切换禁用并显示「不复权」
+  function renderAdjust() {
+    var index = isIndexCode(state.code);
+    var box = el('adjustTabs');
+    if (!box) return;                    // 旧版页面缓存没有该控件时不阻断启动
+    box.title = index ? '指数恒为不复权' : '';
+    box.querySelectorAll('button').forEach(function (b) {
+      b.disabled = index;
+      b.classList.toggle('active', b.dataset.adjust === (index ? 'raw' : viewState.adjust));
+      b.onclick = function () { setAdjust(b.dataset.adjust); };
+    });
+  }
+
+  function setAdjust(adjust) {
+    if ((adjust !== 'qfq' && adjust !== 'raw') || adjust === viewState.adjust || isIndexCode(state.code)) return;
+    viewState.adjust = adjust;
+    try { localStorage.setItem('chanapp-adjust', adjust); } catch (_) {}
+    renderAdjust();
+    if (!state.code) return;
+    // 同一时间轴只换价格口径：保留可视时间区间，便于对照
+    restoreRange = charts ? {code: state.code, freq: state.freq, range: charts.main.timeScale().getVisibleRange()} : null;
+    load();
   }
 
   // ---------- header 状态（常驻：交易时段 + 抓取时间；临时消息优先） ----------
 
   var statusMsg = null;   // setStatus 的临时消息，空串/null 回落到常驻状态
-  var lastMeta = null;    // 最近一次 /api/chart 的 meta（抓取时间/缓存标记）
+  var lastMeta = null;    // 最近一次 /api/chart 的 meta（抓取时间/新鲜度）
 
-  // 新鲜度文案（v1.6.5 终审口径）：stale=过期回旧 → 金色「缓存·HH:MM:SS」（缓存内容的抓取时点 = fetch_time 本身；取不到 HH:MM:SS 则「缓存·旧」）；TTL 内 → 「（缓存）」；新鲜 → 空
+  // 新鲜度徽标（K 线数据契约「新鲜度」）：只看 meta.stale。stale → 金色「（缓存·HH:MM:SS）」，时刻取 fetch_time
+  // （该数据集最近一次成功提交；取不到 HH:MM:SS 则「缓存·旧」）；否则无徽标。from_cache 只表示本次不是同步首取，不参与
   function cacheBadge(meta) {
-    if (!meta || !meta.from_cache) return '';
-    if (meta.stale) {
-      var t = /(\d{2}:\d{2}:\d{2})/.test(String(meta.fetch_time || '')) ? hhmmss(meta.fetch_time) : '旧';
-      return '<span class="warn">（缓存·' + t + '）</span>';
-    }
-    return '（缓存）';
+    if (!meta || !meta.stale) return '';
+    var t = /(\d{2}:\d{2}:\d{2})/.test(String(meta.fetch_time || '')) ? hhmmss(meta.fetch_time) : '旧';
+    return '<span class="warn">（缓存·' + t + '）</span>';
   }
 
   function hhmmss(ts) {
@@ -581,15 +814,27 @@
     el('chartError').hidden = true;
   }
 
+  // 状态栏（目标 2026-09-29 第三阶段）：服务端在同一次读取里给出 coverage.data_status {phase, day, at}，只按本次
+  // 图表快照渲染——「交易中 · 实时抓取」「已收盘 · 待定稿」「已收盘 · 历史抓取」加最后成功接纳时刻（MM-DD HH:MM），
+  // 从未成功为「暂无数据」。没有该字段（旧门面）时沿用交易时段 + 抓取时间。
+  var DATA_PHASE = { live: '交易中 · 实时抓取', awaiting_final: '已收盘 · 待定稿', final: '已收盘 · 历史抓取' };
   function renderStatus() {
     var s = el('status');
     if (statusMsg) { s.textContent = statusMsg; return; }
     if (!state.code) { s.textContent = ''; return; }
-    var open = isSessionOpen(new Date(), marketOf(state.code));
+    var ds = lastMeta && lastMeta.coverage && lastMeta.coverage.data_status;
+    var open = ds ? (ds.phase === 'live' || (ds.phase === 'none' && isSessionOpen(marketOf(state.code))))
+      : isSessionOpen(marketOf(state.code));
     var html = '<span class="dot" style="color:' +
-      (open ? 'var(--down)' : 'var(--faint)') + '">●</span> ' + (open ? '交易中' : '已收盘');
-    if (lastMeta && lastMeta.fetch_time) {
-      html += ' · 抓取 ' + hhmmss(lastMeta.fetch_time) + cacheBadge(lastMeta);
+      (open ? 'var(--down)' : 'var(--faint)') + '">●</span> ';
+    if (ds && ds.phase === 'historical') {
+      html += '历史截止于 ' + esc(ds.day || '未知日期');
+    } else if (ds) {
+      html += ds.phase === 'none' || !ds.at ? (open ? '交易中' : '已收盘') + ' · 暂无数据'
+        : esc(DATA_PHASE[ds.phase] + ' ' + String(ds.at).slice(5, 16));
+    } else {
+      html += open ? '交易中' : '已收盘';
+      if (lastMeta && lastMeta.fetch_time) html += ' · 抓取 ' + hhmmss(lastMeta.fetch_time) + cacheBadge(lastMeta);
     }
     s.innerHTML = html;
   }
@@ -640,11 +885,11 @@
 
   // ---------- 十字光标图例（主图左上角，默认显示最新一根） ----------
 
-  // 成交量单位是股，图例换算为万/亿
+  // 成交量单位是股（所有市场、所有周期统一），图例换算为万股/亿股
   function fmtVol(v) {
-    if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿';
-    if (v >= 1e4) return (v / 1e4).toFixed(2) + '万';
-    return String(v);
+    if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿股';
+    if (v >= 1e4) return (v / 1e4).toFixed(2) + '万股';
+    return Math.round(v) + '股';
   }
 
   // 图例/依据卡/AI 缓存行日期口径（MM-DD，跨年 MM-DD-YY）——与时间轴刻度口径独立
@@ -854,7 +1099,6 @@
   var activeMa = { 5: true, 13: true, 20: true };
   var maSeries = {};
   var maData = {};
-  var indicatorStart = 0;
 
   function computeMAs() {
     maData = {};
@@ -862,10 +1106,9 @@
     MA_PERIODS.forEach(function (n) {
       var out = [], s = 0;
       for (var i = 0; i < closes.length; i++) {
-        if (i < indicatorStart) { out.push(null); continue; }
         s += closes[i];
-        if (i >= indicatorStart + n) s -= closes[i - n];
-        out.push(i >= indicatorStart + n - 1 ? s / n : null);
+        if (i >= n) s -= closes[i - n];
+        out.push(i >= n - 1 ? s / n : null);
       }
       maData[n] = out;
     });
@@ -926,12 +1169,10 @@
 
   function rsiArr(n) {
     var closes = klineData.map(function (b) { return b.close; });
-    var start = typeof indicatorStart === 'number' ? indicatorStart : 0;
     var out = closes.map(function () { return null; }), ag = 0, al = 0;
-    for (var i = start + 1; i < closes.length; i++) {
+    for (var i = 1; i < closes.length; i++) {
       var ch = closes[i] - closes[i - 1], g = Math.max(ch, 0), l = Math.max(-ch, 0);
-      var offset = i - start;
-      if (offset <= n) { ag += g / n; al += l / n; }
+      if (i <= n) { ag += g / n; al += l / n; }
       else { ag = (ag * (n - 1) + g) / n; al = (al * (n - 1) + l) / n; out[i] = al ? 100 - 100 / (1 + ag / al) : 100; }
     }
     return out;
@@ -939,10 +1180,8 @@
 
   function kdjArr() {
     var K = [], D = [], J = [], k = 50, d = 50;
-    var start = typeof indicatorStart === 'number' ? indicatorStart : 0;
     for (var i = 0; i < klineData.length; i++) {
-      if (i < start) { K.push(null); D.push(null); J.push(null); continue; }
-      var s = Math.max(start, i - 8), hh = -1e18, ll = 1e18;
+      var s = Math.max(0, i - 8), hh = -1e18, ll = 1e18;
       for (var j = s; j <= i; j++) { hh = Math.max(hh, klineData[j].high); ll = Math.min(ll, klineData[j].low); }
       var rsv = hh === ll ? 50 : (klineData[i].close - ll) / (hh - ll) * 100;
       k = 2 / 3 * k + 1 / 3 * rsv; d = 2 / 3 * d + 1 / 3 * k;
@@ -953,10 +1192,9 @@
 
   function bollArr(n, k) {
     var closes = klineData.map(function (b) { return b.close; });
-    var start = typeof indicatorStart === 'number' ? indicatorStart : 0;
     var mid = [], up = [], lo = [];
     for (var i = 0; i < closes.length; i++) {
-      if (i < start + n - 1) { mid.push(null); up.push(null); lo.push(null); continue; }
+      if (i < n - 1) { mid.push(null); up.push(null); lo.push(null); continue; }
       var s = 0;
       for (var j = i - n + 1; j <= i; j++) s += closes[j];
       var m = s / n, v = 0;
@@ -1071,14 +1309,14 @@
 
   // ---------- 多级别共振角标 ----------
 
-  var FREQ_NAME = { day: '日线', m60: '60分', m30: '30分', m15: '15分', m5: '5分' };
+  var FREQ_NAME = Object.fromEntries(((periodPrefs && periodPrefs.catalog) || []).map(function (p) { return [p.freq, p.label]; }));
   // 力度算法上游口径的中文名（详情卡多处展示，统一走这一份）
   var MACD_ALGO_NAME = { peak: 'MACD同向柱峰值', slope: '价格变化斜率' };
 
-  function renderResonance(list) {
+  function renderResonance(list, freqs) {
     var box = el('resonance');
     box.innerHTML = '';
-    ['day', 'm60', 'm30'].forEach(function (freq) {
+    (freqs || (list || []).map(function (item) { return item.freq; })).forEach(function (freq) {
       var found = (list || []).find(function (item) { return item.freq === freq; });
       var lv = found || { freq: freq };
       var signals = lv.signals || [], details = [], forming = false;
@@ -1099,7 +1337,7 @@
       var chip = document.createElement('span');
       chip.className = 'res-chip' + (signals.length ? ' has-signal' : '');
       chip.dataset.freq = freq;
-      chip.title = FREQ_NAME[freq] + '：' + details.join(' / ') + '（点击切换周期）';
+      chip.title = FREQ_NAME[freq] + '：' + details.join(' / ') + (periodEnabled(freq) ? '（点击切换周期）' : '（分析必需；展示未勾选）');
       chip.innerHTML = '<span class="lv">' + FREQ_NAME[freq] + '</span><span class="res-detail">' + html + '</span>' +
         (forming ? '<span class="res-state">形成中</span>' : '');
       if (signals.length) {
@@ -1117,13 +1355,20 @@
         chip.appendChild(detailBtn);
       }
       chip.onclick = function () {
-        if (state.freq === freq) return;
+        if (!periodEnabled(freq) || state.freq === freq) return;
         state.freq = freq;
         renderTabs();
         load();
       };
       box.appendChild(chip);
     });
+    // 周线只作查看，不参与共振与 AI。
+    if (state.freq === 'week') {
+      var note = document.createElement('span');
+      note.className = 'res-note';
+      note.textContent = '周线不参与共振/AI';
+      box.appendChild(note);
+    }
   }
 
   // ---------- 原生信号标注 ----------
@@ -1269,7 +1514,7 @@
     return (p[0] === ymd) ? p[1] : fmtBarTime(dt);
   }
 
-  // noteMode: null（真实结果）| 'unconfigured'（未配置 LLM）| 'fallback'（接口失败回落样例）
+  // noteMode: null（真实结果）| 'unconfigured'（未配置 LLM，渲染静态样例）
   function renderAnalysis(j, noteMode) {
     var box = el('aiPanel');
     if (noteMode) pendingAnalysis = null;
@@ -1278,12 +1523,10 @@
     el('aiSampleBadge').hidden = !noteMode;  // 静态样例身份常驻面板头部，不随滚动离开
     var html = '';
     if (!noteMode && j.analysis_scope === 'multi_timeframe') {
-      html += '<div class="ai-note">联合分析 · 日线 / 60分 / 30分</div>';
+      html += '<div class="ai-note">分析级别 · ' + (j.freqs || []).map(function (f) { return esc(FREQ_NAME[f] || f); }).join(' / ') + '</div>';
     }
     if (noteMode === 'unconfigured') {
       html += '<div class="ai-note">未配置 LLM，仅显示依据卡（以下为静态样例）</div>';
-    } else if (noteMode === 'fallback') {
-      html += '<div class="ai-note">完全分类接口不可用，以下为静态样例</div>';
     } else if (j.cached) {
       html += '<div class="ai-note">缓存结果（' +
         (j.analysis_scope === 'multi_timeframe' ? '分析输入未变化' : (j.ref_bar_dt ? fmtRefDt(j.ref_bar_dt) + '后结构未变化' : '结构未变化')) +
@@ -1511,7 +1754,7 @@
 
   var pendingAnalysis = null, activeChartVersion = null;
   var analysisIdentity = null;
-  /* AI 结果与在飞请求按身份槽位保留（身份 = 股票 + 成笔标准 + 提示范围 + 供数口径）：
+  /* AI 结果与在飞请求按身份槽位保留（身份 = 股票 + 成笔标准 + 提示范围 + 复权模式 + 分析周期组合）：
      切走不 abort、不丢结果，切回即恢复；超出上限按最近发起逐出并中止其请求 */
   var AI_SLOT_MAX = 10;
   var analysisSlots = {};
@@ -1538,7 +1781,7 @@
       body.schema_version === 'chanpy_v2' && typeof body.calculation_id === 'string' && !!body.calculation_id;
   }
   function currentAnalysisIdentity() {
-    return JSON.stringify([state.code, state.ruleProfile, state.signalScope, supplyState.scheme || '', supplyState.epoch || '', supplyState.generation]);
+    return JSON.stringify([state.code, state.ruleProfile, state.signalScope, viewState.adjust, Object.keys(viewState.analysisTokens || {}).sort()]);
   }
   function updateAnalysisFreshness() {
     var note = el('aiDataStatus'), chart = activeChartVersion;
@@ -1555,7 +1798,7 @@
     updateAnalysisFreshness();
   }
   function showMatchingAnalysis() {
-    // 联合版本属于固定三周期数据集，不与当前单张图表的版本比较。
+    // 联合版本属于本次周期组合的数据集，不与当前单张图表的版本比较。
     if (pendingAnalysis && pendingAnalysis.identity === currentAnalysisIdentity()) {
       renderAnalysis(pendingAnalysis.body, null);
     }
@@ -1568,7 +1811,7 @@
     });
   }
 
-  // fetch 失败或未配置 LLM 时回落到静态样例渲染，保证无 key 也能验收 UI
+  // 仅未配置 LLM 时渲染静态样例（无 key 也能验收 UI）；接口失败不回落样例，以免被误读为该标的的结论
   var AI_SPIN_MIN = 500;  // 旋转反馈最短时长：缓存秒回时也要让用户感知「已刷新」
 
   // 自动刷新与切换仅同步面板归属；AI 请求只由刷新按钮触发。
@@ -1576,6 +1819,10 @@
   function syncManualAnalysis() {
     var identity = currentAnalysisIdentity();
     if (identity === analysisIdentity) return;
+    // 409 后的整窗重载换了组合（同一标的与规则）时沿用重新分析提示
+    var keepStale = !!staleNoteIdentity &&
+      JSON.stringify(JSON.parse(staleNoteIdentity).slice(0, 4)) === JSON.stringify(JSON.parse(identity).slice(0, 4));
+    staleNoteIdentity = null;
     analysisIdentity = identity;
     ruleSwitchNote = null;
     var slot = analysisSlots[identity];
@@ -1584,7 +1831,7 @@
     if (pendingAnalysis) {
       showMatchingAnalysis();
     } else {
-      el('aiPanel').innerHTML = '<div class="ai-note">' + (busy ? '加载中…' : '点击刷新生成分析') + '</div>';
+      el('aiPanel').innerHTML = '<div class="ai-note">' + (busy ? '加载中…' : keepStale ? '数据已更新，请重新分析' : '点击刷新生成分析') + '</div>';
       el('aiDataStatus').hidden = true;
       el('aiSampleBadge').hidden = true;
     }
@@ -1595,10 +1842,27 @@
     updateAnalysisFreshness();
   }
 
+  // 服务端判定分析令牌与当前数据不符（分析期间有定稿、修订或隔离，或旧页面缺令牌）时返回 409：
+  // 不调用模型；前端整窗重载主图以取得新令牌，提示用户重新分析，不自动重发（避免重复调用模型）。
+  var ANALYSIS_STALE = {};
+  var staleNoteIdentity = null;  // 提示只延续到这次整窗重载落地
+  function onAnalysisStale(identity) {
+    if (identity !== currentAnalysisIdentity()) return;  // 已切走：不动当前面板，也不重载别的标的
+    pendingAnalysis = null;
+    staleNoteIdentity = identity;
+    el('aiPanel').innerHTML = '<div class="ai-note">数据已更新，请重新分析</div>';
+    el('aiDataStatus').hidden = true;
+    el('aiSampleBadge').hidden = true;
+    reloadWholeWindow();
+  }
+
   function loadAnalysis(options) {
-    if (!options || options.manual !== true || supplyBusy) return;
+    if (!options || options.manual !== true) return;
     closeAiPopup();
-    var generation = supplyState.generation, epoch = supplyState.epoch, profile = state.ruleProfile, scope = state.signalScope;
+    var profile = state.ruleProfile, scope = state.signalScope, adjust = viewState.adjust;
+    // 分析令牌只属于给出它的那次主图（同一代码与复权模式）；切走后新图未到时不借用旧代码的令牌
+    var tokens = loadedTarget && loadedTarget.code === state.code && loadedTarget.adjust === adjust
+      ? viewState.analysisTokens : null;
     if (!state.code) { el('aiPanel').innerHTML = ''; return; }
     var identity = currentAnalysisIdentity();
     var slot = analysisSlot(identity);
@@ -1619,13 +1883,18 @@
     var timer = setTimeout(function () {
       ctl.abort(new Error('analysis timeout'));
     }, ANALYSIS_TIMEOUT_MS);
-    fetch('/api/analysis?code=' + encodeURIComponent(state.code) + '&freq=day&rule_profile=' + encodeURIComponent(profile) + '&signal_scope=' + encodeURIComponent(scope), { signal: ctl.signal })
+    // 没有分析令牌（主图尚未给出）时不带 tokens 参数：服务端按缺令牌返回 409，走同一重载路径
+    fetch('/api/analysis?code=' + encodeURIComponent(state.code) + '&freq=day&rule_profile=' + encodeURIComponent(profile) +
+          '&signal_scope=' + encodeURIComponent(scope) + '&adjust=' + encodeURIComponent(adjust) +
+          (tokens ? '&tokens=' + encodeURIComponent(JSON.stringify(tokens)) : ''), { signal: ctl.signal })
       .then(function (r) {
+        if (r.status === 409) return ANALYSIS_STALE;
         if (!r.ok) throw new Error('analysis ' + r.status);
         return r.json();
       })
       .then(function (j) {
         if (ctl !== slot.abort) return;
+        if (j === ANALYSIS_STALE) { onAnalysisStale(identity); return; }
         if (!acceptsRule(j, profile, scope)) {  // 规则身份不匹配：显式提示，不静默停在加载态
           if (identity === currentAnalysisIdentity()) {
             analysisIdentity = null;
@@ -1633,7 +1902,14 @@
           }
           return;
         }
-        if (!eligible(generation, j, epoch)) return;
+        if (j.status === 'disabled') {
+          if (identity === currentAnalysisIdentity()) {
+            el('aiPanel').innerHTML = '<div class="ai-note">demo 模式不调用 AI</div>';
+            el('aiDataStatus').hidden = true;
+            el('aiSampleBadge').hidden = true;
+          }
+          return;
+        }
         if (j.status === 'ok') {
           slot.body = j;   /* 结果落槽：切走后才完成也不丢，切回即恢复 */
           if (identity === currentAnalysisIdentity()) queueAnalysis(j);
@@ -1644,12 +1920,10 @@
       .catch(function (e) {
         if (ctl !== slot.abort || identity !== currentAnalysisIdentity()) return;
         if (e && e.name === 'AbortError') return;  // 被新请求中止，静默
-        return fetchAnalysisSample()
-          .then(function (s) { if (ctl === slot.abort && identity === currentAnalysisIdentity()) renderAnalysis(s, 'fallback'); })
-          .catch(function () {
-            if (ctl !== slot.abort || identity !== currentAnalysisIdentity()) return;
-            el('aiPanel').innerHTML = '<div class="ai-note">完全分类不可用</div>';
-          });
+        pendingAnalysis = null;
+        el('aiPanel').innerHTML = '<div class="ai-note">完全分类不可用</div>';
+        el('aiDataStatus').hidden = true;
+        el('aiSampleBadge').hidden = true;
       })
       .then(function () {  // 按钮复位仅由最新一次请求执行，且只在身份仍当前时触碰 UI
         if (ctl !== slot.abort) return;
@@ -1668,20 +1942,27 @@
 
   // ---------- 数据口径条 ----------
 
+  // 覆盖提示：复权段带前复权覆盖起点（coverage.qfq_from，原始价/指数/港股供应商口径为空），
+  // 视图提示（notices：前复权显示至/起可用、分钟历史加载中、结构输入尚未补齐、该市场暂不提供）逐条醒目显示
   function renderMeta(meta) {
     lastMeta = meta;
     renderStatus();
     var bar = el('metaBar');
-    var basis = meta.basis || null;
+    var qfqFrom = meta.coverage && meta.coverage.qfq_from;
     var parts = [
       {text: '数据源：' + meta.source},
-      {text: '复权：' + meta.fqf + (basis && basis.since ? ' · 基准 ' + basis.since : ''),
-       badge: basis && basis.pending_rebuild ? ' · <b>重建中</b>' : ''},
-      {text: '抓取：' + meta.fetch_time, badge: cacheBadge(meta)},
+      {text: '复权：' + meta.fqf + (qfqFrom ? '（自 ' + qfqFrom + '）' : '')},
+      {text: meta.coverage && meta.coverage.data_status && meta.coverage.data_status.phase === 'historical'
+        ? '历史截止于 ' + (meta.coverage.data_status.day || '未知日期')
+        : '抓取：' + (meta.fetch_time || '暂无记录'), badge: cacheBadge(meta)},
       {text: 'K线：' + meta.bars + ' 根', title: meta.first_dt + ' ~ ' + meta.last_dt},
     ];
+    (meta.notices || []).forEach(function (notice) {
+      if (notice && notice.text) parts.push({text: notice.text, cls: 'warn'});
+    });
     bar.innerHTML = parts.map(function (part) {
-      return '<span title="' + esc(part.title || part.text) + '">' + esc(part.text) + (part.badge || '') + '</span>';
+      return '<span' + (part.cls ? ' class="' + part.cls + '"' : '') + ' title="' + esc(part.title || part.text) + '">' +
+        esc(part.text) + (part.badge || '') + '</span>';
     }).join('');
     bar.title = meta.degraded && meta.degraded_note ? meta.degraded_note : '';
   }
@@ -1705,30 +1986,37 @@
 
   function watchName(code) {
     var w = null;
-    state.watchlist.forEach(function (x) { if (x.code === code) w = x; });
+    state.watchlist.concat(state.recent || []).some(function (x) { return x.code === code && (w = x); });
     return w ? w.name : code;
   }
 
   function hideF10Cards() {
     el('f10Sec').style.display = 'none';
+    el('f10Stale').hidden = true;         // F10 的缓存注记随 F10 收起；价格卡不动
     el('flowSec').style.display = 'none';
     el('flowNote').textContent = '';
     el('flowNote').hidden = true;
   }
 
-  // 卡头：名称取自选股（查不到回落 code）；价/涨幅优先用 state.quotes，缺失用 f.price
-  function renderF10Header(f) {
-    var q = (state.quotes || {})[state.code] || {};
+  // 卡头：独立的价格卡，F10 慢或失败不挡。名称取自选股（查不到回落 code）；价/涨幅只取行情——按当前是否自选
+  // 选通道：自选取 state.quotes（报价表还没有时退回单代码报价），非自选只取单代码报价 state.viewQuote（按代码
+  // 核对；移出自选后报价表里的残留旧价不再刷新，不能遮住它）——不回退 F10 价格
+  function renderF10Header() {
+    var vq = state.viewQuote;
+    var view = vq && vq.code === state.code ? vq.quote : null;
+    var v = quoteView(isWatched(state.code) ? (state.quotes || {})[state.code] || view : view);
+    el('quoteSec').style.display = state.code ? '' : 'none';
     el('f10Name').textContent = watchName(state.code);
     el('f10Code').textContent = state.code;
-    var price = q.price != null ? q.price : f.price;
-    var pct = q.pct;
     var px = el('f10Px');
-    px.textContent = price == null ? '--' : price.toFixed(2);
-    px.className = 'px' + (pct == null ? '' : ' ' + signCls(pct));
+    px.textContent = v.price == null ? '--' : v.price.toFixed(2);
+    px.className = 'px' + (v.pct == null ? '' : ' ' + signCls(v.pct)) + (v.stale ? ' stale' : '');
+    px.title = (v.stale ? '数据延迟（采集未按时更新） · ' : '') + (v.time ? '价格时刻 ' + v.time : (v.prevClose ? '昨日收盘价' : ''));
     var chg = el('f10Chg');
-    chg.textContent = pct == null ? '' : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%';
-    chg.className = 'chg' + (pct == null ? '' : ' ' + signCls(pct));
+    chg.textContent = v.unavailable ? '暂无可信价格' : v.prevClose ? '昨收'
+      : v.pct == null ? '' : (v.pct > 0 ? '+' : '') + v.pct.toFixed(2) + '%';
+    if (v.historical) chg.textContent = '历史' + (chg.textContent ? ' · ' + chg.textContent : '');
+    chg.className = 'chg' + (v.pct == null ? ' flat' : ' ' + signCls(v.pct));
   }
 
   function renderF10(j) {
@@ -1740,8 +2028,12 @@
     stale.title = dataNote;
     stale.setAttribute('aria-label', dataNote);
     stale.hidden = !dataNote;
-    renderF10Header(f);
+    renderF10Header();
     renderTags();
+    if (j.meta && j.meta.mode === 'demo' && !Object.keys(f).length) {
+      el('f10Grid').innerHTML = '<div class="ai-note">样本未提供基本资料</div>';
+      return;
+    }
     var cells = [
       ['总市值', fmtYi(f.total_mv)], ['PE(TTM)', numOr(f.pe_ttm)], ['PB', numOr(f.pb)],
       ['成交额', fmtYi(f.amount)], ['换手', pctOr(f.turnover)], ['量比', numOr(f.volume_ratio)],
@@ -1830,6 +2122,10 @@
   }
 
   function renderFlow(j) {
+    if (j.meta && j.meta.mode === 'demo' && !Object.keys(j.flow || {}).length) {
+      el('flowSec').style.display = 'none';
+      return;
+    }
     var note = j.meta && j.meta.flow_note;
     el('flowNote').textContent = note || '';
     el('flowNote').hidden = !note;
@@ -1851,9 +2147,9 @@
     }).join('');
   }
 
-  // 与 /api/chart 并行调用；失败（含 502/退避）→ 两卡整卡隐藏，不显示报错
+  // 与 /api/chart 并行调用；失败（含 502/退避）→ 两卡整卡隐藏，不显示报错。
+  // F10 只随代码变化（与周期、复权无关）：响应只在请求发出时的代码仍是当前代码时接纳。
   function loadF10(code) {
-    var generation = supplyState.generation, epoch = supplyState.epoch;
     if (!code) return;
     var now = Date.now();
     if (f10Last.code === code && now - f10Last.ts < F10_TTL) return;
@@ -1862,13 +2158,12 @@
     fetch('/api/f10?code=' + encodeURIComponent(code))
       .then(function (r) { if (!r.ok) throw new Error('f10 ' + r.status); return r.json(); })
       .then(function (j) {
-        if (code !== state.code || !eligible(generation, j, epoch)) return;  // 响应期间已切走，丢弃
+        if (code !== state.code) return;  // 响应期间已切走，丢弃
         lastF10 = { code: code, json: j };
         renderF10(j);
         renderFlow(j);
       })
       .catch(function () {
-        if ((generation !== supplyState.generation || epoch !== supplyState.epoch)) return;
         if (f10Last.code === code) f10Last.ts = 0;  // 失败不计入 TTL，下次 load 重试（仅当未已切走）
         if (code !== state.code) return;
         lastF10 = null;
@@ -1920,89 +2215,100 @@
     };
   }
 
-  function mergeWithHistory(incoming, cursor, previousRevision, currentBars) {
+  // 同一视图令牌下的刷新保留左拉得到的旧段（严格早于新窗首行）；令牌不同或旧令牌已作废时整窗替换，
+  // 不混接新旧数据。
+  function mergeWithHistory(incoming, token, previousToken, currentBars) {
     currentBars = currentBars || klineData;
-    if (!cursor || cursor.revision_gen !== previousRevision || !currentBars.length || !incoming.length ||
+    if (!token || token !== previousToken || !currentBars.length || !incoming.length ||
         toTime(currentBars[0].time) >= toTime(incoming[0].time)) return incoming;
     var incomingFirst = toTime(incoming[0].time);
     var older = currentBars.filter(function (b) { return toTime(b.time) < incomingFirst; });
     return older.length ? older.concat(incoming) : incoming;
   }
 
-  // 重建期防御残留：全链重建到位后页内不再含旧基准段，本机制仅在 adjust_rebuild
-  // 深链重取追平前的窗口内生效（指标不跨缝）。
-  function applyHistorySeam() {
-    indicatorStart = 0;
-    if (!historyState.seamTime) return;
-    var start = klineData.findIndex(function (bar) {
-      return toTime(bar.time) >= toTime(historyState.seamTime);
-    });
-    if (start >= 0) indicatorStart = start;
+  // 响应接纳：请求发出时的 code、freq、adjust 仍是当前值（切走后迟到的响应不渲染）
+  function isCurrentView(request) {
+    return periodEnabled(request.freq) && request.code === state.code && request.freq === state.freq && request.adjust === viewState.adjust;
   }
 
-  // 重建期防御残留：同上，MACD 副图裁剪到缝后。
-  function trimMacdToHistorySeam() {
-    if (!historyState.seamTime) return;
-    macdRowsRaw = macdRowsRaw.filter(function (row) {
-      return toTime(row.time) >= toTime(historyState.seamTime);
-    });
+  // 整窗重载：作废旧令牌（重载结果不与旧段拼接）、使在飞分页失效、去掉条件请求以保证拿到新令牌。
+  // notice 在新窗口提交后显示。
+  function reloadWholeWindow(notice) {
+    viewState.token = null;
+    historyState.loading = false;
+    historyState.reqId++;
+    chartEtag = null;
+    load({ refresh: true, notice: notice });
   }
 
-  // 重建期防御残留：跨基准分段仅在重建追平窗口内出现，缝位登记见上两条注释。
-  // 派生读同基准多段（minute_fact + day_backfill 缝合）不是缝——只在页内确有
-  // 异基准段时才登记缝位，否则指标会被错误地裁到分钟链深度以内。
-  function applyHistorySegments(segments) {
-    if (segments && segments.length > 1 && segments[0].basis_id === historyState.basisId &&
-        segments.some(function (s) { return s.basis_id !== historyState.basisId; })) {
-      historyState.seamTime = segments[0].from_dt;
-    }
-    applyHistorySeam();
-    trimMacdToHistorySeam();
+  // 临时提示（整窗重载后「数据已更新」），8s 后若未被其他状态覆盖则回落常驻状态。
+  // 提示期内的左拉分页不覆盖它（重载落在左沿时会立刻续拉下一页）。
+  var NOTICE_MS = 8000, activeNotice = '';
+  function showNotice(notice) {
+    activeNotice = notice;
+    setStatus(notice);
+    setTimeout(function () {
+      if (activeNotice === notice) activeNotice = '';
+      if (statusMsg === notice) setStatus('');
+    }, NOTICE_MS);
   }
 
   function onMainRangeChanged(range) {
-    if (!range || !historyState.hasMore || historyState.loading) return;
-    if (!HISTORY_FREQS[state.freq]) return;
-    if (historyState.revisionGen == null || !klineData.length) return;
+    if (!range || historyState.loading) return;
+    if (!periodAvailable(state.freq)) return;
+    if (!viewState.token || !klineData.length) return;
     if (range.from > 8) return;
-    loadHistoryPage();
+    if (historyState.hasMore) loadHistoryPage();
+    else hintFullHistory();
   }
 
+  // 非自选代码左拉到本地最早数据：只提示，不联网扩大范围（查看只保证近期分析窗口）；同一视图只提示一次
+  var edgeHinted = null;
+  function hintFullHistory() {
+    var view = state.code + '|' + state.freq + '|' + viewState.adjust;
+    var watched = state.watchlist.some(function (w) { return w.code === state.code; });
+    if (!state.code || watched || edgeHinted === view) return;
+    edgeHinted = view;
+    showNotice(sessionDemo ? '已到样本最早数据' : '已到本地最早数据，加入自选以补完整历史');
+  }
+
+  var HISTORY_STALE = {};
   function loadHistoryPage() {
+    if (!periodEnabled(state.freq)) return;
     var request = {
-      code: state.code, freq: state.freq,
-      generation: supplyState.generation, epoch: supplyState.epoch || '',
+      code: state.code, freq: state.freq, adjust: viewState.adjust, token: viewState.token,
       firstTime: klineData[0].time, reqId: ++historyState.reqId,
     };
+    function current() {
+      return historyState.reqId === request.reqId && isCurrentView(request) &&
+        klineData.length > 0 && klineData[0].time === request.firstTime;
+    }
     historyState.loading = true;
     var failed = false;
-    setStatus('加载历史…');
+    if (!activeNotice) setStatus('加载历史…');
     fetch('/api/chart?code=' + encodeURIComponent(request.code) + '&freq=' + request.freq +
-          '&before=' + encodeURIComponent(request.firstTime) + '&limit=520')
+          '&adjust=' + encodeURIComponent(request.adjust) +
+          '&before=' + encodeURIComponent(request.firstTime) + '&limit=520' +
+          '&token=' + encodeURIComponent(request.token))
       .then(function (r) {
+        if (r.status === 409) return HISTORY_STALE;  // 分页期间数据已更新：令牌不符
         if (!r.ok) throw new Error('history ' + r.status);
         return r.json();
       })
       .then(function (page) {
-        if (historyState.reqId !== request.reqId || state.code !== request.code || state.freq !== request.freq ||
-            supplyState.generation !== request.generation || (supplyState.epoch || '') !== request.epoch ||
-            !klineData.length || klineData[0].time !== request.firstTime) return;
-        if (!page || !page.meta || !page.meta.history) return;
-        if (page.meta.revision_gen !== historyState.revisionGen) {
-          historyState.loading = false;
-          setStatus('');
-          historyState.reqId++;
-          load({ refresh: true });
+        if (!current()) return;
+        if (page !== HISTORY_STALE && (!page || !page.meta || !page.meta.history)) return;
+        if (page === HISTORY_STALE || page.meta.token !== request.token) {
+          reloadWholeWindow('数据已更新，已重新加载');
           return;
         }
         prependHistory(page);
       })
       .catch(function () { failed = true; })
       .finally(function () {
-        if (historyState.reqId !== request.reqId || state.code !== request.code || state.freq !== request.freq ||
-            supplyState.generation !== request.generation || (supplyState.epoch || '') !== request.epoch) return;
+        if (historyState.reqId !== request.reqId || !isCurrentView(request)) return;
         historyState.loading = false;
-        setStatus(failed ? '历史加载失败' : '');
+        setStatus(failed ? '历史加载失败' : activeNotice);
       });
   }
 
@@ -2010,17 +2316,12 @@
     var first = toTime(klineData[0].time);
     var older = page.kline.filter(function (b) { return toTime(b.time) < first; });
     historyState.hasMore = !!page.meta.has_more;
+    if (lastChartData && lastChartData.meta) {
+      lastChartData.meta = Object.assign({}, lastChartData.meta, { has_more: historyState.hasMore });
+    }
     if (!older.length) return;
-    var segments = page.meta.segments || [];
     var range = charts.main.timeScale().getVisibleLogicalRange();
     klineData = older.concat(klineData);
-    // 首次跨入全旧基准页（segments 首段已非当前基准且尚无全局缝位）：
-    // 缝 = prepend 前视图首行，即视图内新基准最老一根，指标/连线不跨缝。
-    // 重建期防御残留：仅在 adjust_rebuild 深链重取追平前的窗口内生效。
-    if (!historyState.seamTime && segments.length &&
-        segments[0].basis_id !== historyState.basisId) {
-      historyState.seamTime = klineData[older.length].time;
-    }
     klineByTime = {};
     klineData.forEach(function (b, i) {
       klineByTime[toTime(b.time)] = { bar: b, prev: i > 0 ? klineData[i - 1] : null, i: i };
@@ -2031,7 +2332,6 @@
     charts.volumeSeries.setData(klineData.map(function (b) {
       return { time: toTime(b.time), value: b.volume, color: b.close >= b.open ? P.upA : P.downA };
     }));
-    applyHistorySegments(segments);
     computeMAs();
     refreshMaSeries();
     showInd(curInd);
@@ -2042,38 +2342,27 @@
     }
     charts.markers.setMarkers(buildMarkers(lastChartData.signals));
     lastChartData = Object.assign({}, lastChartData, { kline: klineData });
-    if (lastChartData.meta && lastChartData.meta.history_cursor) {
-      lastChartData.meta = Object.assign({}, lastChartData.meta, {
-        history_cursor: Object.assign({}, lastChartData.meta.history_cursor, { has_more: historyState.hasMore }),
-      });
-    }
   }
 
   // 图表渲染主路径：fetch 后与主题切换共用（opts.resetRange=false 时保留可视区间）
   function renderChart(data, opts) {
     var c = ensureCharts();
     opts = opts || {};
-    var cursor = data.meta && data.meta.history_cursor;
-    var previousRevision = historyState.revisionGen;
-    var nextReqId = historyState.reqId + 1;
+    var meta = data.meta || {};
+    var token = meta.token || null;
     var kline = opts.mergedKline || (opts.resetRange === false
-      ? mergeWithHistory(data.kline, cursor, previousRevision, klineData)
+      ? mergeWithHistory(data.kline, token, viewState.token, klineData)
       : data.kline);
-    var seamTime = (opts.resetRange === false && cursor && cursor.revision_gen === previousRevision)
-      ? historyState.seamTime : null;
-    historyState = (cursor && HISTORY_FREQS[state.freq])
-      ? { loading: false, hasMore: !!cursor.has_more, revisionGen: cursor.revision_gen,
-          basisId: cursor.basis_id, seamTime: seamTime, reqId: nextReqId }
-      : { loading: false, hasMore: false, revisionGen: null, basisId: null,
-          seamTime: null, reqId: nextReqId };
+    // 视图令牌随图表内容一起登记；每次重建都递增 reqId，使在飞的旧分页失效
+    viewState.token = token;
+    historyState = { loading: false, hasMore: !!(token && periodAvailable(state.freq) && meta.has_more),
+      reqId: historyState.reqId + 1 };
     klineData = kline;
-    applyHistorySeam();
     klineByTime = {};
     kline.forEach(function (b, i) {
       klineByTime[toTime(b.time)] = { bar: b, prev: i > 0 ? kline[i - 1] : null, i: i };
     });
     macdRowsRaw = data.macd.rows;
-    trimMacdToHistorySeam();
     lastChartData = Object.assign({}, data, { kline: kline });
 
     c.candleSeries.setData(kline.map(function (b) {
@@ -2144,77 +2433,96 @@
     c.markers.setMarkers(buildMarkers(data.signals));
 
     legendLatest();
-    renderResonance(data.resonance);
+    renderResonance(data.resonance, (data.meta || {}).analysis_freqs);
     updateAxisAnchor();
   }
 
   function load(options) {
-    // 供数准备可能推迟请求，但选择已经变更；旧图表详情须在早退前收回。
+    // 选择已经变更；旧图表详情须在早退前收回。
     // 联合 AI 的身份不含当前周期，仍由其原生命周期管理。
     if (detailKind === 'card' || detailKind === 'bs') closeDetail();
-    if (supplyBusy || !state.code) return;
-    var generation = supplyState.generation, epoch = supplyState.epoch, profile = state.ruleProfile, scope = state.signalScope;
+    if (!state.code) return;
+    // 已下线的 5分/15分（旧链接、旧状态）归到 30 分，无法识别的回日线；每次加载同步周期与复权控件
+    state.freq = normalizeFreq(state.freq);
+    if (!periodPrefs || periodPrefs.notice) {
+      clearPeriodView(periodPrefs ? '请确认展示周期' : '正在读取周期偏好');
+      return;
+    }
+    if (!periodEnabled(state.freq)) state.freq = periodPrefs.selected.find(periodEnabled) || null;
+    renderTabs();
+    if (!state.freq) { clearPeriodView('当前市场没有已勾选的可用周期'); return; }
+    var profile = state.ruleProfile, scope = state.signalScope;
+    var notice = options && options.notice || '';
+    var refetch = !!(options && options.refetch);
+    var busyRetry = options && options.busyRetry || 0;  // 503 自动重试的第几次（0 为用户或定时器发起）  // 手动重拉：服务端先整段重取分析窗口；不带条件头，避免 304
+    // 请求发出时的视图身份：响应只在它仍是当前值时接纳
+    var request = { code: state.code, freq: state.freq, adjust: viewState.adjust };
     activeChartVersion = null;
     updateAnalysisFreshness();
     ensureCharts();
     if (chartAbort) chartAbort.abort();
     var ctl = chartAbort = new AbortController();
     updateAiTitle();
-    setStatus('加载中… ' + state.code + ' ' + state.freq);
+    setStatus((refetch ? '重拉中… ' : '加载中… ') + state.code + ' ' + state.freq);
     hideChartError();
     if (!options || !options.refresh) {  // 用户切换：新数据到达前旧内容降为「旧数据」标记，失败时保留
+      if (!busyRetry) state.openSeq = (state.openSeq || 0) + 1;  // 这次打开：收盘后跟进按打开计，重开同一代码是新的一次；自动重试不算
       el('center').classList.add('ctx-old');
       el('rail').classList.add('ctx-old');
     }
     // 只记录刷新身份；可视区间必须在响应提交前再取，避免覆盖请求期间的用户平移。
-    var refreshTarget = options && options.refresh && loadedTarget &&
-      loadedTarget.code === state.code && loadedTarget.freq === state.freq
-      ? { code: state.code, freq: state.freq } : null;
+    var sameTarget = function () {
+      return !!loadedTarget && loadedTarget.code === request.code && loadedTarget.freq === request.freq &&
+        loadedTarget.adjust === request.adjust;
+    };
+    var refreshTarget = options && options.refresh && sameTarget();
+    renderF10Header();    // 价格卡先按已有行情显示（F10 慢或失败不挡价格）
+    if (!(options && options.refresh) && !busyRetry) loadViewQuote(state.code);  // 非自选：打开时取一次单代码报价，之后随报价轮询
     loadF10(state.code);  // F10/资金流与 /api/chart 并行，互不阻塞（内部有 300s TTL）
     syncManualAnalysis(); // 切换与行情自动刷新不请求 AI
     var timer = setTimeout(function () {
-      ctl.abort(new Error('加载超时（25s）'));
-    }, CHART_TIMEOUT_MS);
-    fetch('/api/chart?code=' + encodeURIComponent(state.code) + '&freq=' + state.freq + '&rule_profile=' + encodeURIComponent(profile) + '&signal_scope=' + encodeURIComponent(scope),
-          { signal: ctl.signal, headers: conditionalHeaders(state.code, state.freq, profile, scope) })
+      ctl.abort(new Error(refetch ? '重拉超时（120s）' : '加载超时（25s）'));
+    }, refetch ? REFETCH_TIMEOUT_MS : CHART_TIMEOUT_MS);
+    fetch('/api/chart?code=' + encodeURIComponent(request.code) + '&freq=' + request.freq +
+          '&adjust=' + encodeURIComponent(request.adjust) +
+          '&rule_profile=' + encodeURIComponent(profile) + '&signal_scope=' + encodeURIComponent(scope) +
+          (refetch ? '&refetch=1' : ''),
+          { signal: ctl.signal, headers: refetch ? {} : conditionalHeaders(request.code, request.freq, request.adjust, profile, scope) })
       .then(function (r) {
         if (r.status === 304) return null;  // 内容未变：保留现有图表，只清状态
-        if (!r.ok) return r.json().then(function (j) { throw new Error(j.detail || r.status); });
-        if (ctl === chartAbort) rememberEtag(state.code, state.freq, profile, scope, r.headers.get('ETag'));
+        if (refetch) notice = refetchNotice(r.headers.get('X-Refetch-Status'));
+        if (!r.ok) return r.json().then(function (j) { var err = new Error(j.detail || r.status); err.status = r.status; throw err; });
+        if (ctl === chartAbort && isCurrentView(request)) {
+          rememberEtag(request.code, request.freq, request.adjust, profile, scope, r.headers.get('ETag'));
+        }
         return r.json();
       })
       .then(function (data) {
-        if (ctl !== chartAbort) return;
+        if (ctl !== chartAbort || !isCurrentView(request)) return;  // 已切走：迟到的旧响应不渲染
         if (data === null) {
-          el('center').classList.remove('supply-loading');
+          el('center').classList.remove('chart-reloading');
           el('center').classList.remove('ctx-old');
           el('rail').classList.remove('ctx-old');
           renderStatus();
-          setStatus('');
+          if (notice) showNotice(notice); else setStatus('');
           return;
         }
         if (!acceptsRule(data, profile, scope)) {  // 规则身份不匹配：显式报错并解除遮罩，不静默停在加载态
-          el('center').classList.remove('supply-loading');
+          el('center').classList.remove('chart-reloading');
           setStatus('加载失败');
           showChartError('响应与当前成笔标准或提示范围不一致，请刷新');
           return;
         }
-        if (!eligible(generation, data, epoch)) return;
-        var saved = supplyRange && supplyRange.code === state.code && supplyRange.freq === state.freq && supplyRange.range;
+        var meta = data.meta || {};
+        var saved = restoreRange && restoreRange.code === request.code && restoreRange.freq === request.freq && restoreRange.range;
         var keep = null;
-        if (!saved && refreshTarget && charts && charts.main && loadedTarget &&
-            loadedTarget.code === refreshTarget.code && loadedTarget.freq === refreshTarget.freq &&
-            state.code === refreshTarget.code && state.freq === refreshTarget.freq && klineData.length) {
+        if (!saved && refreshTarget && charts && charts.main && sameTarget() && klineData.length) {
           keep = captureRefreshRange(charts.main.timeScale().getVisibleLogicalRange(), klineData);
         }
-        var cursor = data.meta && data.meta.history_cursor;
-        var currentRevision = typeof historyState === 'undefined' ? null : historyState.revisionGen;
         var incomingKline = data.kline || [];
-        var sameLoadedTarget = loadedTarget && loadedTarget.code === state.code && loadedTarget.freq === state.freq;
-        var allowHistoryMerge = !!saved || !!(refreshTarget && sameLoadedTarget);
-        var currentKline = allowHistoryMerge && typeof klineData !== 'undefined' ? klineData : incomingKline;
+        var allowHistoryMerge = !!saved || !!(refreshTarget && sameTarget());
         var mergedKline = allowHistoryMerge
-          ? mergeWithHistory(incomingKline, cursor, currentRevision, currentKline)
+          ? mergeWithHistory(incomingKline, meta.token, viewState.token, klineData)
           : incomingKline;
         var plan = keep ? refreshRangePlan(keep, mergedKline) : null;
         renderChart(data, { resetRange: !saved && !plan, mergedKline: mergedKline });
@@ -2225,101 +2533,158 @@
           charts.main.timeScale().setVisibleLogicalRange(plan);
           charts.macdChart.timeScale().setVisibleLogicalRange(plan);
         }
-        supplyRange = null;
-        loadedTarget = { code: state.code, freq: state.freq };
-        el('center').classList.remove('supply-loading');
+        restoreRange = null;
+        el('center').classList.remove('period-empty');
+        el('rail').classList.remove('period-empty');
+        loadedTarget = { code: request.code, freq: request.freq, adjust: request.adjust };
+        var previousAnalysisIdentity = currentAnalysisIdentity();
+        viewState.analysisTokens = meta.analysis_tokens || null;
+        if (previousAnalysisIdentity !== currentAnalysisIdentity()) syncManualAnalysis();
+        staleNoteIdentity = null;
+        el('center').classList.remove('chart-reloading');
         el('center').classList.remove('ctx-old');
         el('rail').classList.remove('ctx-old');
         renderEvidence(data.evidence, {preserve: !!plan});
-        renderMeta(data.meta);
-        activeChartVersion = {code: state.code, freq: state.freq, epoch: epoch || '', generation: generation, calculation_id: data.calculation_id, data_version: data.data_version || data.meta.data_version};
-        updateAnalysisFreshness();
-        setStatus('');
-        // 复权重建一次性提示（会话级）：同一 code|freq 的基准指纹变化时提示一次，8s 自动消退
-        var basis = data.meta && data.meta.basis;
-        var basisTarget = state.code + '|' + state.freq;
-        var basisKey = basis && basis.basis_id ? basisTarget + '|' + basis.basis_id : null;
-        var prevBasisKey = lastBasisKey && lastBasisKey.target === basisTarget ? lastBasisKey.key : null;
-        if (basisKey && prevBasisKey && basisKey !== prevBasisKey) {
-          var rebuildMsg = basis.pending_rebuild
-            ? '检测到除权：历史正按新基准重建，早期段落暂按旧基准显示'
-            : '历史已按除权事件重建到新基准 ' + (basis.since || '');
-          setStatus(rebuildMsg);
-          (function (msg) {
-            setTimeout(function () { if (statusMsg === msg) setStatus(''); }, 8000);
-          })(rebuildMsg);
+        renderMeta(meta);
+        // 首开非自选：单代码报价与首取并行，事实还没写入时报价为空；首取完成后补取一次（刷新与已有价格不补）
+        var vq = state.viewQuote;
+        if (!(options && options.refresh) && !(vq && vq.code === request.code && vq.quote && vq.quote.price != null)) {
+          loadViewQuote(request.code);
         }
-        if (basisKey) lastBasisKey = { target: basisTarget, key: basisKey };
+        activeChartVersion = {code: request.code, freq: request.freq, adjust: request.adjust, calculation_id: data.calculation_id, data_version: data.data_version || meta.data_version};
+        updateAnalysisFreshness();
+        if (notice) showNotice(notice); else setStatus('');
       })
       .catch(function (e) {
         if (e && e.name === 'AbortError') return;  // 被新请求中止，静默
-        if (ctl !== chartAbort) return;            // 旧请求（超时等）：已有新请求接管
-        el('center').classList.remove('supply-loading');  // 失败也要解除遮罩，露出错误条
+        if (ctl !== chartAbort || !isCurrentView(request)) return;  // 旧请求（超时等）或已切走：已有新请求接管
+        if (e && e.status === 400) {
+          // 另一页面取消周期或服务重启：先收起旧图；仅 revision 变化才自动重载，避免 400 循环。
+          clearPeriodView('正在核对展示周期');
+          loadPeriodPrefs({sync: true}).then(function (changed) {
+            if (changed === false) { setStatus('加载失败：' + e.message); showChartError(e.message); }
+          });
+          return;
+        }
+        // 503：同一代码的历史规划、缓存刷新或重拉在途，服务端等锁超过预算且没有可服务快照——隔几秒自动重试，
+        // 次数有上限（收盘后没有定时刷新兜底）；手动重拉不自动重试（结果由 X-Refetch-Status 说明）
+        if (e && e.status === 503 && !refetch && busyRetry < BUSY_RETRY_MAX) {
+          setStatus(e.message + '，' + BUSY_RETRY_MS / 1000 + ' 秒后自动重试（' + (busyRetry + 1) + '/' + BUSY_RETRY_MAX + '）');
+          setTimeout(function () {
+            if (ctl !== chartAbort || !isCurrentView(request)) return;  // 已切走或已有新请求：不重试
+            load({ refresh: !!(options && options.refresh), notice: notice, busyRetry: busyRetry + 1 });
+          }, BUSY_RETRY_MS);
+          return;
+        }
+        el('center').classList.remove('chart-reloading');  // 失败也要解除遮罩，露出错误条
         setStatus('加载失败：' + e.message);
         showChartError(e.message);
       })
       .finally(function () { clearTimeout(timer); });
   }
 
-  function clearSelection() {
-    if (chartAbort) chartAbort.abort();
-    chartAbort = null;
-    pendingAnalysis = null; activeChartVersion = null; analysisIdentity = null;
-    loadedTarget = null; supplyRange = null; lastMeta = null; lastF10 = null; chartEtag = null;
-    f10Last = {code: null, ts: 0};
-    if (charts) renderChart({kline: [], macd: {rows: []}, structure: {bi: [], xd: [], zs: []},
-      channels: [], signals: [], resonance: []}, {resetRange: false});
-    lastChartData = null;
-    renderEvidence([]);
-    hideF10Cards();
-    closeAiPopup();
-    el('aiPanel').innerHTML = '<div class="ai-note">请先添加自选股</div>';
-    el('aiDataStatus').hidden = true;
-    el('aiSampleBadge').hidden = true;
-    el('aiRefresh').disabled = true;
-    el('aiRefresh').classList.remove('spin');
-    el('metaBar').innerHTML = '';
-    el('resonance').innerHTML = '';
-    el('center').classList.remove('ctx-old', 'supply-loading');
-    el('rail').classList.remove('ctx-old');
-    hideChartError();
-    setStatus('请添加自选股');
+  var BUSY_RETRY_MS = 5000, BUSY_RETRY_MAX = 6;  // 503 自动重试：约 30 秒内至多 6 次
+
+  // 手动重拉：强制重新请求当前分析窗口（不改变关注状态）；失败时保留现有图表
+  // 服务端经 X-Refetch-Status 报告重拉结果；只有 ok 才说「已重拉」，其余如实说明（图表都照常显示已有数据）
+  var REFETCH_NOTICES = {
+    ok: '已重拉当前窗口',
+    partial: '重拉部分完成，未取到的部分沿用已有数据',
+    failed: '重拉失败，显示的是已有数据',
+    busy: '正在更新这只标的，本次没有重拉，请稍后再试',
+    disabled: '当前环境不支持重拉，显示的是已有数据',
+    unavailable: '当前环境不支持重拉，显示的是已有数据',
+  };
+  function refetchNotice(status) { return REFETCH_NOTICES[status] || '重拉结果未知，显示的是已有数据'; }
+
+  function refetchCurrent() {
+    if (!state.code) return;
+    load({ refresh: true, refetch: true });
   }
 
-  // ---------- 交易时段自动刷新（口径同 engine/session.py：cn 09:25–15:05，hk 09:30–16:05，周一至五） ----------
+  // 页面周期（目标 2026-09-29 第三阶段）：5分/15分已下线，服务端对它们回 400；旧链接与旧状态归到 30 分。
+  // 启动时读 URL 就要调用（函数声明会提升，外部 var 表那时还没赋值），所以不依赖外部变量。
+  function normalizeFreq(freq) {
+    if (freq === 'day' || freq === 'week' || freq === 'm60' || freq === 'm30') return freq;
+    return freq === 'm5' || freq === 'm15' ? 'm30' : 'day';
+  }
+
+  // ---------- 交易时段自动刷新（开市与否只认后端 /api/session：交易日历 + engine/session.py 时段） ----------
 
   function marketOf(code) { return code && code.indexOf('hk') === 0 ? 'hk' : 'cn'; }
 
-  function isSessionOpen(now, market) {
-    var day = now.getDay();
-    if (day === 0 || day === 6) return false;
-    var mins = now.getHours() * 60 + now.getMinutes();
-    var win = market === 'hk' ? [9 * 60 + 30, 16 * 60 + 5] : [9 * 60 + 25, 15 * 60 + 5];
-    return mins >= win[0] && mins <= win[1];
+  var sessionOpen = { cn: false, hk: false };  // 从未取到按未开市；取数失败保留上次结果
+  var sessionDemo = false;
+  var sessionReq = null;                       // 在途请求：未返回时不叠加
+
+  function refreshSession(verify) {
+    if (sessionDemo && !verify) return Promise.resolve();  // demo 不轮询；verify 只在回到前台时核对一次模式
+    if (sessionReq) return sessionReq;
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, 10000);
+    sessionReq = fetch('/api/session', { cache: 'no-store', signal: ctrl.signal })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (body) {
+        sessionDemo = body && body.mode === 'demo';
+        var m = (body && body.markets) || {};
+        ['cn', 'hk'].forEach(function (k) {
+          if (m[k] && typeof m[k].open === 'boolean') sessionOpen[k] = m[k].open;
+        });
+      })
+      .catch(function () {})
+      .then(function () {
+        clearTimeout(timer);
+        sessionReq = null;
+        renderStatus();  // 交易时段点/分钟级状态保鲜
+      });
+    return sessionReq;
   }
 
+  function isSessionOpen(market) { return !!sessionOpen[market]; }
+
+  var closeFollowed = null;  // 已做过收盘后跟进的（代码|周期|打开序号|交易日）：每次打开每个收盘日至多一次，补读失败也不重试
+
   setInterval(function () {
-    if (document.hidden) return;  // 后台标签不轮询：回前台等下一跳，stale 由后端 SWR 兜底
-    renderStatus();  // 交易时段点/分钟级状态保鲜
-    if (el('supplyControl').hidden) {
-      syncSupply().then(function () { if (state.code && isSessionOpen(new Date(), marketOf(state.code))) load({refresh:true}); });
-      return;
-    }
-    if (!state.code || supplyBusy) return;
-    if (!isSessionOpen(new Date(), marketOf(state.code))) return;
-    load({refresh:true});
+    if (sessionDemo || document.hidden) return;  // demo 不轮询；后台标签不轮询：恢复前台单独同步偏好
+    if (sessionReq || periodLoad || periodSaving) return; // 上一轮还没返回：由它收尾，不重复刷新图表
+    refreshSession().then(function () { return loadPeriodPrefs({sync: true}); }).then(function (changed) {
+      if (changed !== false || !state.code) return; // 有变化时同步函数已处理图表；失败时也不借用旧偏好刷新
+      if (!isSessionOpen(marketOf(state.code))) {
+        // 收盘后有限跟进：快照还停在盘中（live）时补读一次收盘后的状态，之后（待定稿/已定稿）不再轮询；
+        // 次数独立计：补读失败时快照仍是 live，也不每分钟重试
+        var ds = lastMeta && lastMeta.coverage && lastMeta.coverage.data_status;
+        var key = [state.code, state.freq, state.openSeq, ds && ds.day].join('|');
+        if (ds && ds.phase === 'live' && closeFollowed !== key) {
+          closeFollowed = key;
+          load({refresh:true});
+        }
+        return;
+      }
+      load({refresh:true});
+    });
   }, 60000);
 
-  setInterval(function () {  // 自选股快照 30s 一轮（QUOTE_TTL=30s，每轮过期回旧+后台必刷，滞后 30–60s）
+  // 标签页恢复前台即核对一次；不新增定时器，休市也可看到其他页面的勾选与重启后的能力变化。
+  // demo 页面没有轮询，期间服务若按真实模式重启，靠这里核对模式后恢复轮询。
+  // demo 下两个同时可见的窗口之间不互相同步勾选（无轮询的代价），回到前台或图表被拒时同步。
+  document.addEventListener('visibilitychange', function () {
     if (document.hidden) return;
-    if (el('supplyControl').hidden) {
-      syncSupply().then(function () { if (state.code && isSessionOpen(new Date(), marketOf(state.code))) loadQuotes(); });
-      return;
-    }
-    if (!state.code || supplyBusy) return;
-    if (!isSessionOpen(new Date(), marketOf(state.code))) return;
+    if (sessionDemo) refreshSession(true);
+    if (!periodSaving) loadPeriodPrefs({sync: true});
+  });
+
+  // 自选股快照 60s 一轮（与图表、采集器盘中增量、显示层 QUOTE_TTL 同为 60s）。按自选各标的的市场判断：
+  // 所选标的休市不停其他市场自选的报价，没有选中标的也照常。
+  setInterval(function () {
+    if (sessionDemo || document.hidden) return;
+    if (state.code && !isWatched(state.code) && isSessionOpen(marketOf(state.code))) loadViewQuote(state.code);
+    var open = (state.watchlist || []).some(function (it) { return isSessionOpen(marketOf(it.code)); });
+    if (!open) return;
     loadQuotes();
-  }, 30000);
+  }, 60000);
 
   // ---------- 侧边栏（Codex 客户端式：pinned 固定展开 / rail 窄栏；窄栏悬停或聚焦自动浮动展开，移开收回） ----------
 
@@ -2463,7 +2828,7 @@
     mq.addEventListener('change', sync);
     sync();
   })();
-  window.addEventListener('focus', function () { syncSupply(); });
+  el('refetchBtn').addEventListener('click', function () { refetchCurrent(); });
   el('themeBtn').addEventListener('click', function () {
     applyTheme(theme === 'light' ? 'dark' : 'light');
   });
@@ -2505,7 +2870,7 @@
   });
   function reloadRuleSelection(label) {
     if (!state.code) { syncRuleControl(); return; }
-    supplyRange = charts ? {code: state.code, freq: state.freq, range: charts.main.timeScale().getVisibleRange()} : null;
+    restoreRange = charts ? {code: state.code, freq: state.freq, range: charts.main.timeScale().getVisibleRange()} : null;
     analysisIdentity = null;
     pendingAnalysis = null; activeChartVersion = null; lastChartData = null;
     syncRuleControl();
@@ -2514,7 +2879,7 @@
     ruleSwitchNote = label + '已切换，分析待更新…';
     el('aiPanel').innerHTML = '<div class="ai-note">' + ruleSwitchNote + '</div>';
     if (typeof closeAiPopup === 'function') closeAiPopup();
-    el('center').classList.add('supply-loading');
+    el('center').classList.add('chart-reloading');
     load();
   }
   el('aiRefresh').onclick = function () { loadAnalysis({manual:true, refresh:true}); };
@@ -2599,14 +2964,22 @@
   }
   wireRulesPopover();
 
+  el('periodBtn').onclick = openPeriodDialog;
+  el('periodSave').onclick = savePeriodPrefs;
+  el('periodCancel').onclick = function () { el('periodDialog').close(); };
+  el('periodDialog').addEventListener('cancel', function (event) {
+    if (periodSaving || (periodPrefs && periodPrefs.notice)) event.preventDefault();
+  });
+
+  // ---------- 启动 ----------
+
   renderTabs();
   renderStatus();
-  el('supplySelect').onchange = renderSupply;
-  el('supplySwitch').onclick = switchSupply;
-  initSupply().then(function () {
-    var preselected = !!state.code;
-    if (preselected) load();  // URL ?code= 已给：chart 与 watchlist 并发，省一跳串行
-    loadWatchlist({ skipLoad: preselected });
-    loadQuotes();
-  });
+  refreshSession();
+  loadPeriodPrefs();
+  var preselected = !!state.code;
+  if (preselected) { load(); recordView(state.code, state.code); }  // URL ?code= 已给：先记录查看；图表由周期偏好守卫放行，watchlist 并发读取
+  loadWatchlist({ skipLoad: preselected });
+  loadQuotes();
+  loadRecent();
 })();

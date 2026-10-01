@@ -1,12 +1,13 @@
-"""/api/chart 条件请求：ETag 覆盖整包，If-None-Match 命中回 304 空体。"""
+"""/api/chart 条件请求：弱 ETag 覆盖整包（只剔除每秒变化的 stale_age_s），If-None-Match 命中回 304 空体；
+meta 的 stale/stale_age_s 标识随响应透传前端。"""
 import csv
-import os
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from fastapi.testclient import TestClient
+
+from chanapp.tests import cache_support
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sh000001_day_qfq.csv"
 
@@ -18,60 +19,73 @@ def load_bars():
                 for r in csv.DictReader(f)]
 
 
-def dataset(stale=False):
+def dataset(stale=False, age=1000):
     d = {"bars": load_bars(), "source": "mock 源", "fqf": "qfq", "fetch_time": "2026-08-28 12:00:00",
-         "from_cache": True, "stale": stale, "degraded": True, "degraded_note": "n", "cache_ttl": 900}
+         "from_cache": True, "stale": stale, "degraded": True, "degraded_note": "n"}
     if stale:
-        d["stale_age_s"] = 1000
+        d["stale_age_s"] = age
     return d
 
 
 class TestChartETag(unittest.TestCase):
     def setUp(self):
-        os.environ["WARMER_ENABLED"] = "0"
-        self.addCleanup(os.environ.pop, "WARMER_ENABLED")
-        # 结论记录会写 CACHE_DIR/kline.sqlite：隔离 CACHE_DIR，防 .cache/ 真实库被测试写入
-        # 公开演示门面无 CACHE_DIR（无真实缓存写），此时跳过隔离
-        self._cache_tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._cache_tmp.cleanup)
-        from chanapp.engine import data as engine_data
-        if hasattr(engine_data, "CACHE_DIR"):
-            cache_patch = mock.patch.object(engine_data, "CACHE_DIR", Path(self._cache_tmp.name))
-            cache_patch.start()
-            self.addCleanup(cache_patch.stop)
+        cache_support.set_env(self, "COLLECTOR_ENABLED", "0")
+        cache_support.isolate_cache_dir(self)
         from chanapp.api.main import app
         self.c = TestClient(app)
 
     def test_etag_present_and_stable(self):
-        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda c, f: dataset()):
+        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda c, f, **kw: dataset()):
             r1 = self.c.get("/api/chart?code=sh000001&freq=day")
             r2 = self.c.get("/api/chart?code=sh000001&freq=day")
         self.assertEqual(r1.status_code, 200)
-        self.assertTrue(r1.headers.get("etag", "").startswith('"'))
+        # 有意改写（目标 2026-09-29 第三阶段）：弱 ETag，按语义等价比较（stale_age_s 不进校验器）
+        self.assertTrue(r1.headers.get("etag", "").startswith('W/"'))
         self.assertEqual(r1.headers["etag"], r2.headers["etag"])
         self.assertEqual(r1.headers.get("cache-control"), "no-cache")
 
     def test_if_none_match_hit_returns_304_empty(self):
-        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda c, f: dataset()):
+        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda c, f, **kw: dataset()):
             r1 = self.c.get("/api/chart?code=sh000001&freq=day")
             r2 = self.c.get("/api/chart?code=sh000001&freq=day", headers={"If-None-Match": r1.headers["etag"]})
         self.assertEqual(r2.status_code, 304)
         self.assertEqual(r2.content, b"")
         self.assertEqual(r2.headers["etag"], r1.headers["etag"])
-        self.assertIn("x-supply-scheme", r2.headers)
+
+    def test_if_none_match_uses_weak_comparison_over_a_list(self):
+        """第三阶段复审可后置 7：If-None-Match 按 RFC 9110 §13.1.2 弱比较——列表中任一匹配、强形式与 *。"""
+        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda c, f, **kw: dataset()):
+            tag = self.c.get("/api/chart?code=sh000001&freq=day").headers["etag"]
+            for header in (f'"other", {tag}', tag[2:], "*", f' {tag} '):
+                r = self.c.get("/api/chart?code=sh000001&freq=day", headers={"If-None-Match": header})
+                self.assertEqual(r.status_code, 304, header)
+            r = self.c.get("/api/chart?code=sh000001&freq=day", headers={"If-None-Match": 'W/"other"'})
+            self.assertEqual(r.status_code, 200)
 
     def test_stale_flip_changes_etag(self):
         """同一批 bars，meta.stale 翻转必须重发体（ETag 覆盖整包而非仅 data_version）。"""
-        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda c, f: dataset(stale=False)):
+        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda c, f, **kw: dataset(stale=False)):
             fresh = self.c.get("/api/chart?code=sh000001&freq=day")
-        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda c, f: dataset(stale=True)):
+        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda c, f, **kw: dataset(stale=True)):
             stale = self.c.get("/api/chart?code=sh000001&freq=day", headers={"If-None-Match": fresh.headers["etag"]})
         self.assertEqual(stale.status_code, 200)
         self.assertNotEqual(stale.headers["etag"], fresh.headers["etag"])
+        # meta 为 dataset 透传：stale/stale_age_s 原样随响应到达前端
         self.assertTrue(stale.json()["meta"]["stale"])
+        self.assertEqual(stale.json()["meta"]["stale_age_s"], 1000)
+
+    def test_stale_age_ticking_alone_keeps_etag(self):
+        """待定稿（stale）时 stale_age_s 每秒变化；只有它变化时仍是同一份数据，60 秒轮询应得 304 而不是整包重传。"""
+        with mock.patch("chanapp.api.main.engine_data.get_bars",
+                        side_effect=lambda c, f, **kw: dataset(stale=True, age=1000)):
+            first = self.c.get("/api/chart?code=sh000001&freq=day")
+        with mock.patch("chanapp.api.main.engine_data.get_bars",
+                        side_effect=lambda c, f, **kw: dataset(stale=True, age=1060)):
+            later = self.c.get("/api/chart?code=sh000001&freq=day", headers={"If-None-Match": first.headers["etag"]})
+        self.assertEqual(later.status_code, 304)
 
     def test_mismatch_returns_full_body(self):
-        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda c, f: dataset()):
+        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda c, f, **kw: dataset()):
             r = self.c.get("/api/chart?code=sh000001&freq=day", headers={"If-None-Match": '"deadbeef"'})
         self.assertEqual(r.status_code, 200)
         self.assertIn("kline", r.json())
@@ -87,7 +101,7 @@ class TestChartETag(unittest.TestCase):
 
         from chanapp.api.main import app
         c = TestClient(app, raise_server_exceptions=False)
-        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda d, f: dataset()), \
+        with mock.patch("chanapp.api.main.engine_data.get_bars", side_effect=lambda d, f, **kw: dataset()), \
              mock.patch("chanapp.api.main.engine_chart_payload.build_chart_payload", side_effect=bad_payload):
             r = c.get("/api/chart?code=sh000001&freq=day")
         self.assertEqual(r.status_code, 500)

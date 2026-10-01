@@ -1,7 +1,8 @@
 """Task 11: /api/analysis 完全分类生成（prompt 哈希缓存）测试。
 
 全部 mock LLM / 冻结 fixture，离线可跑，不打外网：
-- engine_data.get_bars 用 fixture 替换（sh000001 日线 800 根快照）；
+- 门面 get_bars / get_bars_bundle 用 fixture 替换（sh000001 日线 800 根快照，facade_support）；
+- 请求带主图 meta.analysis_tokens（tokens 参数），缺失或不符返回 409 且不调 LLM；
 - engine_llm.analyze 用 unittest.mock 替换；
 - 缓存目录用 ANALYSIS_CACHE_DIR 注入临时目录（同 WATCHLIST_PATH 模式）。
 真 key 冒烟（DEEPSEEK_API_KEY 到位后 curl /api/analysis 二次请求 cached:true）另行手动执行。
@@ -14,9 +15,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from urllib.parse import quote
+
 from fastapi.testclient import TestClient
 
+from chanapp.tests import facade_support
+
 FIXTURE = Path(__file__).parent / "fixtures" / "sh000001_day_qfq.csv"
+TOKENS = quote(facade_support.tokens())     # 替身数据集没有 token：三个周期都是 null
 
 
 def load_bars():
@@ -57,9 +63,8 @@ class TestAnalysisApi(unittest.TestCase):
 
     def test_unconfigured_returns_without_call(self):
         """无 LLM_API_KEY → status unconfigured，且不取数、不调 LLM。"""
-        with mock.patch("chanapp.api.analysis.engine_data.get_bars",
-                        side_effect=AssertionError("unconfigured 时不应取数")) as gb:
-            r = self.c.get("/api/analysis?code=sh000001&freq=day")
+        with facade_support.fake_facade(lambda c, f: (_ for _ in ()).throw(AssertionError("unconfigured 时不应取数"))) as gb:
+            r = self.c.get(f"/api/analysis?code=sh000001&freq=day&tokens={TOKENS}")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["status"], "unconfigured")
         gb.assert_not_called()
@@ -80,11 +85,10 @@ class TestAnalysisApi(unittest.TestCase):
                  "update_watch": "若 S1-d 确认则本判断作废"},
             ],
         }, ensure_ascii=False)
-        with mock.patch("chanapp.api.analysis.engine_data.get_bars",
-                        return_value=self._dataset()), \
+        with facade_support.fake_facade(return_value=self._dataset()), \
              mock.patch("chanapp.api.analysis.engine_llm.analyze",
                         return_value=payload) as an:
-            r1 = self.c.get("/api/analysis?code=sh000001&freq=day")
+            r1 = self.c.get(f"/api/analysis?code=sh000001&freq=day&tokens={TOKENS}")
             self.assertEqual(r1.status_code, 200)
             j1 = r1.json()
             self.assertEqual(j1["status"], "ok")
@@ -100,7 +104,7 @@ class TestAnalysisApi(unittest.TestCase):
             self.assertEqual(sc["update_watch"], "若 S1-d 确认则本判断作废")
             self.assertTrue(j1["hash"])
 
-            r2 = self.c.get("/api/analysis?code=sh000001&freq=day")
+            r2 = self.c.get(f"/api/analysis?code=sh000001&freq=day&tokens={TOKENS}")
             j2 = r2.json()
             self.assertEqual(j2["status"], "ok")
             self.assertTrue(j2["cached"])
@@ -114,15 +118,45 @@ class TestAnalysisApi(unittest.TestCase):
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0].stem, j1["hash"])
 
+    def test_token_mismatch_or_missing_returns_409_without_llm(self):
+        """AI 请求期间数据被定稿、修订或隔离（令牌变化），或旧页面没带令牌：409 带回当前令牌，不调模型。"""
+        os.environ["LLM_API_KEY"] = "k"
+        datasets = {f: dict(self._dataset(), token=f"t-{f}") for f in ("day", "m60", "m30")}
+        stale = quote(json.dumps({"day": "t-day", "m60": "old", "m30": "t-m30"}))
+        with facade_support.fake_facade(lambda c, f: datasets[f]), \
+             mock.patch("chanapp.api.analysis.engine_llm.analyze") as an:
+            for url in ("/api/analysis?code=sh000001&freq=day",
+                        "/api/analysis?code=sh000001&freq=day&tokens=not-json",
+                        f"/api/analysis?code=sh000001&freq=day&tokens={stale}"):
+                r = self.c.get(url)
+                self.assertEqual(r.status_code, 409, url)
+                self.assertEqual(r.json(), {"detail": "数据已更新",
+                                            "tokens": {"day": "t-day", "m60": "t-m60", "m30": "t-m30"}})
+        an.assert_not_called()
+
+    def test_matching_tokens_analyze_and_echo_tokens_without_supply_keys(self):
+        os.environ["LLM_API_KEY"] = "k"
+        datasets = {f: dict(self._dataset(), token=f"t-{f}") for f in ("day", "m60", "m30")}
+        with facade_support.fake_facade(lambda c, f: datasets[f]) as gb, \
+             mock.patch("chanapp.api.analysis.engine_llm.analyze",
+                        return_value='{"current_state": "s", "scenarios": []}'):
+            r = self.c.get(f"/api/analysis?code=sh000001&freq=day&adjust=raw"
+                           f"&tokens={quote(facade_support.tokens(datasets))}")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual((body["adjust"], body["tokens"]),
+                         ("raw", {"day": "t-day", "m60": "t-m60", "m30": "t-m30"}))
+        self.assertFalse({"scheme", "generation", "epoch"} & set(body))
+        self.assertEqual({c.kwargs.get("adjust") for c in gb.call_args_list}, {"raw"})
+
     def test_markdown_fenced_json_parsed(self):
         """LLM 输出包 ```json 代码围栏时仍能解析。"""
         os.environ["LLM_API_KEY"] = "k"
         fenced = "```json\n{\"current_state\": \"s\", \"scenarios\": []}\n```"
-        with mock.patch("chanapp.api.analysis.engine_data.get_bars",
-                        return_value=self._dataset()), \
+        with facade_support.fake_facade(return_value=self._dataset()), \
              mock.patch("chanapp.api.analysis.engine_llm.analyze",
                         return_value=fenced):
-            j = self.c.get("/api/analysis?code=sh000001&freq=day").json()
+            j = self.c.get(f"/api/analysis?code=sh000001&freq=day&tokens={TOKENS}").json()
         self.assertEqual(j["status"], "ok")
         self.assertEqual(j["current_state"], "s")
         self.assertNotIn("raw", j)
@@ -130,11 +164,10 @@ class TestAnalysisApi(unittest.TestCase):
     def test_invalid_json_degrades_to_raw(self):
         """LLM 输出无法解析为 JSON → 降级返回 raw 文本，不报错。"""
         os.environ["LLM_API_KEY"] = "k"
-        with mock.patch("chanapp.api.analysis.engine_data.get_bars",
-                        return_value=self._dataset()), \
+        with facade_support.fake_facade(return_value=self._dataset()), \
              mock.patch("chanapp.api.analysis.engine_llm.analyze",
                         return_value="这不是 JSON"):
-            j = self.c.get("/api/analysis?code=sh000001&freq=day").json()
+            j = self.c.get(f"/api/analysis?code=sh000001&freq=day&tokens={TOKENS}").json()
         self.assertEqual(j["status"], "ok")
         self.assertEqual(j["raw"], "这不是 JSON")
         self.assertEqual(j["scenarios"], [])

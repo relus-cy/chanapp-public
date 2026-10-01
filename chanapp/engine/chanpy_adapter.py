@@ -8,8 +8,8 @@ from .chanpy_vendor.Common.CTime import CTime
 from .chanpy_vendor.KLine.KLine_List import CKLine_List
 from .chanpy_vendor.KLine.KLine_Unit import CKLine_Unit
 
-FREQUENCIES = {'day': KL_TYPE.K_DAY, 'm60': KL_TYPE.K_60M, 'm30': KL_TYPE.K_30M,
-               'm15': KL_TYPE.K_15M, 'm5': KL_TYPE.K_5M}
+FREQUENCIES = {'week': KL_TYPE.K_WEEK, 'day': KL_TYPE.K_DAY, 'm60': KL_TYPE.K_60M,
+               'm30': KL_TYPE.K_30M, 'm15': KL_TYPE.K_15M, 'm5': KL_TYPE.K_5M}
 
 
 def build_native(bars, freq='day', rule_profile='strict', signal_scope='expanded'):

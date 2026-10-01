@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "sample_id": "cn-20250924-20260924",
+  "range": {
+    "start": "2025-09-24",
+    "end": "2026-09-24",
+    "inclusive": true
+  },
+  "semantics": {
+    "timezone": "Asia/Shanghai",
+    "price": "不复权，人民币/股；指数为点",
+    "volume_unit": "lot",
+    "shares_per_lot": 100,
+    "amount": "CNY",
+    "minute_label": "区间末端，09:35–11:30 / 13:05–15:00",
+    "daily": "日线独立保存，不由分钟合成",
+    "adjustment": "日线 pc 为参考前收；个股按 pc / 前日收盘计算等比前复权；指数保持原始价",
+    "calendar": "交易年表裁剪到样本区间，与指数日线开市日逐日相等"
+  },
+  "coverage": {
+    "sh000001": {
+      "day_rows": 243,
+      "m5_rows": 11664,
+      "trading_days": 243,
+      "slots_per_day": 48,
+      "missing_days": [],
+      "missing_slots": []
+    },
+    "sz300308": {
+      "day_rows": 243,
+      "m5_rows": 11664,
+      "trading_days": 243,
+      "slots_per_day": 48,
+      "missing_days": [],
+      "missing_slots": []
+    }
+  },
+  "short_history": {
+    "requested_window": 520,
+    "day_rows_per_symbol": 243,
+    "policy": "不补齐；视图沿用短窗口提示，周线由实际日线聚合，区间边界周可能不完整"
+  },
+  "adjustment_events": [
+    {
+      "date": "2025-10-13",
+      "previous_close": 390.0,
+      "pc": 389.6
+    },
+    {
+      "date": "2026-04-30",
+      "previous_close": 846.0,
+      "pc": 845.0
+    }
+  ],
+  "files": {
+    "bars.csv": {
+      "bytes": 2084029,
+      "sha256": "756d3bb806eb170c34e2d81176e26777542e087fdc10d626841c7d48af15263d"
+    },
+    "calendar.json": {
+      "bytes": 24912,
+      "sha256": "36e2c5cdc520e8dc0d249d90f9e885426ebd59ff7d346425da5fe856aeeb50f6"
+    },
+    "instance.json": {
+      "bytes": 163,
+      "sha256": "3cdc449b6364c4f409dea1f1b16e10e25c60dec1d37212c90e1ad871b7b4f5a8"
+    },
+    "instruments.json": {
+      "bytes": 269,
+      "sha256": "5c09c6e38f7eb00fd9ed638212f0021a7c18a25c8d63c074f93270c08bae78e9"
+    },
+    "watchlist.json": {
+      "bytes": 101,
+      "sha256": "7147dae48fdeeaed4fbc4b63be9c1dc7400a863616f4d5cc69a232fa0570acbc"
+    }
+  }
+}

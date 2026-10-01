@@ -1,0 +1,15 @@
+#!/bin/sh
+# 提交前凭据与个人信息扫描（gitleaks，只扫暂存内容）。配置默认取仓库根 .gitleaks.toml；
+# `git config chanapp.gitleaksConfig <路径>` 可换成扩展了它的本地配置。未安装 gitleaks 时提示后放行，CI 仍会扫描。
+command -v gitleaks >/dev/null 2>&1 || { echo 'pre-commit: 未安装 gitleaks，跳过本地扫描（CI 仍会扫描）' >&2; exit 0; }
+root=$(git rev-parse --show-toplevel)
+config=$(git config --get chanapp.gitleaksConfig)
+if [ -n "$config" ] && [ ! -f "$config" ]; then
+  echo "提交被拒：chanapp.gitleaksConfig 指向的配置不存在：$config" >&2
+  exit 1
+fi
+[ -n "$config" ] || config="$root/.gitleaks.toml"
+[ -f "$config" ] || config=  # 仓库没有配置文件时用 gitleaks 默认规则
+gitleaks git --pre-commit --staged --redact --no-banner --log-level warn ${config:+--config "$config"} "$root" && exit 0
+echo '提交被拒：暂存内容含凭据或个人信息（gitleaks 命中见上）' >&2
+exit 1

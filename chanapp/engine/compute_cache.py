@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 from collections import OrderedDict
 
-from chanapp.engine import data_identity, supply
+from chanapp.engine import data_identity
 
 _MAX = 32
 _CACHE: OrderedDict = OrderedDict()
@@ -12,15 +12,12 @@ _LOCK = threading.Lock()
 
 
 def dataset_version(dataset: dict) -> str:
-    """Use the producer identity, or hash all bars plus their normalization context."""
+    """Use the producer identity, or hash all bars plus the view context (source, label, adjust mode)."""
     if dataset.get("data_version"):
         return dataset["data_version"]
     metadata = dataset.get("meta") or {}
     return data_identity.version(dataset["bars"], {
-        "scheme": supply.current().scheme,
-        **{key: dataset.get(key, metadata.get(key))
-           for key in ("source", "fqf", "normalization")},
-    })
+        key: dataset.get(key, metadata.get(key)) for key in ("source", "fqf", "adjust")})
 
 
 def _identity(calculation_id: str | None) -> str:

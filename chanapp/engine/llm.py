@@ -1,12 +1,14 @@
 """LLM provider 抽象（DeepSeek 先行，预留其他 provider 扩展）。
 
-配置（环境变量，或 chanapp/.env 不入库）：
+配置只读环境变量。应用不自行加载 .env：部署时由服务单元的 EnvironmentFile 注入，
+本地开发自行导出，变量模板见 .env.example。
 - LLM_PROVIDER：缺省 "deepseek"
 - LLM_API_KEY：必填；缺失时 is_configured() 为 False，analyze() 抛 LLMError
 - LLM_MODEL：缺省 "deepseek-flash"（2026-09-10 起）。2026-08-25 实测
   deepseek-chat 别名转发到 deepseek-v4-flash；当时 /models 在线 id：
   deepseek-v4-flash / deepseek-v4-pro / deepseek-v4-flash-vision-exp；
   v4-flash 为推理模型，响应含 reasoning_content
+- LLM_TIMEOUT_SECONDS：单次请求超时秒数，限定在 1–120，缺省 30
 
 真 key 连通性冒烟已于 2026-08-25 执行（curl /models +
 chat/completions，deepseek-chat 与 deepseek-v4-flash 均通，响应 model
@@ -16,6 +18,8 @@ import logging
 import os
 
 import requests
+
+from chanapp.engine import data as engine_data
 
 log = logging.getLogger(__name__)
 
@@ -34,10 +38,12 @@ class LLMError(Exception):
 
 
 def is_configured() -> bool:
-    return bool(os.environ.get("LLM_API_KEY"))
+    return not getattr(engine_data, "is_demo", lambda: False)() and bool(os.environ.get("LLM_API_KEY"))
 
 
 def analyze(prompt: str) -> str:
+    if getattr(engine_data, "is_demo", lambda: False)():
+        raise LLMError("demo 模式不调用 AI")
     provider = os.environ.get("LLM_PROVIDER", "deepseek")
     conf = _PROVIDERS.get(provider)
     if conf is None:

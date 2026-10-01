@@ -1,7 +1,6 @@
 """SWR（stale-while-revalidate）统一内核：过期回旧 + 后台刷新 + in-flight 防踩踏 + 退避。
 
-四件套的单一所有者（三分支语义 = v1.3.1 契约不变；
-设计：docs/superpowers/specs/2026-09-18-swr-merge-design.md）。
+四件套的单一所有者（三分支语义 = v1.3.1 契约不变）。
 内核不摸文件、不碰发布逻辑：读写与落盘由消费方经 SwrIO 注入；
 TTL、wire 字段映射、日志措辞均留在消费方。
 """
@@ -16,8 +15,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
-from chanapp.engine import supply
-
 if importlib.util.find_spec("chanapp.engine.cache_store") is not None:
     from chanapp.engine import cache_store
     _Obsolete = cache_store.ObsoletePublication
@@ -29,12 +26,10 @@ else:
 
 log = logging.getLogger(__name__)
 
-Identity = tuple  # (epoch, scheme, generation)
 
-
-def make_key(identity: Identity, *domain: str) -> tuple:
-    """统一工作键：(epoch, scheme, generation, *domain)。"""
-    return (*identity, *domain)
+def make_key(*domain: str) -> tuple:
+    """统一工作键：消费方给出的缓存域（如文件名）组成的元组。"""
+    return tuple(domain)
 
 
 @dataclass
@@ -46,14 +41,13 @@ class SwrIO:
 
 class Scope(Enum):
     PER_KEY = "per-key"
-    PER_REQUEST_KEY = "per-key"  # 语义别名：candidate 按请求键，实现同 PER_KEY
     GLOBAL = "global"
 
 
 class CountSource(Enum):
-    BACKGROUND_ONLY = "background"  # 仅后台线程失败计数（kline）
-    UNIFIED = "unified"             # 冷路径与后台同语义计数（candidate）
-    EMBEDDED = "embedded"           # 内核从不计数：计数嵌在消费方 fetch 内（baseline）
+    BACKGROUND_ONLY = "background"  # 仅后台线程失败计数
+    UNIFIED = "unified"             # 冷路径与后台同语义计数
+    EMBEDDED = "embedded"           # 内核从不计数：计数嵌在消费方 fetch 内（显示层主源/备用源）
 
 
 _GLOBAL_KEY = ("__global__",)
@@ -62,8 +56,7 @@ _GLOBAL_KEY = ("__global__",)
 class BackoffPolicy:
     """连败退避状态机：after_failures 次连败冷却 seconds 秒（单次抖动不冷却）。
 
-    PER_KEY/PER_REQUEST_KEY：状态按 key 存表，记录失败时清理异身份（key[:3] 不等）
-    条目、表长 ≥512 全清；GLOBAL：单标量（key 忽略），无身份清理。
+    PER_KEY：状态按 key 存表，表长 ≥512 时记录失败前全清；GLOBAL：单标量（key 忽略）。
     ObsoletePublication 与 never_count 异常永不计数。"""
 
     def __init__(self, after_failures: int, seconds: float, *,
@@ -98,12 +91,10 @@ class BackoffPolicy:
             return
         resolved = self._resolve(key)
         with self._guard:
-            if self.scope is not Scope.GLOBAL:
-                # Backoff is advisory; old identities cannot suppress current work.
-                for old in list(self._failures):
-                    if old[:3] != resolved[:3] or len(self._failures) >= 512:
-                        self._failures.pop(old, None)
-                        self._cool_until.pop(old, None)
+            if self.scope is not Scope.GLOBAL and len(self._failures) >= 512:
+                # Backoff is advisory; bound the table instead of tracking every key forever.
+                self._failures.clear()
+                self._cool_until.clear()
             n = self._failures.get(resolved, 0) + 1
             self._failures[resolved] = n
             if n >= self.after_failures:
@@ -143,17 +134,15 @@ def _default_log_failure(key, exc):
     log.warning("后台刷新失败 %s", key, exc_info=True)
 
 
-def _refresh_in_background(key, ttl, io, policy, permit,
+def _refresh_in_background(key, ttl, io, policy,
                            on_refreshed, log_failure, log_success):
     """后台刷新：与冷路径同一把 per-key 锁、同一份 sync_fetch；锁内双检提前
-    return 未发请求，不计数。许可失效不触上游、不计数。"""
+    return 未发请求，不计数。"""
     try:
         with _lock_for(key):
             current = io.read()
             if current is not None and (time.time() - current[1]) <= ttl:
                 return  # 等锁期间已被刷新（首冷/另一后台），无需重复抓取
-            if not supply.permit_still_valid(permit):
-                return
             io.sync_fetch()
         if policy is not None and policy.count_source is not CountSource.EMBEDDED:
             policy.record_success(key)
@@ -192,13 +181,9 @@ def _trigger(key, ttl, io, policy, should_trigger,
         t = _inflight.get(key)
         if t is not None and t.is_alive():
             return
-        captured = supply.current()
-        permit = supply.capture_write_permit()
-
         def refresh():
-            with supply.use(captured, permit):
-                _refresh_in_background(key, ttl, io, policy, permit,
-                                       on_refreshed, log_failure, log_success)
+            _refresh_in_background(key, ttl, io, policy,
+                                   on_refreshed, log_failure, log_success)
 
         t = threading.Thread(target=refresh,
                              name=f"swr-refresh-{domain or key[-1]}", daemon=True)

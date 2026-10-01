@@ -1,0 +1,16 @@
+[
+  {
+    "code": "sh000001",
+    "name": "上证指数",
+    "list_date": null,
+    "delist_date": null,
+    "kind": "index"
+  },
+  {
+    "code": "sz300308",
+    "name": "中际旭创",
+    "list_date": "2012-04-10",
+    "delist_date": null,
+    "kind": "stock"
+  }
+]

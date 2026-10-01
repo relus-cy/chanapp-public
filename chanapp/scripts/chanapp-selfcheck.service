@@ -1,0 +1,17 @@
+[Unit]
+Description=chanapp internal service and cache selfcheck
+After=network.target
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@PARENT_DIR@
+Environment=TZ=@TIMEZONE@
+Environment=WATCHLIST_PATH=@PARENT_DIR@/chanapp.watchlist.json
+Environment=CHANAPP_CACHE_DIR=@APP_DIR@/.cache
+EnvironmentFile=-@APP_DIR@/.env
+ExecStart=@APP_DIR@/.venv/bin/python -m chanapp.scripts.selfcheck --url http://127.0.0.1:@PORT@
+TimeoutStartSec=45
+UMask=0077
+NoNewPrivileges=true
+

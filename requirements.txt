@@ -2,5 +2,14 @@ fastapi==0.141.1
 starlette==1.6.0
 uvicorn==0.52.4
 requests==2.34.2
-# 测试用 TestClient 需要 HTTP 客户端
+# 测试用 TestClient 需要 HTTP 客户端（starlette 1.6 兼容 httpx 0.28 回退路径；
+# httpx2 为 starlette 新推荐路径，未验证，升级 starlette 时再评估）
 httpx==0.28.1
+# v1.1.1 K 线模块（engine/kline/）：pytdx=A股主源，baostock=冷路径回填/校验/因子，
+# curl_cffi=港股 Yahoo 分钟（浏览器指纹）。全部 lazy import，未装时其它后端仍可用。
+# pandas 仅作为 baostock 的传递依赖被装入，项目代码不直接使用（bars 统一 list[dict]）。
+pytdx==1.72
+baostock==0.9.3
+curl_cffi==0.16.2
+# 港股 K 线（engine/kline/providers/longbridge.py，lazy import）；版本与 2026-09-26 验证一致。
+longbridge==5.1.0
