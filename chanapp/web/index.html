@@ -433,11 +433,21 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .res-chip {
     display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--mono);
     background: var(--raise); border: 1px solid transparent; border-radius: var(--radius-s);
-    height: 25px; flex: 0 1 auto; min-width: 0; padding: 2px 8px; color: var(--dim); white-space: nowrap; overflow: hidden;
+    height: 25px; flex: 0 1 auto; min-width: 0; padding: 0 8px; line-height: 23px;
+    color: var(--dim); white-space: nowrap; overflow: hidden;
   }
   .res-chip .lv, .res-chip .res-state { flex-shrink: 0; }
-  .res-chip .res-detail { min-width: 0; overflow: hidden; white-space: nowrap; }
-  .res-chip .res-state { color: var(--faint); }
+  /* 说明区按优先级让位：行高等于 chip 内容高，放不下时时间块整块换到第二行、被整行裁掉；
+     只剩说明文字仍放不下时省略号收尾。任何时候都不出现被裁半截的字。 */
+  .res-chip .res-detail {
+    display: flex; flex-wrap: wrap; column-gap: 4px; align-self: stretch;
+    min-width: 0; overflow: hidden;
+  }
+  .res-chip .res-sig { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* 换行只看完整宽度，时间块在首行要么整块放下要么换走；可收缩只为被换走后不撑宽说明区 */
+  .res-chip .res-time { min-width: 0; overflow: hidden; font-variant-numeric: tabular-nums; }
+  .res-chip .res-sep { flex: none; }
+  .res-chip .res-state, .res-chip .res-quiet { color: var(--faint); }
   .res-chip .lv { color: var(--faint); }
   .res-chip .sig-b { color: var(--up); font-weight: 600; }
   .res-chip .sig-s { color: var(--down); font-weight: 600; }
@@ -447,7 +457,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .res-chip.has-signal { background: var(--gold-soft); border-color: transparent; color: var(--gold); }
   .res-chip.has-signal .lv, .res-chip.has-signal .res-state { color: var(--gold); }
   .res-detail-btn {
-    flex-shrink: 0; align-self: stretch; margin: -2px -8px -2px 0; padding: 0 5px 0 9px;
+    flex-shrink: 0; align-self: stretch; margin: 0 -8px 0 0; padding: 0 5px 0 9px;
     background: none; border: none; border-left: 1px solid var(--gold-dim);
     color: var(--gold); font-family: var(--mono); font-size: 11px; cursor: pointer;
   }

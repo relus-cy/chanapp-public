@@ -81,7 +81,7 @@ function mkContext(savedVal, narrow) {
     document: { body, activeElement: null, hidden: false, addEventListener(ev, fn) { listeners['doc:' + ev] = fn; } },
     el: id => nodes[id],
     localStorage: { getItem: k => saved[k] || null, setItem: (k, v) => { saved[k] = v; } },
-    window: { matchMedia: () => ({ matches: !!narrow }), addEventListener(ev, fn) { listeners['win:' + ev] = fn; } },
+    window: { matchMedia: () => ({ matches: !!narrow, addEventListener() {} }), addEventListener(ev, fn) { listeners['win:' + ev] = fn; } },
     setTimeout, clearTimeout,
     _listeners: listeners, _saved: saved, _items: items,
   };

@@ -41,6 +41,7 @@ function fakeChart() {
         getVisibleLogicalRange: () => chart._range,
         setVisibleLogicalRange(r) { calls.setRange.push(r); chart._fire(r); },
         getVisibleRange: () => null,
+        width: () => 800,  // 本用例不缩放：宽度恒定
       };
     },
     _fire(r) { chart._range = r; subs.slice().forEach(fn => fn(r)); },

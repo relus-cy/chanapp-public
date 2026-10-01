@@ -34,6 +34,7 @@ function appContext(extras) {
       createElement: tag => mkEl(tag),
       createTextNode: text => ({ tagName: '#text', textContent: text }),
       getElementById: id => nodes[id] || (nodes[id] = mkEl()),
+      querySelectorAll: () => [],
       addEventListener() {},
     },
     el(id) { return nodes[id] || (nodes[id] = mkEl()); },
@@ -122,7 +123,12 @@ function chartStub(range) {
       addSeries() { return series('addSeries'); },
       removeSeries() { stub.events.push('removeSeries'); },
     },
-    macdChart: { timeScale: scale('sub') },
+    // 副图 series 的 setData 记为 'sub.setData'（showInd 重建时每条 series 一次）
+    macdChart: {
+      timeScale: scale('sub'),
+      addSeries() { return series('sub.setData'); },
+      removeSeries() { stub.events.push('sub.removeSeries'); },
+    },
     candleSeries: series('candle.setData'),
     volumeSeries: series('volume.setData'),
     biSeries: series('bi.setData'),

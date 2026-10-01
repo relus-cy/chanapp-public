@@ -1052,11 +1052,17 @@
     var markers = LW.createSeriesMarkers(candleSeries, []);
 
     // 同步时间轴（双向，防回环）；showInd 重建副图 series 期间（subRebuild）库会
-    // 触发 时间轴 null→自动适配 瞬变，必须抑制同步，否则主图可视区间被拖走
+    // 触发 时间轴 null→自动适配 瞬变，必须抑制同步，否则主图可视区间被拖走。
+    // 宽度变化（窗口缩放、侧栏/布局过渡）引起的区间变化不外传：两图同宽，各自保持 bar 间距
+    // 重排后区间自然一致；若互相回灌，先缩完的一侧会把对侧还没跟上的旧区间抄回来，
+    // 间距越推越大，最后只剩几根巨大 K 线。
     var syncing = false;
     function sync(src, dst) {
-      src.timeScale().subscribeVisibleLogicalRangeChange(function (range) {
-        if (syncing || subRebuild || !range) return;
+      var ts = src.timeScale(), width = ts.width();
+      ts.subscribeVisibleLogicalRangeChange(function (range) {
+        var resized = ts.width() !== width;
+        width = ts.width();
+        if (syncing || subRebuild || !range || resized) return;
         syncing = true;
         dst.timeScale().setVisibleLogicalRange(range);
         syncing = false;
@@ -1237,20 +1243,31 @@
         if (name === 'boll') el('subNote').innerHTML = bollNote(null, null);
         return;
       }
+      // 主副图按逻辑索引同步，副图每条 series 必须逐根铺满主图时间轴：
+      // 无值处（指标预热期、左拉得到而后端未给 MACD 的历史段）放只有 time 的 whitespace 点
       var toPt = function (arr) {
         return klineData.map(function (b, i) {
           return arr[i] == null ? { time: toTime(b.time) } : { time: toTime(b.time), value: +arr[i].toFixed(4) };
-        }).filter(function (x) { return x.value !== undefined; });
+        });
       };
       if (name === 'macd') {
+        var macdAt = {};
+        macdRowsRaw.forEach(function (m) { macdAt[toTime(m.time)] = m; });
+        var macdPt = function (key, extra) {
+          return klineData.map(function (b) {
+            var t = toTime(b.time), m = macdAt[t];
+            if (!m || m[key] == null) return { time: t };
+            var pt = { time: t, value: m[key] };
+            if (extra) pt.color = extra(m[key]);
+            return pt;
+          });
+        };
         var h = sub.addSeries(LW.HistogramSeries, { priceLineVisible: false, lastValueVisible: false });
-        h.setData(macdRowsRaw.map(function (m) {
-          return { time: toTime(m.time), value: m.hist, color: m.hist >= 0 ? P.upA : P.downA };
-        }));
+        h.setData(macdPt('hist', function (v) { return v >= 0 ? P.upA : P.downA; }));
         var d1 = sub.addSeries(LW.LineSeries, subLine(P.gold));
-        d1.setData(macdRowsRaw.map(function (m) { return { time: toTime(m.time), value: m.dif }; }));
+        d1.setData(macdPt('dif'));
         var d2 = sub.addSeries(LW.LineSeries, subLine(P.bi));
-        d2.setData(macdRowsRaw.map(function (m) { return { time: toTime(m.time), value: m.dea }; }));
+        d2.setData(macdPt('dea'));
         subSeries = [h, d1, d2];
       } else if (name === 'kdj') {
         var kdj = kdjArr();
@@ -1325,14 +1342,15 @@
         var time = fmtBarTime(signal.dt);
         details.push(label + ' ' + time);
         forming = forming || signal.status === 'provisional';
-        return '<span class="sig-' + (signal.side === 'buy' ? 'b' : 's') +
+        // 时间单独成块：空间不够时整块让位（CSS 换行裁掉），说明文字再省略
+        return '<span class="res-sig sig-' + (signal.side === 'buy' ? 'b' : 's') +
           (signal.status === 'provisional' ? ' prov' : '') + '">' +
-          esc(label.replace(' · 形成中', '')) + '</span> ' + esc(time);
-      }).join(' / ');
+          esc(label.replace(' · 形成中', '')) + '</span><span class="res-time">' + esc(time) + '</span>';
+      }).join('<span class="res-sep">/</span>');
       if (!signals.length) {
         var text = lv.zs ? (lv.zs.inside ? '中枢内 ' : '中枢外 ') + lv.zs.zd + '–' + lv.zs.zg : (found ? '暂无点位' : '摘要不可用');
         details.push(text);
-        html = '<span class="' + (lv.zs ? 'zs' : 'lv') + '">' + esc(text) + '</span>';
+        html = '<span class="res-sig ' + (lv.zs ? 'zs' : 'res-quiet') + '">' + esc(text) + '</span>';
       }
       var chip = document.createElement('span');
       chip.className = 'res-chip' + (signals.length ? ' has-signal' : '');
@@ -2723,40 +2741,65 @@
     return b.contains('sb-rail') ? 'rail' : (b.contains('sb-open') ? 'open' : 'pinned');
   }
 
+  /* 窄窗（≤1100px）侧栏是抽屉，只有收起（rail）与打开（open）两态，没有固定展开。
+     宽窗偏好 sbPref（pinned / rail）只在宽窗写入；窄窗里的开合不改写它，回到宽窗时恢复。 */
+  var sbNarrow = null;   /* matchMedia('(max-width: 1100px)')，initSidebar 建立 */
+  var sbPref = null;     /* 已保存的宽窗偏好；未保存时为 null（宽窗默认固定展开） */
+  function narrowViewport() { return !!(sbNarrow && sbNarrow.matches); }
+
   function setSidebar(mode) {
-    var prev = sbMode();
+    var prev = sbMode(), narrow = narrowViewport();
+    /* 窄窗没有固定展开：按打开的抽屉处理，仍可点外部/Esc 关闭 */
+    if (narrow && mode === 'pinned') mode = 'open';
     if (mode !== 'open') hoverOpen = false;
     if (mode === 'rail' && prev !== 'rail') suppressHover = el('sidebar').matches(':hover');
     document.body.classList.toggle('sb-rail', mode === 'rail');
     document.body.classList.toggle('sb-open', mode === 'open');
     /* 窄栏 → 展开（悬停/图钉/快捷键同路）：文字交错淡入；几何等高保证无任何纵向位移 */
     if (prev === 'rail' && mode !== 'rail') playSidebarEnter();
-    /* open 是临时浮层，只持久化 pinned / rail；兼容旧键值 expanded / collapsed */
-    try { localStorage.setItem('chanapp-sidebar', mode === 'pinned' ? 'pinned' : 'rail'); } catch (_) {}
+    /* open 是临时浮层，宽窗只持久化 pinned / rail；兼容旧键值 expanded / collapsed */
+    if (!narrow) savePref(mode === 'pinned' ? 'pinned' : 'rail');
+    var pinned = narrow ? sbPref === 'pinned' : mode === 'pinned';
     var pin = el('sidebarPin');
-    pin.classList.toggle('on', mode === 'pinned');
-    pin.setAttribute('aria-pressed', mode === 'pinned' ? 'true' : 'false');
-    pin.title = mode === 'pinned' ? '取消固定（收为窄栏）' : '固定展开侧边栏';
+    pin.classList.toggle('on', pinned);
+    pin.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+    pin.title = pinned ? '取消固定（收为窄栏）' : '固定展开侧边栏';
     /* 收回窄栏时迁移焦点：窄窗窄栏整条隐藏，焦点迁到顶栏展开钮；宽窗迁到钉按钮 */
     if (mode === 'rail' && prev !== 'rail' && el('sidebar').contains(document.activeElement)) {
-      var narrowRail = window.matchMedia('(max-width: 1100px)').matches;
       focusMute = true;
-      (narrowRail ? el('sidebarExpand') : pin).focus({preventScroll: true});
+      (narrow ? el('sidebarExpand') : pin).focus({preventScroll: true});
       focusMute = false;
     }
+  }
+
+  function savePref(pref) {
+    sbPref = pref;
+    try { localStorage.setItem('chanapp-sidebar', pref); } catch (_) {}
+  }
+
+  /* 按当前窗口宽度落实侧栏：窄窗收起抽屉，宽窗恢复偏好（未保存过默认固定展开） */
+  function applySidebarForViewport() {
+    setSidebar(narrowViewport() ? 'rail' : (sbPref || 'pinned'));
   }
 
   function toggleSidebar() { setSidebar(sbMode() === 'rail' ? 'open' : 'rail'); }
 
   function initSidebar() {
-    var mode = window.matchMedia('(max-width: 1100px)').matches ? 'rail' : 'pinned';
+    sbNarrow = window.matchMedia('(max-width: 1100px)');
     try {
       var saved = localStorage.getItem('chanapp-sidebar');
-      if (saved === 'pinned' || saved === 'expanded') mode = 'pinned';
-      else if (saved === 'rail' || saved === 'collapsed') mode = 'rail';
+      if (saved === 'pinned' || saved === 'expanded') sbPref = 'pinned';
+      else if (saved === 'rail' || saved === 'collapsed') sbPref = 'rail';
     } catch (_) {}
-    setSidebar(mode);
+    applySidebarForViewport();
+    sbNarrow.addEventListener('change', applySidebarForViewport);
     el('sidebarPin').addEventListener('click', function () {
+      /* 窄窗的图钉切换宽窗偏好，抽屉保持当前开合 */
+      if (narrowViewport()) {
+        savePref(sbPref === 'pinned' ? 'rail' : 'pinned');
+        setSidebar(sbMode());
+        return;
+      }
       setSidebar(sbMode() === 'pinned' ? 'rail' : 'pinned');
     });
     el('sidebarExpand').addEventListener('click', toggleSidebar);
