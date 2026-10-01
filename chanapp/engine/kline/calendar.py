@@ -87,24 +87,18 @@ def closed_days(conn, market, start, end) -> list:
         " ORDER BY date", (market, start, end))]
 
 
-def is_trading_day(conn, market, day) -> bool | None:
-    row = conn.execute("SELECT is_open FROM calendar WHERE market=? AND date=?",
-                       (market, day)).fetchone()
-    if row:
-        return bool(row["is_open"])
-    bounds = conn.execute("SELECT MIN(date) AS lo, MAX(date) AS hi FROM calendar WHERE market=?"
-                          " AND source!='index_day'", (market,)).fetchone()
+_BOUNDS_SQL = "SELECT MIN(date) AS lo, MAX(date) AS hi FROM calendar WHERE market=? AND source!='index_day'"
+
+
+def _absent_status(bounds, day) -> bool | None:
     # 供应商年表覆盖的年份里，缺席的工作日视为未知，周末视为休市
     if bounds["lo"] and bounds["lo"][:4] <= day[:4] <= bounds["hi"][:4] and date.fromisoformat(day).weekday() >= 5:
         return False
     return None
 
 
-def required_slots(conn, market, fact_freq, day) -> set:
-    """该日应有的分钟槽位（slot_end）：日历行带会话（半日市）时只取会话内槽位，否则取完整会话网格。
-    采集器的覆盖判定与视图的完整性标记共用这一口径。"""
+def _session_slots(market, fact_freq, day, row) -> set:
     grid = sessions.slots(market, fact_freq)
-    row = conn.execute("SELECT sessions FROM calendar WHERE market=? AND date=?", (market, day)).fetchone()
     try:
         spans = [(a, b) for a, b in json.loads(row["sessions"])] if row else []
     except (TypeError, ValueError):
@@ -112,6 +106,50 @@ def required_slots(conn, market, fact_freq, day) -> set:
     if spans:
         grid = [t for t in grid if any(a < t <= b for a, b in spans)]
     return {f"{day} {t}" for t in grid}
+
+
+def is_trading_day(conn, market, day) -> bool | None:
+    row = conn.execute("SELECT is_open FROM calendar WHERE market=? AND date=?",
+                       (market, day)).fetchone()
+    if row:
+        return bool(row["is_open"])
+    return _absent_status(conn.execute(_BOUNDS_SQL, (market,)).fetchone(), day)
+
+
+def required_slots(conn, market, fact_freq, day) -> set:
+    """该日应有的分钟槽位（slot_end）：日历行带会话（半日市）时只取会话内槽位，否则取完整会话网格。
+    采集器的覆盖判定与视图的完整性标记共用这一口径。"""
+    row = conn.execute("SELECT sessions FROM calendar WHERE market=? AND date=?", (market, day)).fetchone()
+    return _session_slots(market, fact_freq, day, row)
+
+
+class Span:
+    """[start, end] 内日历的一次性只读快照：一条查询取回该段日历行（缺行时再取一次年表边界），逐日判断与
+    is_trading_day、required_slots 同一口径。区间计算（窗口缺口、覆盖判定）用它代替逐日查询；只服务一次计算，
+    不跨请求保留（日历随采集器更新）。"""
+
+    def __init__(self, conn, market, start, end):
+        self.conn, self.market, self.start, self.end = conn, market, start[:10], end[:10]
+        self._rows = {r["date"]: r for r in conn.execute(
+            "SELECT date, is_open, sessions FROM calendar WHERE market=? AND date>=? AND date<=?",
+            (market, self.start, self.end))}
+        self._bounds = None
+
+    def _row(self, day):
+        if not self.start <= day <= self.end:
+            raise ValueError(f"{day} 不在日历快照 {self.start}..{self.end} 内")
+        return self._rows.get(day)
+
+    def is_trading_day(self, day) -> bool | None:
+        row = self._row(day)
+        if row:
+            return bool(row["is_open"])
+        if self._bounds is None:
+            self._bounds = self.conn.execute(_BOUNDS_SQL, (self.market,)).fetchone()
+        return _absent_status(self._bounds, day)
+
+    def required_slots(self, fact_freq, day) -> set:
+        return _session_slots(self.market, fact_freq, day, self._row(day))
 
 
 def covered_through(conn, market) -> str | None:

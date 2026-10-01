@@ -831,12 +831,16 @@ class Collector:
             yield day.isoformat()
             day += timedelta(days=1)
 
-    def _expected_day(self, market, day, *, unknown_required) -> bool:
-        """日历已知开市日；日历未知的工作日只在 unknown_required 时计入（规划与取数前按应有处理）。"""
-        status = calendar.is_trading_day(self.conn(), market, day)
+    @staticmethod
+    def _expected(status, day, *, unknown_required) -> bool:
         if status is None:
             return unknown_required and date.fromisoformat(day).weekday() < 5
         return status
+
+    def _expected_day(self, market, day, *, unknown_required) -> bool:
+        """日历已知开市日；日历未知的工作日只在 unknown_required 时计入（规划与取数前按应有处理）。"""
+        return self._expected(calendar.is_trading_day(self.conn(), market, day), day,
+                              unknown_required=unknown_required)
 
     def _required_slots(self, market, fact, day) -> set:
         return calendar.required_slots(self.conn(), market, fact, day)
@@ -846,6 +850,12 @@ class Collector:
 
         停牌日（日线 sf=1）不要求分钟。unknown_required=False 用于取数之后：只要求日历已知的开市日、
         可读有行的日子与本次取回过行（含被拒）的日子；日历未知的工作日取回为空按非交易日处理（港股假日）。"""
+        return not self._minute_uncovered_days(code, fact, lo, hi, unknown_required=unknown_required,
+                                               returned=returned)
+
+    def _minute_uncovered_days(self, code, fact, lo: str, hi: str, *, unknown_required=True, returned=()) -> list:
+        """[lo, hi] 内分钟未覆盖的日子（升序，口径见 _minute_covered）。整段一次取隔离键、已收盘槽位、日线与日历，
+        查询条数不随天数增长；逐日调用 _minute_covered(d, d) 得到的是同一集合。"""
         conn, market = self.conn(), market_of(code)
         hidden = facts.quarantined_keys(conn, code, fact)
         present: dict = {}
@@ -856,15 +866,16 @@ class Collector:
                 present.setdefault(r["trade_date"], set()).add(r["slot_end"])
         suspended = {r["trade_date"] for r in facts.read_day_rows(conn, code, lo[:10], hi[:10])
                      if r["sf"] == 1 and r["provenance"] != "preopen"}
-        for day in self._dates(lo, hi):
-            if day in suspended:
-                continue
+        days = [d for d in self._dates(lo, hi) if d not in suspended]
+        span = calendar.Span(conn, market, days[0], days[-1]) if days else None
+        out = []
+        for day in days:
             if (day not in present and day not in returned
-                    and not self._expected_day(market, day, unknown_required=unknown_required)):
+                    and not self._expected(span.is_trading_day(day), day, unknown_required=unknown_required)):
                 continue
-            if not (self._required_slots(market, fact, day) - hidden) <= present.get(day, set()):
-                return False
-        return True
+            if not (span.required_slots(fact, day) - hidden) <= present.get(day, set()):
+                out.append(day)
+        return out
 
     def _known_list_date(self, code):
         """只读本地 instruments（写者锁内也可调用，不打上游）。"""
@@ -885,8 +896,11 @@ class Collector:
             listed = self._known_list_date(code)
             first = max(listed, lo) if listed else (min(have) if have else lo)
         missing = {d for d in returned if lo <= d <= hi and d not in have}
-        missing |= {day for day in self._dates(first, hi) if day not in have
-                    and self._expected_day(market_of(code), day, unknown_required=unknown_required)}
+        absent = [day for day in self._dates(first, hi) if day not in have]
+        if absent:
+            span = calendar.Span(self.conn(), market_of(code), absent[0], absent[-1])
+            missing |= {day for day in absent
+                        if self._expected(span.is_trading_day(day), day, unknown_required=unknown_required)}
         return sorted(missing - set(exclude)), have
 
     def _day_covered(self, code, lo: str, hi: str, *, unknown_required=True, from_first_row=False,
@@ -996,10 +1010,10 @@ class Collector:
                 continue
             lo = (date.fromisoformat(since) + timedelta(days=1)).isoformat()
             if dataset == "day":
-                missing = [d for d in self._dates(lo, last) if not self._day_covered(code, d, d)]
+                missing = self._day_missing(code, lo, last)[0]
                 ranges = [(missing[0], missing[-1])] if missing else []
             else:
-                missing = [d for d in self._dates(lo, last) if not self._minute_covered(code, dataset, d, d)]
+                missing = self._minute_uncovered_days(code, dataset, lo, last)
                 ranges = ([(a, b) for a, b, *_ in self._month_slices(code, missing[0], missing[-1])]
                           if missing else [])
             with self.writer() as wconn, facts.write_txn(wconn):
@@ -1282,10 +1296,15 @@ class Collector:
                 self._vendor_widened[(code, "day")] = raw_first
 
     def _back_days(self, code, count, floor) -> str:
-        """从昨天起按交易日（日历未知按工作日）回推 count 个交易日的日期，不早于 floor。"""
-        market, day = market_of(code), self.now().date() - timedelta(days=1)
+        """从昨天起按交易日（日历未知按工作日）回推 count 个交易日的日期，不早于 floor。
+        日历按段取（每段够剩余交易日再加余量），不逐日查询。"""
+        market, day, span = market_of(code), self.now().date() - timedelta(days=1), None
         while day.isoformat() > floor:
-            if self._expected_day(market, day.isoformat(), unknown_required=True):
+            iso = day.isoformat()
+            if span is None or iso < span.start:
+                lo = max(floor, (day - timedelta(days=max(count, 0) * 7 // 5 + 31)).isoformat())
+                span = calendar.Span(self.conn(), market, lo, iso)
+            if self._expected(span.is_trading_day(iso), iso, unknown_required=True):
                 count -= 1
                 if count <= 0:
                     break
@@ -1406,7 +1425,7 @@ class Collector:
             if force:
                 ranges = [(minute_lo, last)]
             else:
-                days = [d for d in self._dates(minute_lo, last) if not self._minute_covered(code, fact, d, d)]
+                days = self._minute_uncovered_days(code, fact, minute_lo, last)
                 exempt = self._window_exempt(code, days)
                 days = [d for d in days if d not in exempt]
                 # 分段只被真有分钟行的日子隔开：周末、节假日、停牌日「无须分钟」也算覆盖，但不能把缺口切碎
@@ -1423,7 +1442,8 @@ class Collector:
         """[lo, hi] 里有应有返回行的日子：空返回因此不能算取到。日线是应有交易日（日历未知的工作日按应有，上市前除外）；
         分钟再除去停牌日（日线 sf=1）：整段或整月停牌时分钟空返回是合法的。"""
         market, listed = market_of(code), self._known_list_date(code)
-        days = [d for d in self._dates(lo, hi) if self._expected_day(market, d, unknown_required=True)
+        span = calendar.Span(self.conn(), market, lo, hi)
+        days = [d for d in self._dates(lo, hi) if self._expected(span.is_trading_day(d), d, unknown_required=True)
                 and not (listed and d < listed)]
         if dataset != "day" and days:
             suspended = {r["trade_date"] for r in facts.read_day_rows(self.conn(), code, lo[:10], hi[:10])
