@@ -1041,12 +1041,33 @@
 
     var zsOverlay = makeZsOverlay(el('chart'), main, candleSeries);
 
-    // 十字光标图例：charts 只建一次，订阅一次即可；数据经 klineData/klineByTime 按 load 更新
+    // 十字线主副图联动：指针所在图（源）的十字线停在某根 bar，另一图在同一时间画竖线，图例与副图读数跟随该 bar；
+    // 移出回落到最新一根。跟随一侧关掉横线与价格标签（那里的纵轴不是同一量纲）。
+    // 库的程序化 setCrosshairPosition/clearCrosshairPosition 与 applyOptions 都会异步回发 crosshairMove，
+    // 只认指针所在图的事件，跟随图的回声一律忽略，否则两图互相设置无限往返。
+    // charts 只建一次，订阅一次即可；数据经 klineData/klineByTime 按 load 更新。
+    // 指针在哪张图由 wireChartPointer 跟踪（crossPointer）。
     legendEl = el('ohlc');
+    function followCrosshair(src, dst, param, place) {
+      if (crossPointer !== src) return;
+      var hit = param.time != null ? klineByTime[param.time] : null;
+      if (!hit) { crossRest(dst); return; }
+      place(hit);
+      renderLegend(hit.bar, hit.prev, hit.i);
+      renderSubReadout(hit.i);
+    }
     main.subscribeCrosshairMove(function (param) {
-      if (!param.time) { legendLatest(); return; }  // 移出图表回落到最新一根
-      var hit = klineByTime[param.time];
-      if (hit) renderLegend(hit.bar, hit.prev, hit.i); else legendLatest();
+      followCrosshair(main, macdChart, param, function (hit) {
+        if (!subSeries.length) { macdChart.clearCrosshairPosition(); return; }
+        // 竖线只看时间；价格取该根第一条线的值，无值（whitespace）时给 0，横线已关
+        var v = subRead && subRead.rows.length && subRead.rows[0].values[hit.i];
+        macdChart.setCrosshairPosition(v == null ? 0 : v, param.time, subSeries[0]);
+      });
+    });
+    macdChart.subscribeCrosshairMove(function (param) {
+      followCrosshair(macdChart, main, param, function (hit) {
+        main.setCrosshairPosition(hit.bar.close, param.time, candleSeries);
+      });
     });
 
     var markers = LW.createSeriesMarkers(candleSeries, []);
@@ -1078,6 +1099,38 @@
       zsOverlay: zsOverlay, markers: markers, channelSeries: [],
     };
     return charts;
+  }
+
+  // 十字线联动的源图：指针所在的那张图（charts.main / charts.macdChart），不在图上为 null
+  var crossPointer = null;
+
+  function crossHorz(chart, on) {
+    chart.applyOptions({ crosshair: { horzLine: { visible: on, labelVisible: on } } });
+  }
+
+  // 源图十字线离开 bar 或指针移出：跟随图清十字线，图例与副图读数回到最新一根
+  function crossRest(dst) {
+    dst.clearCrosshairPosition();
+    legendLatest();
+    renderSubReadout(null);
+  }
+
+  // 指针进入哪张图，哪张图就是联动源：源图显示横线与价格标签，跟随图关掉
+  function wireChartPointer() {
+    [['chart', 'main', 'macdChart'], ['sub', 'macdChart', 'main']].forEach(function (pair) {
+      var node = el(pair[0]);
+      node.addEventListener('pointerenter', function () {
+        if (!charts || crossPointer === charts[pair[1]]) return;
+        crossPointer = charts[pair[1]];
+        crossHorz(charts[pair[1]], true);
+        crossHorz(charts[pair[2]], false);
+      });
+      node.addEventListener('pointerleave', function () {
+        if (!charts || crossPointer !== charts[pair[1]]) return;
+        crossPointer = null;
+        crossRest(charts[pair[2]]);
+      });
+    });
   }
 
   // ---------- 日间/夜间主题 ----------
@@ -1156,12 +1209,10 @@
   var subSeries = [];
   var curInd = 'macd';
   var subRebuild = false;  // showInd 重建副图期间抑制主副图时间轴同步（ensureCharts 的 sync 检查）
-  var SUB_NOTES = {
-    macd: 'MACD 指标 · hist=2×(DIF−DEA)',
-    kdj: 'KDJ(9,3,3) · 显示用，不参与信号',
-    rsi: 'RSI(14) · 显示用，不参与信号',
-    boll: 'BOLL(20,2) · 显示用，不参与信号',
-  };
+  // 副图读数：指标名 · 各线数值 · 说明。数值随十字线所在 bar，移出回到最新一根
+  var SUB_HEAD = { macd: 'MACD', kdj: 'KDJ(9,3,3)', rsi: 'RSI(14)', boll: 'BOLL(20,2)' };
+  var SUB_TAIL = { macd: 'hist=2×(DIF−DEA)', kdj: '显示用', rsi: '显示用', boll: '显示用' };
+  var subRead = null;  // { name, rows: [{label, color, values(与 klineData 逐根对齐), digits}], short }
 
   function clearSub() {
     if (!charts) return;
@@ -1213,14 +1264,54 @@
 
   function lastVal(arr) { for (var i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i]; }
 
-  function bollNote(boll, close) {
-    var mid = boll && lastVal(boll.mid), up = boll && lastVal(boll.up), low = boll && lastVal(boll.lo);
-    var fmt = function (v) { return v == null ? '--' : v.toFixed(2); };
-    return 'BOLL(20,2)' + (mid == null ? ' · 样本不足（至少 20 根）' : '') +
-      ' · MID <b style="color:' + P.gold + '">' + fmt(mid) + '</b>' +
-      ' · UP <b style="color:' + P.bi + '">' + fmt(up) + '</b>' +
-      ' · LOW <b style="color:' + P.bi + '">' + fmt(low) + '</b>' +
-      ' · C <b style="color:' + P.up + '">' + fmt(close) + '</b> · 显示用';
+  // i 为 klineData 下标；null/越界表示「未悬停」，取最新一根。
+  // 某根无值（预热期、翻页进来而后端未给 MACD 的历史段）显示 —；BOLL 全段不足 20 根时整体标样本不足、缺值记 --
+  function renderSubReadout(i) {
+    var note = el('subNote');
+    if (!note || !subRead) return;
+    var n = klineData.length;
+    if (i == null || i < 0 || i >= n) i = n - 1;
+    var miss = subRead.short ? '--' : '—';
+    var parts = [SUB_HEAD[subRead.name] + (subRead.short ? ' · 样本不足（至少 20 根）' : '')];
+    subRead.rows.forEach(function (row) {
+      var v = i >= 0 ? row.values[i] : null;
+      var color = typeof row.color === 'function' ? row.color(v) : row.color;
+      parts.push(row.label + ' <b style="color:' + color + '">' + (v == null ? miss : v.toFixed(row.digits)) + '</b>');
+    });
+    parts.push(SUB_TAIL[subRead.name]);
+    note.innerHTML = parts.join(' · ');
+  }
+
+  function subReadRows(name) {
+    var col = function (key) { return klineData.map(function (b) { return b[key]; }); };
+    if (name === 'macd') {
+      var macdAt = {};
+      macdRowsRaw.forEach(function (m) { macdAt[toTime(m.time)] = m; });
+      var pick = function (key) {
+        return klineData.map(function (b) { var m = macdAt[toTime(b.time)]; return m && m[key] != null ? m[key] : null; });
+      };
+      return [
+        { label: 'DIF', color: P.gold, values: pick('dif'), digits: 3 },
+        { label: 'DEA', color: P.bi, values: pick('dea'), digits: 3 },
+        { label: 'MACD', color: function (v) { return v != null && v < 0 ? P.down : P.up; }, values: pick('hist'), digits: 3 },
+      ];
+    }
+    if (name === 'kdj') {
+      var kdj = kdjArr();
+      return [
+        { label: 'K', color: P.gold, values: kdj.k, digits: 2 },
+        { label: 'D', color: P.bi, values: kdj.d, digits: 2 },
+        { label: 'J', color: P.up, values: kdj.j, digits: 2 },
+      ];
+    }
+    if (name === 'rsi') return [{ label: 'RSI', color: P.gold, values: rsiArr(14), digits: 2 }];
+    var boll = bollArr(20, 2);
+    return [
+      { label: 'MID', color: P.gold, values: boll.mid, digits: 2 },
+      { label: 'UP', color: P.bi, values: boll.up, digits: 2 },
+      { label: 'LOW', color: P.bi, values: boll.lo, digits: 2 },
+      { label: 'C', color: P.up, values: col('close'), digits: 2 },
+    ];
   }
 
   function showInd(name) {
@@ -1238,59 +1329,39 @@
     try {
       keepRange = sub.timeScale().getVisibleLogicalRange();
       clearSub();
-      el('subNote').textContent = SUB_NOTES[name];
-      if (!klineData.length) {
-        if (name === 'boll') el('subNote').innerHTML = bollNote(null, null);
-        return;
-      }
+      // 读数与副图 series 共用同一份逐根数值
+      var rows = subReadRows(name);
+      subRead = { name: name, rows: rows, short: name === 'boll' && lastVal(rows[0].values) == null };
+      renderSubReadout(null);
+      if (!klineData.length) return;
       // 主副图按逻辑索引同步，副图每条 series 必须逐根铺满主图时间轴：
       // 无值处（指标预热期、左拉得到而后端未给 MACD 的历史段）放只有 time 的 whitespace 点
-      var toPt = function (arr) {
+      var toPt = function (arr, round, color) {
         return klineData.map(function (b, i) {
-          return arr[i] == null ? { time: toTime(b.time) } : { time: toTime(b.time), value: +arr[i].toFixed(4) };
+          var t = toTime(b.time), v = arr[i];
+          if (v == null) return { time: t };
+          var pt = { time: t, value: round ? +v.toFixed(4) : v };
+          if (color) pt.color = color(v);
+          return pt;
         });
       };
+      var line = function (color, values, extra) {
+        var s = sub.addSeries(LW.LineSeries, Object.assign(subLine(color), extra || {}));
+        s.setData(toPt(values, name !== 'macd'));
+        return s;
+      };
       if (name === 'macd') {
-        var macdAt = {};
-        macdRowsRaw.forEach(function (m) { macdAt[toTime(m.time)] = m; });
-        var macdPt = function (key, extra) {
-          return klineData.map(function (b) {
-            var t = toTime(b.time), m = macdAt[t];
-            if (!m || m[key] == null) return { time: t };
-            var pt = { time: t, value: m[key] };
-            if (extra) pt.color = extra(m[key]);
-            return pt;
-          });
-        };
         var h = sub.addSeries(LW.HistogramSeries, { priceLineVisible: false, lastValueVisible: false });
-        h.setData(macdPt('hist', function (v) { return v >= 0 ? P.upA : P.downA; }));
-        var d1 = sub.addSeries(LW.LineSeries, subLine(P.gold));
-        d1.setData(macdPt('dif'));
-        var d2 = sub.addSeries(LW.LineSeries, subLine(P.bi));
-        d2.setData(macdPt('dea'));
-        subSeries = [h, d1, d2];
+        h.setData(toPt(rows[2].values, false, function (v) { return v >= 0 ? P.upA : P.downA; }));
+        subSeries = [h, line(P.gold, rows[0].values), line(P.bi, rows[1].values)];
       } else if (name === 'kdj') {
-        var kdj = kdjArr();
-        var k = sub.addSeries(LW.LineSeries, subLine(P.gold)); k.setData(toPt(kdj.k));
-        var d = sub.addSeries(LW.LineSeries, subLine(P.bi)); d.setData(toPt(kdj.d));
-        var j = sub.addSeries(LW.LineSeries, subLine(P.up)); j.setData(toPt(kdj.j));
-        subSeries = [k, d, j];
+        subSeries = rows.map(function (row) { return line(row.color, row.values); });
       } else if (name === 'rsi') {
-        var r = sub.addSeries(LW.LineSeries, subLine(P.gold));
-        r.setData(toPt(rsiArr(14)));
-        subSeries = [r];
+        subSeries = [line(P.gold, rows[0].values)];
       } else if (name === 'boll') {
-        var boll = bollArr(20, 2);
-        var u = sub.addSeries(LW.LineSeries, subLine(P.bi)); u.setData(toPt(boll.up));
-        var m = sub.addSeries(LW.LineSeries, Object.assign(subLine(P.gold), { lineStyle: LW.LineStyle.Dashed }));
-        m.setData(toPt(boll.mid));
-        var l = sub.addSeries(LW.LineSeries, subLine(P.bi)); l.setData(toPt(boll.lo));
-        // 价格线（收盘），让轨道有参照
-        var closes = klineData.map(function (b) { return b.close; });
-        var c = sub.addSeries(LW.LineSeries, subLine(P.up)); c.setData(toPt(closes));
-        subSeries = [u, m, l, c];
-        // 附注带最新数值
-        el('subNote').innerHTML = bollNote(boll, closes[closes.length - 1]);
+        // 收盘价线让轨道有参照；线序沿用 UP、MID（虚线）、LOW、C
+        subSeries = [line(P.bi, rows[1].values), line(P.gold, rows[0].values, { lineStyle: LW.LineStyle.Dashed }),
+          line(P.bi, rows[2].values), line(P.up, rows[3].values)];
       }
     } finally {
       try {
@@ -1441,7 +1512,7 @@
     charts.main.timeScale().setVisibleLogicalRange(range);
     charts.macdChart.timeScale().setVisibleLogicalRange(range);
     charts.main.setCrosshairPosition(rec.bar.close, toTime(dt), charts.candleSeries);
-    renderLegend(rec.bar, rec.prev, rec.i);  // 程序化十字线不触发 crosshairMove 订阅，图例手动同步
+    renderLegend(rec.bar, rec.prev, rec.i);  // 程序化十字线的回声事件被联动忽略（只认指针所在图），图例手动同步
     if (locateBar.timer) clearTimeout(locateBar.timer);
     locateBar.timer = setTimeout(function () {
       charts.main.clearCrosshairPosition();
@@ -2480,6 +2551,8 @@
     ensureCharts();
     if (chartAbort) chartAbort.abort();
     var ctl = chartAbort = new AbortController();
+    // 进度细线只跟用户发起的加载（切换、重拉）；定时刷新只在接替一个在途的用户加载时接力
+    if (!(options && options.refresh) || refetch || progressOwner !== null) progressStart(ctl);
     updateAiTitle();
     setStatus((refetch ? '重拉中… ' : '加载中… ') + state.code + ' ' + state.freq);
     hideChartError();
@@ -2598,10 +2671,35 @@
         setStatus('加载失败：' + e.message);
         showChartError(e.message);
       })
-      .finally(function () { clearTimeout(timer); });
+      .finally(function () { clearTimeout(timer); progressDone(ctl); });
   }
 
   var BUSY_RETRY_MS = 5000, BUSY_RETRY_MAX = 6;  // 503 自动重试：约 30 秒内至多 6 次
+
+  // 顶部加载细线：请求超过 PROGRESS_DELAY_MS 仍未完成才出现，快响应不闪。
+  // 新请求取代旧请求时接过所有权并沿用首次计时，旧请求迟到的完成不再收起或重新拉起。
+  var PROGRESS_DELAY_MS = 150;
+  var progressOwner = null, progressTimer = null;
+  function progressStart(owner) {
+    var relay = progressOwner !== null;
+    progressOwner = owner;
+    el('center').setAttribute('aria-busy', 'true');
+    if (relay) return;
+    progressTimer = setTimeout(function () { progressTimer = null; showProgress(true); }, PROGRESS_DELAY_MS);
+  }
+  function progressDone(owner) {
+    if (owner !== progressOwner) return;
+    progressOwner = null;
+    clearTimeout(progressTimer);
+    progressTimer = null;
+    showProgress(false);
+    el('center').setAttribute('aria-busy', 'false');
+  }
+  function showProgress(on) {
+    var bar = el('loadBar');
+    bar.classList.toggle('on', on);
+    bar.setAttribute('aria-hidden', on ? 'false' : 'true');
+  }
 
   // 手动重拉：强制重新请求当前分析窗口（不改变关注状态）；失败时保留现有图表
   // 服务端经 X-Refetch-Status 报告重拉结果；只有 ok 才说「已重拉」，其余如实说明（图表都照常显示已有数据）
@@ -2938,6 +3036,7 @@
   }
   wireMaSeg();
   wireSubSeg();
+  wireChartPointer();
   wireCardsNav();
 
   // AI 完全分类标题行：点击（或聚焦后 Enter/Space）在右栏滑出详情层看全文；返回钮/Esc 关闭

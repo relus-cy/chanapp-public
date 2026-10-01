@@ -13,7 +13,11 @@ async page => {
     if (!/\}\)\(\);\s*$/.test(source)) throw new Error('app entry point changed');
     const probe = 'window.__chartProbe = function () { if (!charts) return null; var m = charts.main.timeScale(), s = charts.macdChart.timeScale();' +
       ' return {bars: klineData.length, main: m.getVisibleRange(), sub: s.getVisibleRange(),' +
-      ' mainLogical: m.getVisibleLogicalRange(), subLogical: s.getVisibleLogicalRange(), mainWidth: m.width(), subWidth: s.width()}; };';
+      ' mainLogical: m.getVisibleLogicalRange(), subLogical: s.getVisibleLogicalRange(), mainWidth: m.width(), subWidth: s.width(),' +
+      ' mainHorz: charts.main.options().crosshair.horzLine.visible, subHorz: charts.macdChart.options().crosshair.horzLine.visible}; };' +
+      // Counts crosshair events on both charts (an extra listener, no state writes): a resting pointer must go quiet.
+      ' window.__watchCross = function () { window.__crossEvents = 0; var n = function () { window.__crossEvents++; };' +
+      ' charts.main.subscribeCrosshairMove(n); charts.macdChart.subscribeCrosshairMove(n); };';
     await route.fulfill({response, body: source.replace(/\}\)\(\);\s*$/, probe + '})();')});
   });
   const probe = () => page.evaluate(() => window.__chartProbe && window.__chartProbe());
@@ -22,6 +26,9 @@ async page => {
   const requests = [], failures = [], charts = [];
   const observe = request => requests.push(request.url());
   page.on('request', observe);
+  const missing = [];
+  const notFound = response => { if (response.status() === 404) missing.push(response.url()); };
+  page.on('response', notFound);
   const check = (ok, message) => { if (!ok) failures.push(message); };
   const waitChart = async (action, expected = "") => {
     const response = page.waitForResponse(r => r.url().includes('/api/chart?') && !r.url().includes('before=') && r.url().includes(expected));
@@ -49,6 +56,39 @@ async page => {
   check((await page.locator('#quoteSec').innerText()).includes('历史'), 'quote must be marked historical');
   for (const freq of ['week', 'm30', 'm60', 'day']) {
     await waitChart(() => page.locator('#freqTabs [data-freq="' + freq + '"]').click(), 'freq=' + freq + '&');
+  }
+  // The top progress line belongs to the finished request: hidden again, busy state cleared.
+  const progressIdle = await page.waitForFunction(() => {
+    const bar = document.getElementById('loadBar');
+    return !!bar && bar.getAttribute('role') === 'progressbar' && !bar.classList.contains('on') &&
+      getComputedStyle(bar).opacity === '0' && document.getElementById('center').getAttribute('aria-busy') === 'false';
+  }, null, {timeout: 3000}).then(() => true, () => false);
+  check(progressIdle, 'after a period switch the progress line must be hidden and #center aria-busy="false"');
+  // Header toolbar: segmented controls and buttons share one control height.
+  const headerHeights = await page.evaluate(() => [...document.querySelectorAll('header > *')]
+    .filter(e => e.id !== 'status' && e.id !== 'loadBar' && getComputedStyle(e).display !== 'none')
+    .map(e => e.id + ' ' + getComputedStyle(e).height));
+  check(headerHeights.length >= 5 && headerHeights.every(h => h.endsWith(' 28px')), 'header controls must all be 28px high: ' + headerHeights.join(', '));
+  // Crosshair on the main chart drives the subchart readout; leaving restores the latest values.
+  {
+    const note = () => page.locator('#subNote').innerText();
+    const latest = await note();
+    const box = await page.locator('#chart').boundingBox();
+    await page.evaluate(() => window.__watchCross());
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(300);
+    const settled = await page.evaluate(() => window.__crossEvents);
+    await page.waitForTimeout(500);
+    const resting = await page.evaluate(() => window.__crossEvents) - settled;
+    check(resting === 0, 'a resting pointer must not keep the two charts re-setting each other: ' + resting + ' crosshair events in 500ms');
+    const hovered = await note();
+    const owner = await probe();
+    check(owner.mainHorz === true && owner.subHorz === false, 'hovering main: only the main chart keeps its horizontal line: ' + JSON.stringify({main: owner.mainHorz, sub: owner.subHorz}));
+    check(hovered !== latest && /\d\.\d{3}/.test(hovered), 'hovering the main chart must show that bar\'s MACD readout: ' + JSON.stringify({latest, hovered}));
+    const head = await page.locator('header').boundingBox();
+    await page.mouse.move(head.x + head.width / 2, head.y + head.height / 2);
+    await page.waitForTimeout(150);
+    check(await note() === latest, 'leaving the chart must restore the latest readout: ' + JSON.stringify({latest, now: await note()}));
   }
   // History paging: drag the main chart right like a user until older bars are prepended;
   // the subchart must then show exactly the same time span as the main chart.
@@ -104,6 +144,28 @@ async page => {
     check(overlap === '', size.width + 'px: saved pinned sidebar must not cover the chart, overlap ' + overlap);
     check(await page.evaluate(() => localStorage.getItem('chanapp-sidebar')) === 'pinned',
       size.width + 'px: the wide-screen pin preference must be kept');
+    if (size.width === 390) {
+      // Phones: the resonance row scrolls sideways and every chip keeps its full text (time included).
+      const row = await page.evaluate(() => {
+        const r = document.getElementById('resonance'), cut = [];
+        for (const chip of r.querySelectorAll('.res-chip')) {
+          const c = chip.getBoundingClientRect();
+          for (const e of chip.querySelectorAll('.lv, .res-detail > *, .res-state')) {
+            const b = e.getBoundingClientRect(), cs = getComputedStyle(e);
+            if (cs.display === 'none' || b.top < c.top - .5 || b.bottom > c.bottom + .5 || e.scrollWidth > e.clientWidth) {
+              cut.push(chip.dataset.freq + ' "' + e.textContent + '"');
+            }
+          }
+        }
+        const scrollable = r.scrollWidth > r.clientWidth && ['auto', 'scroll'].includes(getComputedStyle(r).overflowX);
+        r.scrollLeft = r.scrollWidth;
+        const last = r.querySelector('.res-chip:last-of-type').getBoundingClientRect();
+        const end = last.right <= r.getBoundingClientRect().right + .5;
+        r.scrollLeft = 0;
+        return {scrollable, end, cut};
+      });
+      check(row.scrollable && row.end && row.cut.length === 0, '390px resonance row must scroll with complete chips: ' + JSON.stringify(row));
+    }
   }
   await page.setViewportSize({width: 1440, height: 900});
   check(await isPinned() && await page.locator('#sidebarPin[aria-pressed="true"]').count() === 1,
@@ -159,6 +221,16 @@ async page => {
     const chips = await chipIssues();
     check(chips.chips === 3 && chips.signals > 0, width + 'px: day view must show three resonance chips with signals: ' + JSON.stringify(chips));
     check(chips.issues.length === 0, width + 'px resonance chips: ' + chips.issues.join('; '));
+    if (width === 1440) {
+      // A chip that drops its time shrinks with it: no blank tail where the time used to be.
+      const tails = await page.evaluate(() => [...document.querySelectorAll('.res-chip .res-detail')].map(d => {
+        const box = d.getBoundingClientRect();
+        const rights = [...d.children].filter(k => getComputedStyle(k).display !== 'none')
+          .map(k => k.getBoundingClientRect()).filter(r => r.width > 0 && r.top < box.bottom - .5).map(r => r.right);
+        return Math.round(box.right - Math.max(box.left, ...rights));
+      }));
+      check(tails.length === 3 && tails.every(t => t <= 8), '1440px pinned: resonance details must not keep a blank tail: ' + tails);
+    }
   }
   // Resizing keeps bar density (bars per pixel) and keeps both charts on one logical range; the
   // sidebar and layout transitions must not freeze the bar count at a transient narrow width.
@@ -180,7 +252,40 @@ async page => {
     }
   }
   await isPinned();
+  // The F10 empty note spans the whole grid row instead of wrapping inside one column.
+  const f10Lines = await page.evaluate(() => {
+    const n = document.querySelector('#f10Grid > .ai-note');
+    if (!n) return -1;
+    const r = document.createRange();
+    r.selectNodeContents(n);
+    return new Set([...r.getClientRects()].map(x => Math.round(x.top))).size;
+  });
+  check(f10Lines === 1, 'F10 empty note must fit on one line, lines: ' + f10Lines);
+  // The four popovers share one material: radius, border and shadow.
+  const popStyle = sel => page.evaluate(s => {
+    const cs = getComputedStyle(document.querySelector(s));
+    return {radius: [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomRightRadius, cs.borderBottomLeftRadius].join(' '),
+      border: cs.borderTopWidth + ' ' + cs.borderTopStyle + ' ' + cs.borderTopColor, shadow: cs.boxShadow};
+  }, sel);
+  const pops = {};
+  await page.locator('#rulesBtn').click();
+  await page.locator('#rulesPop.open').waitFor();
+  pops.rules = await popStyle('#rulesPop');
+  await page.keyboard.press('Escape');
+  await page.locator('#periodBtn').click();
+  await page.locator('#periodDialog[open]').waitFor();
+  pops.period = await popStyle('#periodDialog');
+  await page.locator('#periodCancel').click();
+  await page.locator('#subSegBtn').click();
+  await page.locator('#subSegPop:not([hidden])').waitFor();
+  pops.indicator = await popStyle('#subSegPop');
+  await page.keyboard.press('Escape');
   await page.locator('#wlForm input').fill('上证');
+  await page.locator('.wl-drop .cand').first().waitFor();
+  pops.search = await popStyle('#sidebar .wl-drop');
+  check(pops.rules.radius === '12px 12px 12px 12px' && pops.rules.shadow !== 'none' &&
+    Object.values(pops).every(p => JSON.stringify(p) === JSON.stringify(pops.rules)),
+    'popovers must share radius 12px, border and shadow: ' + JSON.stringify(pops));
   await page.locator('.wl-drop .cand').first().click();
   await page.locator('#trackBtn').waitFor({state:'visible'});
   await page.locator('#trackBtn').click();
@@ -213,6 +318,14 @@ async page => {
   check(requests.length === before, 'demo must not poll after 65 seconds: ' + requests.slice(before));
   const external = requests.filter(url => !url.startsWith(origin + '/'));
   check(external.length === 0, 'browser requested external resources: ' + external);
+  // No 404 during the whole run, and the page declares an icon so browsers stop asking for /favicon.ico.
+  const icon = await page.evaluate(() => {
+    const link = document.querySelector('link[rel~="icon"]');
+    return link ? link.getAttribute('href').slice(0, 19) : '';
+  });
+  check(icon === 'data:image/svg+xml,', 'page must declare an inline SVG icon, got ' + JSON.stringify(icon));
+  check(missing.length === 0, 'requests answered 404: ' + missing);
+  page.off('response', notFound);
   const text = await page.locator('body').innerText();
   check(!/抓取[:：]\s*null/.test(text), 'historical footer must not show null fetch time');
   check(!text.includes('加入自选以补完整历史'), 'demo pagination must not promise online backfill');

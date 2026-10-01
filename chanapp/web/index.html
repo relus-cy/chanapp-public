@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>chanapp · 缠论结构</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='1' y='1' width='30' height='30' rx='8' fill='%23eee5d1' stroke='%23d7c8a6'/%3E%3Cg transform='translate(4 4)' fill='none' stroke='%237d5f0c' stroke-width='1.8' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12.5' r='5.6'/%3E%3Cellipse cx='12' cy='12.5' rx='10.6' ry='3.5' transform='rotate(-16 12 12.5)'/%3E%3C/g%3E%3Cpath transform='translate(4 4)' d='M19.6 3.4l.55 1.45 1.45.55-1.45.55-.55 1.45-.55-1.45-1.45-.55 1.45-.55z' fill='%237d5f0c'/%3E%3C/svg%3E">
 <script>
 /* 首屏前应用主题，避免闪烁（默认日间，同设计稿） */
 document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') || 'light';
@@ -27,8 +28,24 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     --up: #d63f33;
     --down: #2e8ca3;
     --ma5: #6a7079; --ma13: #7d5f0c; --ma20: #2e8ca3; --ma60: #d63f33; --ma144: #8a72b8; --ma250: #4f7fb8;
-    --radius-s: 4px; --radius-m: 8px;
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    /* 圆角同心：内层 = 外层 − 内边距（分段 4 = 轨道 6 − 2；浮层内行 8 = 浮层 12 − 4） */
+    --radius-xs: 4px;   /* 分段胶囊、小标签 */
+    --radius-s: 6px;    /* 控件：按钮、分段轨道、chip */
+    --radius-m: 8px;    /* 卡片、列表行、输入框、浮层内的行 */
+    --radius-l: 12px;   /* 浮层与对话框 */
+    --ctl-h: 28px;      /* 顶栏控件 */
+    --ctl-h-sm: 24px;   /* 紧凑控件：信号行、副图栏、浮层内分段 */
+    /* 浮层材质：半透明 + 背景模糊；不支持 backdrop-filter 时退回不透明 */
+    --material: rgba(255,255,255,.84);
+    --material-solid: #ffffff;
+    --capsule: #ffffff;  /* 分段控件选中胶囊 */
+    --shadow-float: 0 12px 32px -6px rgba(44,37,20,.16), 0 2px 6px rgba(44,37,20,.06);
+    --shadow-raise: 0 1px 2px rgba(44,37,20,.12), 0 0 0 .5px rgba(44,37,20,.05);
+    --focus-halo: rgba(125,95,12,.16);
+    --ease: cubic-bezier(.16, 1, .3, 1);
+    --dur-fast: .12s;   /* 按压、颜色反馈 */
+    --dur: .18s;        /* 浮层进出、淡入淡出 */
   }
   :root[data-theme="dark"] {
     --bg: #0b0c0e;
@@ -47,6 +64,13 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     --up: #df4b3e;
     --down: #3aa6b9;
     --ma5: #9aa2ad; --ma13: #c9a24d; --ma20: #3aa6b9; --ma60: #df4b3e; --ma144: #a58fd6; --ma250: #6f9fd8;
+    /* 夜间浮起的面要比所在面亮一级，不能沿用比面板还暗的 --overlay */
+    --material: rgba(30,33,40,.86);
+    --material-solid: #1c1f25;
+    --capsule: #272b33;
+    --shadow-float: 0 16px 40px -6px rgba(0,0,0,.6), 0 2px 6px rgba(0,0,0,.35);
+    --shadow-raise: 0 1px 2px rgba(0,0,0,.5), 0 0 0 .5px rgba(255,255,255,.06);
+    --focus-halo: rgba(201,162,77,.2);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -58,27 +82,42 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     display: flex; overflow: hidden;
   }
   button { font: inherit; color: inherit; }
-  button:focus-visible, input:focus-visible { outline: 1px solid var(--gold); outline-offset: 1px; }
+  /* 键盘焦点环：统一金色 2px、外扩 2px；:focus-visible 让鼠标点击不出环。
+     被裁切容器里的元素（列表行、chip 内按钮）改为内收，见各自规则 */
+  :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  /* 文本输入：鼠标点进也算 focus-visible，改用同色系描边 + 光晕表达聚焦，不叠外环 */
+  input[type="text"]:focus-visible, input:not([type]):focus-visible { outline: none; }
 
   /* ---------- header ---------- */
   header {
+    position: relative;  /* 加载细线贴底 */
     display: flex; align-items: center; gap: 16px; padding: 0 14px; height: 44px;
     border-bottom: 1px solid var(--line); background: var(--panel); flex-shrink: 0;
   }
-  .freq { display: flex; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 2px; gap: 2px; }
-  .freq button {
-    background: transparent; border: none; color: var(--dim); border-radius: 3px;
-    padding: 2px 10px; cursor: pointer; font-size: 12px;
-    transition: transform .1s ease-out, color .1s ease-out, background-color .1s ease-out;
+  /* 分段控件（顶栏周期/复权、副图栏 MA/指标、规则浮层）：同一轨道 + 凸起胶囊选中态，只按场合取高度 */
+  .freq, .seg, .rule-option {
+    display: flex; gap: 2px; padding: 2px;
+    background: var(--raise); border: 1px solid var(--line); border-radius: var(--radius-s);
   }
-  .freq button:active { transform: scale(.96); }
-  @media (hover:hover) { .freq button:hover { color: var(--fg); } }
-  .freq button.active { color: var(--gold); background: var(--raise); }
+  .freq button, .seg button, .rule-option button {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; border: none; color: var(--dim); border-radius: var(--radius-xs);
+    cursor: pointer; white-space: nowrap;
+    transition: transform var(--dur-fast) var(--ease), color var(--dur-fast) ease-out,
+      background-color var(--dur-fast) ease-out, box-shadow var(--dur-fast) ease-out;
+  }
+  .freq button:active, .seg button:active, .rule-option button:active { transform: scale(.96); }
+  @media (hover:hover) { .freq button:hover, .seg button:hover, .rule-option button:hover { color: var(--fg); } }
+  .freq button.active, .seg button.active, .rule-option button.active {
+    color: var(--gold); background: var(--capsule); box-shadow: var(--shadow-raise);
+  }
+  .freq { height: var(--ctl-h); }
+  .freq button { padding: 0 10px; font-size: 12px; }
   .freq button[hidden] { display: none; }
   .freq button:disabled { cursor: not-allowed; }
   .freq button:disabled:not(.active) { opacity: .45; }
   .freq { flex-shrink: 0; }
-  .period-dialog { color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 24px; width: min(480px, calc(100vw - 32px)); }
+  .period-dialog { color: var(--fg); padding: 24px; width: min(480px, calc(100vw - 32px)); }
   .period-dialog::backdrop { background: rgba(0,0,0,.35); }
   .period-dialog h2 { font-size: 17px; margin: 0 0 12px; }
   .period-dialog p { font-size: 12px; color: var(--faint); line-height: 1.7; }
@@ -94,20 +133,35 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #status { min-width: 0; overflow: hidden; white-space: nowrap; margin-left: auto; color: var(--dim); font-size: 12px; font-family: var(--mono); }
   /* 页头文字钮（加入自选 / 重拉）：与主题钮同高同描边 */
   .hd-btn {
-    height: 24px; padding: 0 9px; flex-shrink: 0; background: transparent; cursor: pointer;
+    height: var(--ctl-h); padding: 0 10px; flex-shrink: 0; background: transparent; cursor: pointer;
     border: 1px solid var(--line2); border-radius: var(--radius-s); color: var(--dim); font-size: 12px; white-space: nowrap;
-    transition: transform .1s ease-out, color .1s ease-out, border-color .1s ease-out;
+    transition: transform var(--dur-fast) var(--ease), color var(--dur-fast) ease-out, border-color var(--dur-fast) ease-out;
   }
   .hd-btn[hidden] { display: none; }
   .hd-btn:active { transform: scale(.96); }
   @media (hover:hover) { .hd-btn:hover { color: var(--gold); border-color: var(--gold-dim); } }
   #trackBtn { color: var(--gold); border-color: var(--gold-line); }
   #themeBtn {
-    position: relative; width: 30px; height: 24px; padding: 0;
+    position: relative; width: 32px; height: var(--ctl-h); padding: 0;
     background: transparent; border: 1px solid var(--line2); border-radius: var(--radius-s);
     color: var(--dim); cursor: pointer; flex-shrink: 0;
-    transition: transform .1s ease-out, color .1s ease-out, border-color .1s ease-out;
+    transition: transform var(--dur-fast) var(--ease), color var(--dur-fast) ease-out, border-color var(--dur-fast) ease-out;
   }
+  /* 窄窗顶栏的侧栏展开钮与其它顶栏控件同高（侧栏内的 .sb-btn 尺寸不变） */
+  header #sidebarExpand { width: 32px; height: var(--ctl-h); border-radius: var(--radius-s); }
+  /* 加载细线：用户发起的图表请求超过 150ms 未完成才出现（app.js 控制 .on），完成淡出 */
+  #loadBar {
+    position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; pointer-events: none;
+    opacity: 0; transition: opacity var(--dur) ease-out;
+  }
+  #loadBar.on { opacity: 1; }
+  #loadBar::before {
+    content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 40%;
+    background: linear-gradient(90deg, transparent, var(--gold) 35%, var(--gold) 65%, transparent);
+    transform: translateX(-100%); animation: loadSlide 1.2s ease-in-out infinite paused;
+  }
+  #loadBar.on::before { animation-play-state: running; }
+  @keyframes loadSlide { to { transform: translateX(250%); } }
   #themeBtn:active { transform: scale(.96); }
   @media (hover:hover) { #themeBtn:hover { color: var(--gold); border-color: var(--gold-dim); } }
   #themeBtn svg {
@@ -276,7 +330,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #sidebar .wl-empty { padding: 12px 11px; font-size: 11px; color: var(--faint); }
   #sidebar .item .tag-watched {
     font-size: 10px; color: var(--gold); border: 1px solid var(--gold-line);
-    border-radius: 3px; padding: 0 3px; margin-left: 4px; line-height: 14px; white-space: nowrap;
+    border-radius: var(--radius-xs); padding: 0 3px; margin-left: 4px; line-height: 14px; white-space: nowrap;
   }
   /* 自选股卡片（皮肤原型 .watch-item 值映射到生产 .item 结构） */
   #sidebar .item {
@@ -284,8 +338,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     cursor: pointer; transition: background-color 140ms ease-out; overflow: hidden;
   }
   @media (hover:hover) { #sidebar .item:hover { background: var(--raise); } }
-  #sidebar .item.active { background: var(--panel); box-shadow: 0 1px 3px rgba(0,0,0,.035); }
-  :root[data-theme="dark"] #sidebar .item.active { box-shadow: 0 1px 3px rgba(0,0,0,.32); }
+  #sidebar .item.active { background: var(--panel); box-shadow: var(--shadow-raise); }
   #sidebar .item .row { display: flex; justify-content: space-between; align-items: center; gap: 6px; height: calc(1.55 * 13px); }
   #sidebar .item .row > span:first-child { font-size: 13px; font-weight: 550; line-height: 1.55; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #sidebar .item .chg { font-family: var(--mono); font-size: 11px; margin-left: auto; flex-shrink: 0; white-space: nowrap; }
@@ -296,13 +349,13 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #sidebar .flat, #quoteSec .flat, #f10Sec .flat, #flowSec .flat { color: var(--dim); }
   #sidebar .item .tag-limit {
     font-size: 10px; color: var(--up); border: 1px solid var(--up);
-    border-radius: 3px; padding: 0 3px; margin-left: 4px; line-height: 14px; white-space: nowrap;
+    border-radius: var(--radius-xs); padding: 0 3px; margin-left: 4px; line-height: 14px; white-space: nowrap;
   }
   #sidebar .item .btns { display: flex; align-items: center; gap: 1px; flex-shrink: 0; }
   /* 星/删钮默认隐身（透明度方案，键盘仍可聚焦）：hover / focus-within / 选中态显现；触屏常显 */
   #sidebar .item .del, #sidebar .item .star, #sidebar .item .add {
     display: flex; align-items: center; justify-content: center;
-    background: transparent; border: none; color: var(--dim); border-radius: 4px;
+    background: transparent; border: none; color: var(--dim); border-radius: var(--radius-xs);
     cursor: pointer; padding: 4px; opacity: 0; pointer-events: none;
     transition: opacity .14s ease-out;
   }
@@ -313,7 +366,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #sidebar .item.active .del, #sidebar .item.active .star, #sidebar .item.active .add { opacity: 1; pointer-events: auto; }
   @media (hover: none) { #sidebar .item .del, #sidebar .item .star, #sidebar .item .add { opacity: 1; pointer-events: auto; } }
   #sidebar .item .add:hover { color: var(--gold); }
-  #sidebar .item:focus-visible { outline: 1px solid var(--gold); outline-offset: -1px; }
+  #sidebar .item:focus-visible { outline-offset: -2px; }  /* 列表容器裁切：焦点环内收 */
   #sidebar .item .del:hover { color: var(--up); }
   #sidebar .item .star.on { opacity: 1; pointer-events: auto; color: var(--gold); }
   #sidebar .item .star:hover { color: var(--gold); }
@@ -322,7 +375,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     margin: 10px 12px 18px; display: flex; align-items: center; gap: 8px; position: relative;
     border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--panel); padding: 7px 10px;
   }
-  #sidebar .wl-add:focus-within { border-color: var(--gold-line); }
+  #sidebar .wl-add:focus-within { border-color: var(--gold-dim); box-shadow: 0 0 0 2px var(--focus-halo); }
   #sidebar .wl-add svg { width: 14px; height: 14px; color: var(--faint); flex-shrink: 0; }
   #sidebar .wl-add input {
     width: 100%; min-width: 0; border: 0; background: none; color: var(--fg);
@@ -330,14 +383,12 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   }
   #sidebar .wl-add input::placeholder { color: var(--faint); }
   #sidebar .wl-drop {
-    position: absolute; top: calc(100% + 5px); left: 0; right: 0; z-index: 25;
-    background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius-m);
-    box-shadow: 0 12px 32px rgba(44,37,20,.10); padding: 3px; max-height: 250px; overflow-y: auto; overflow-x: hidden;
+    position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 25;
+    padding: 4px; max-height: 250px; overflow-y: auto; overflow-x: hidden;
   }
-  :root[data-theme="dark"] #sidebar .wl-drop { box-shadow: 0 12px 32px rgba(0,0,0,.32); }
   #sidebar .wl-drop .cand {
     display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
-    padding: 7px 9px; border-radius: 6px; cursor: pointer; font-size: 12px; white-space: nowrap;
+    padding: 7px 9px; border-radius: var(--radius-m); cursor: pointer; font-size: 12px; white-space: nowrap;
   }
   #sidebar .wl-drop .cand:hover, #sidebar .wl-drop .cand.active { background: var(--raise); }
   #sidebar .wl-drop .cand .c-code { color: var(--faint); font-size: 10px; font-family: var(--mono); flex-shrink: 0; }
@@ -347,7 +398,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #sidebar .wl-drop .cand .c-code { margin-left: auto; }
   #sidebar .wl-drop .cand .c-add {
     margin-left: 6px; flex-shrink: 0; padding: 1px 6px; font-size: 10px; cursor: pointer;
-    background: transparent; color: var(--dim); border: 1px solid var(--line2); border-radius: 3px;
+    background: transparent; color: var(--dim); border: 1px solid var(--line2); border-radius: var(--radius-xs);
   }
   @media (hover:hover) { #sidebar .wl-drop .cand .c-add:not(:disabled):hover { color: var(--gold); border-color: var(--gold-line); } }
   #sidebar .wl-drop .cand .c-add:disabled { cursor: default; color: var(--faint); border-color: transparent; }
@@ -395,10 +446,10 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   @media (hover:hover) { #ruleSummary:hover { color: var(--fg); } }
   .soft-btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0;
-    height: 26px; padding: 0 10px; background: var(--panel); cursor: pointer;
-    border: 1px solid var(--line2); border-radius: var(--radius-m);
+    height: var(--ctl-h-sm); padding: 0 10px; background: var(--panel); cursor: pointer;
+    border: 1px solid var(--line2); border-radius: var(--radius-s);
     font-size: 11px; white-space: nowrap;
-    transition: background-color .14s ease-out, transform .1s ease-out;
+    transition: background-color var(--dur-fast) ease-out, transform var(--dur-fast) var(--ease);
   }
   .soft-btn svg { width: 14px; height: 14px; }
   .soft-btn:active { transform: scale(.96); }
@@ -406,34 +457,42 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   /* 关闭态用 visibility/opacity/pointer-events 隐藏（不用 display:none）：元素始终在文档中，
      开合只切换 .open，测试与无头抽查可直接查询。visibility 延迟到淡出结束才切，开场即
      可见（同步可聚焦）。 */
+  /* 浮层统一材质（图层与规则、展示周期对话框、搜索候选、副图指标菜单）：同圆角、描边、阴影、半透明模糊底，
+     打开时同一段轻微下落淡入；不支持 backdrop-filter 时退回不透明底保证可读 */
+  .rules-pop, .period-dialog, #sidebar .wl-drop, #subSegPop {
+    background: var(--material); -webkit-backdrop-filter: saturate(1.5) blur(16px); backdrop-filter: saturate(1.5) blur(16px);
+    border: 1px solid var(--line2); border-radius: var(--radius-l); box-shadow: var(--shadow-float);
+  }
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .rules-pop, .period-dialog, #sidebar .wl-drop, #subSegPop { background: var(--material-solid); }
+  }
+  .rules-pop.open, .period-dialog[open], #sidebar .wl-drop:not([hidden]), #subSegPop:not([hidden]) {
+    animation: popIn var(--dur) var(--ease);
+  }
+  @keyframes popIn { from { opacity: 0; transform: translateY(-4px) scale(.985); } to { opacity: 1; transform: none; } }
   .rules-pop {
     position: absolute; right: 16px; top: calc(100% + 6px); z-index: 20; width: 274px; padding: 16px;
-    background: var(--overlay); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-    border: 1px solid var(--line2); border-radius: 10px; box-shadow: 0 12px 32px rgba(44,37,20,.10);
     transform-origin: top right;
     visibility: hidden; opacity: 0; pointer-events: none;
-    transition: opacity .16s ease-out, visibility 0s .16s;
+    transition: opacity var(--dur) ease-out, visibility 0s var(--dur);
   }
-  :root[data-theme="dark"] .rules-pop { box-shadow: 0 12px 32px rgba(0,0,0,.32); }
-  .rules-pop.open { visibility: visible; opacity: 1; pointer-events: auto; transition-delay: 0s; animation: popIn 180ms cubic-bezier(.22,1,.36,1); }
-  @keyframes popIn { from { opacity: 0; transform: translateY(-4px) scale(.985); } to { opacity: 1; transform: none; } }
+  .rules-pop.open { visibility: visible; opacity: 1; pointer-events: auto; transition-delay: 0s; }
   .rule-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 13px 0; }
   .rule-line > span { font-size: 11px; color: var(--dim); }
-  .rule-option { display: flex; background: var(--raise); border: 1px solid var(--line); border-radius: 7px; padding: 2px; }
-  .rule-option button {
-    background: transparent; border: none; color: var(--dim); cursor: pointer;
-    padding: 4px 9px; font-size: 10px; border-radius: 5px; white-space: nowrap;
-    transition: transform .1s ease-out, color .1s ease-out, background-color .1s ease-out;
+  .rule-option, .seg { height: var(--ctl-h-sm); }
+  .rule-option button { padding: 0 10px; font-size: 11px; }
+  .resonance {
+    flex: 1; display: flex; gap: 6px; align-items: center; min-width: 0; height: var(--ctl-h-sm); overflow: hidden;
+    container: res / inline-size;
   }
-  .rule-option button:active { transform: scale(.96); }
-  @media (hover:hover) { .rule-option button:hover { color: var(--fg); } }
-  .rule-option button.active { background: var(--panel); color: var(--gold); box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-  .resonance { flex: 1; display: flex; gap: 6px; align-items: center; min-width: 0; height: 25px; overflow: hidden; }
+  /* 三个 chip 带时间的自然宽度合计约 653px（demo 实测：199 + 221 + 221 + 两个 6px 间距）：
+     信号行窄于此时统一收起时间，chip 随之变窄，不留时间换走后的空白；更长的标签仍由下方换行规则兜底 */
+  @container res (max-width: 680px) { .res-chip .res-time { display: none; } }
   .resonance .res-note { flex-shrink: 0; color: var(--faint); font-size: 11px; white-space: nowrap; }
   .res-chip {
     display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--mono);
     background: var(--raise); border: 1px solid transparent; border-radius: var(--radius-s);
-    height: 25px; flex: 0 1 auto; min-width: 0; padding: 0 8px; line-height: 23px;
+    height: var(--ctl-h-sm); flex: 0 1 auto; min-width: 0; padding: 0 8px; line-height: calc(var(--ctl-h-sm) - 2px);
     color: var(--dim); white-space: nowrap; overflow: hidden;
   }
   .res-chip .lv, .res-chip .res-state { flex-shrink: 0; }
@@ -456,8 +515,9 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   /* 有信号的 chip 用皮肤金色软底；尾部 › 钮开该周期信号详情（不触发切周期） */
   .res-chip.has-signal { background: var(--gold-soft); border-color: transparent; color: var(--gold); }
   .res-chip.has-signal .lv, .res-chip.has-signal .res-state { color: var(--gold); }
+  .res-detail-btn:focus-visible { outline-offset: -2px; }  /* chip 裁切：焦点环内收 */
   .res-detail-btn {
-    flex-shrink: 0; align-self: stretch; margin: 0 -8px 0 0; padding: 0 5px 0 9px;
+    flex-shrink: 0; align-self: stretch; margin: 0 -8px 0 0; padding: 0 5px 0 9px; border-radius: 0 var(--radius-s) var(--radius-s) 0;
     background: none; border: none; border-left: 1px solid var(--gold-dim);
     color: var(--gold); font-family: var(--mono); font-size: 11px; cursor: pointer;
   }
@@ -474,30 +534,24 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   /* ---------- subchart ---------- */
   #subWrap { flex: 1.15; min-height: 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; }
   #subBar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; height: 34px; flex-shrink: 0; background: var(--panel); }
-  .seg { display: flex; gap: 2px; background: var(--raise); border: 1px solid transparent; border-radius: var(--radius-s); padding: 2px; }
-  .seg button {
-    background: transparent; border: none; color: var(--dim); font-size: 11px; font-family: var(--mono);
-    padding: 1px 8px; border-radius: 3px; cursor: pointer; white-space: nowrap;
-    transition: transform .1s ease-out, color .1s ease-out, background-color .1s ease-out;
-  }
-  .seg button:active { transform: scale(.96); }
-  @media (hover:hover) { .seg button:hover { color: var(--fg); } }
-  .seg button.active { color: var(--gold); background: var(--panel); }
+  .seg button { padding: 0 8px; font-size: 11px; font-family: var(--mono); }
   #maSeg .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; }
   /* 副图指标：窄窗下 seg 会换行顶高副图栏，改为当前值按钮 + 点击弹出小菜单 */
   #subSeg { position: relative; }
-  #subSegBtn { display: inline-flex; align-items: center; gap: 4px; color: var(--gold); background: var(--panel); }
+  /* 单选指标只有当前值一个钮：常显选中胶囊 */
+  #subSeg #subSegBtn { gap: 4px; color: var(--gold); background: var(--capsule); box-shadow: var(--shadow-raise); }
   #subSegBtn svg { width: 9px; height: 9px; flex-shrink: 0; }
   #subSegPop {
-    position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; min-width: 100%;
-    display: flex; flex-direction: column; gap: 2px; padding: 2px;
-    background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius-s);
-    box-shadow: 0 8px 24px rgba(0,0,0,.14);
+    position: absolute; top: calc(100% + 6px); left: -1px; z-index: 30; min-width: 100px;
+    display: flex; flex-direction: column; gap: 2px; padding: 4px;
   }
   #subSegPop[hidden] { display: none; }
-  #subSegPop button { display: block; width: 100%; text-align: left; padding: 3px 10px; }
-  #subSegPop button.active { background: var(--raise); }
-  @media (hover:hover) { #subSegPop button:hover { background: var(--raise); } }
+  #subSeg #subSegPop button {
+    display: block; width: 100%; height: auto; text-align: left; padding: 5px 10px;
+    border-radius: var(--radius-m); box-shadow: none; background: transparent;
+  }
+  #subSeg #subSegPop button.active { background: var(--raise); color: var(--gold); }
+  @media (hover:hover) { #subSeg #subSegPop button:hover { background: var(--raise); } }
   #subNote { font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #sub { flex: 1; min-height: 0; position: relative; }
 
@@ -520,18 +574,20 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #quoteSec .chg { font-family: var(--mono); font-size: 12px; margin-left: 6px; }
   #f10Sec .tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
   .chip {
-    font-size: 11px; color: var(--dim); background: var(--raise); border: 1px solid transparent; border-radius: 3px;
+    font-size: 11px; color: var(--dim); background: var(--raise); border: 1px solid transparent; border-radius: var(--radius-xs);
     padding: 0 6px; line-height: 18px;
   }
   .chip.tag-edit { color: var(--dim); cursor: pointer; user-select: none; }
   @media (hover:hover) { .chip.tag-edit:hover { color: var(--gold); border-color: var(--gold-dim); } }
   #f10Tags .tag-input {
     flex: 1; min-width: 0; font-size: 11px; line-height: 18px; padding: 0 6px;
-    color: var(--dim); background: var(--bg); border: 1px solid var(--line2); border-radius: 3px;
+    color: var(--dim); background: var(--bg); border: 1px solid var(--line2); border-radius: var(--radius-xs);
     outline: none; font-family: inherit;
   }
+  #f10Tags .tag-input:focus { border-color: var(--gold-dim); box-shadow: 0 0 0 2px var(--focus-halo); }
   #f10Tags .tag-input[readonly] { opacity: .65; cursor: progress; }
   #f10Sec .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px 10px; }
+  #f10Sec .grid > .ai-note { grid-column: 1 / -1; margin: 0; }  /* 空态说明占满整行，不挤进第一列折行 */
   #f10Sec .kv .k { font-size: 11px; color: var(--faint); }
   #f10Sec .kv .v { font-family: var(--mono); font-size: 13px; margin-top: 1px; }
 
@@ -556,19 +612,18 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .ai-sample {
     display: inline-flex; align-items: center; flex-shrink: 0; height: 16px;
     margin-right: auto; font-size: 10px; color: var(--gold); border: 1px solid var(--gold-dim);
-    border-radius: 3px; padding: 0 4px;
+    border-radius: var(--radius-xs); padding: 0 4px;
   }
   .ai-sample[hidden] { display: none; }
   /* 依据卡可点击定位图表 */
   #cards .card { cursor: pointer; transition: border-color .12s ease-out; }
   @media (hover:hover) { #cards .card:hover { border-color: var(--line2); } }
-  #cards .card:focus-visible { outline: 1px solid var(--gold); outline-offset: 1px; }
   .res-chip { cursor: pointer; }
   #aiRefresh {
     display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; height: 22px;
     background: transparent; color: var(--dim); border: 1px solid var(--line2); border-radius: var(--radius-s);
     padding: 0 8px; cursor: pointer;
-    transition: transform .1s ease-out, color .1s ease-out, border-color .1s ease-out;
+    transition: transform var(--dur-fast) var(--ease), color var(--dur-fast) ease-out, border-color var(--dur-fast) ease-out;
   }
   #aiRefresh .ic { display: inline-block; }
   #aiRefresh .ic svg { width: 13px; height: 13px; display: block; }
@@ -611,7 +666,6 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     font-weight: 600; font-size: 12px; transition: border-color .12s ease-out;
   }
   @media (hover:hover) { #aiPanel .ai-row:hover { border-color: var(--line2); } }
-  #aiPanel .ai-row:focus-visible { outline: 1px solid var(--gold); outline-offset: 1px; }
   /* 右栏滑入覆盖层：承载情景/信号/依据卡详情；打开时图表与右栏外内容仍可交互 */
   #aiPop {
     position: absolute; inset: 0; z-index: 40; padding: 12px 14px;
@@ -688,21 +742,27 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     #railScroll { overflow: visible; }
     #cardsDock { max-height: none; }
     header { gap: 8px; padding: 0 10px; }
-    .freq button { padding: 2px 7px; }
+    .freq button { padding: 0 7px; }
     #status { font-size: 11px; }
     footer { gap: 10px; padding: 0 10px; }
     .rules-pop { right: 12px; }
+    /* 手机：信号行横向滑动，chip 不收缩、时间完整显示（写在容器查询之后以覆盖其收起规则） */
+    .resonance { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain; }
+    .resonance::-webkit-scrollbar { display: none; }
+    .res-chip { flex-shrink: 0; }
+    .res-chip .res-time { display: block; }
   }
   @media (prefers-reduced-motion: reduce) {
     #sidebar, #page, .sb-btn, .seg button, .freq button,
     #center .resonance, #center #chartWrap, #rail, #aiPop { transition: none; }
-    .rules-pop, .soft-btn, .rule-option button, #ruleSummary { transition: none; }
-    .rules-pop.open { animation: none; }
+    .rules-pop, .soft-btn, .rule-option button, #ruleSummary, .hd-btn, #themeBtn, #aiRefresh, #loadBar { transition: none; }
+    .rules-pop.open, .period-dialog[open], #sidebar .wl-drop:not([hidden]), #subSegPop:not([hidden]) { animation: none; }
+    /* 加载细线不移动：静态低对比整条 */
+    #loadBar::before { animation: none; transform: none; width: 100%; background: var(--gold); opacity: .35; }
     #sidebar .item, #sidebar .wl-add, #sidebar .item .del, #sidebar .item .star, #sidebar .item .add, .hd-btn { transition: none; }
   }
   .data-status { display: inline-block; margin-left: 6px; color: var(--faint); font-size: 10px; font-weight: 400; cursor: help; }
   .data-status[hidden] { display: none; }
-  .data-status:focus-visible { outline: 1px solid var(--gold); outline-offset: 2px; }
   footer .warn, #status .warn { color: var(--gold); }
 </style>
 </head>
@@ -741,6 +801,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>
     <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>
   </button>
+  <div id="loadBar" role="progressbar" aria-label="正在加载图表" aria-hidden="true"></div>
 </header>
 <main>
   <div id="center">
