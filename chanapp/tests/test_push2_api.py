@@ -6,12 +6,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-os.environ["COLLECTOR_ENABLED"] = "0"
-
 from fastapi.testclient import TestClient
 from chanapp.api import main
 from chanapp.api.main import app
 from chanapp.engine import display_feed
+from chanapp.tests import cache_support
 
 FACT_QUOTE = {"price": 130.0, "price_time": "2026-09-28 10:05", "price_label": "最新", "pc": 124.0,
               "pct": 4.84, "limit_up": False, "trade_date": "2026-09-28", "stale": False}
@@ -19,6 +18,7 @@ FACT_QUOTE = {"price": 130.0, "price_time": "2026-09-28 10:05", "price_label": "
 
 class TestPush2Api(unittest.TestCase):
     def setUp(self):
+        cache_support.set_env(self, "COLLECTOR_ENABLED", "0")
         self.client = TestClient(app)
         # /api/quotes 会真实读 watchlist：注入临时文件，绝不触碰仓库 watchlist.json
         self._tmp = tempfile.TemporaryDirectory()
@@ -27,8 +27,7 @@ class TestPush2Api(unittest.TestCase):
         wl.write_text(json.dumps(
             [{"code": "sz001309", "name": "德明利"}], ensure_ascii=False),
             encoding="utf-8")
-        os.environ["WATCHLIST_PATH"] = str(wl)
-        self.addCleanup(os.environ.pop, "WATCHLIST_PATH")
+        cache_support.set_env(self, "WATCHLIST_PATH", str(wl))
         # A 股行情取门面 quote（事实派生）：一律替身，不读真实事实库
         patcher = mock.patch.object(main.engine_data, "quote", return_value=dict(FACT_QUOTE), create=True)
         self.quote = patcher.start()

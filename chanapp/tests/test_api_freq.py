@@ -1,5 +1,4 @@
 """freq 白名单：/api/chart 接受 week（新视图周期）；/api/analysis 的联合分析固定 day/m60/m30，拒绝 week；m15/m5 已下线。"""
-import os
 import unittest
 from unittest import mock
 
@@ -10,8 +9,7 @@ from chanapp.tests import cache_support, facade_support
 
 class TestFreqWhitelist(unittest.TestCase):
     def setUp(self):
-        os.environ["COLLECTOR_ENABLED"] = "0"
-        self.addCleanup(os.environ.pop, "COLLECTOR_ENABLED")
+        cache_support.set_env(self, "COLLECTOR_ENABLED", "0")
         cache_support.isolate_cache_dir(self)     # 主图走门面 bundle：替身之外的读取落临时目录
         from chanapp.api.main import app
         self.c = TestClient(app)

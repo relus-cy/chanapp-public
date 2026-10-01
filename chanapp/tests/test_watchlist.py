@@ -11,6 +11,8 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
+from chanapp.tests import cache_support
+
 _PKG_ROOT = Path(__file__).resolve().parent.parent
 SEED = _PKG_ROOT / "watchlist.json"
 
@@ -19,8 +21,7 @@ class TestWatchlist(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        os.environ["WATCHLIST_PATH"] = str(Path(self._tmp.name) / "w.json")
-        self.addCleanup(os.environ.pop, "WATCHLIST_PATH")
+        cache_support.set_env(self, "WATCHLIST_PATH", str(Path(self._tmp.name) / "w.json"))
         from chanapp.api.main import app
         self.c = TestClient(app)
 

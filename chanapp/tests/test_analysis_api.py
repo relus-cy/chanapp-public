@@ -19,7 +19,7 @@ from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
-from chanapp.tests import facade_support
+from chanapp.tests import cache_support, facade_support
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sh000001_day_qfq.csv"
 TOKENS = quote(facade_support.tokens())     # 替身数据集没有 token：三个周期都是 null
@@ -39,8 +39,7 @@ class TestAnalysisApi(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        os.environ["ANALYSIS_CACHE_DIR"] = self._tmp.name
-        self.addCleanup(os.environ.pop, "ANALYSIS_CACHE_DIR")
+        cache_support.set_env(self, "ANALYSIS_CACHE_DIR", self._tmp.name)
         # 保存并清空 LLM_* 环境变量，测试内按需设置
         self._saved = {k: os.environ.get(k)
                        for k in ("LLM_PROVIDER", "LLM_API_KEY", "LLM_MODEL")}

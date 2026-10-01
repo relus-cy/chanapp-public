@@ -4,7 +4,6 @@
 engine.data.get_bars 直接调，事实库放临时目录、同步首取用替身写入。
 """
 import csv
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,8 +33,7 @@ def fake_dataset(code, freq="day"):
 
 class TestChartTimingLog(unittest.TestCase):
     def setUp(self):
-        os.environ["COLLECTOR_ENABLED"] = "0"
-        self.addCleanup(os.environ.pop, "COLLECTOR_ENABLED")
+        cache_support.set_env(self, "COLLECTOR_ENABLED", "0")
         cache_support.isolate_cache_dir(self)   # 主图发布会记计算审计，不能写进真实事实库
         from chanapp.api.main import app
         self.c = TestClient(app)
@@ -80,13 +78,11 @@ class TestBarsTimingLog(unittest.TestCase):
 
 class TestAnalysisTimingLog(unittest.TestCase):
     def setUp(self):
-        os.environ["COLLECTOR_ENABLED"] = "0"
-        self.addCleanup(os.environ.pop, "COLLECTOR_ENABLED")
+        cache_support.set_env(self, "COLLECTOR_ENABLED", "0")
         cache_support.isolate_cache_dir(self)
         import tempfile
         self._tmp = tempfile.TemporaryDirectory()
-        os.environ["ANALYSIS_CACHE_DIR"] = self._tmp.name
-        self.addCleanup(os.environ.pop, "ANALYSIS_CACHE_DIR")
+        cache_support.set_env(self, "ANALYSIS_CACHE_DIR", self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
         from chanapp.api.main import app
         self.c = TestClient(app)
