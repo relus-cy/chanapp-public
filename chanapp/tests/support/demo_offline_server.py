@@ -1,7 +1,8 @@
 """Start a repeatable demo browser fixture; transport guards never replace business APIs.
 
-Run from the package parent with python -m chanapp.tests.support.demo_offline_server
---root chanapp/tmp/demo-offline-browser --port 18942. On macOS, prefix the command
+chanapp/scripts/test_browser.sh starts this on a free port, runs the browser acceptance and
+cleans up. To run it by hand, from the package parent: python -m
+chanapp.tests.support.demo_offline_server --root chanapp/tmp/demo-offline-browser --port 18942. On macOS, prefix the command
 with sandbox-exec -p '(version 1)(allow default)(deny network-outbound)
 (allow network-outbound (remote ip "localhost:*"))' for an OS-level outbound ban.
 Python socket/DNS and curl attempts are recorded without destination or credentials.

@@ -50,7 +50,7 @@
 | 其他 Linux 发行版 | 未实测 | — |
 | Windows | 不支持 | 采集器使用 `fcntl` 文件锁，Windows 上无法导入 |
 | Node.js（只用于前端逻辑测试） | 随包验证 | Node 24 上前端逻辑测试全部通过 |
-| 浏览器 | 未实测 | 默认套件只有 node 运行的前端逻辑测试；`chanapp/tests/browser_*.js` 是需要本地服务与 playwright-cli 的手动验收脚本，用法见各文件头注释 |
+| 浏览器 | 可选验收（Chromium） | 默认套件只有 node 运行的前端逻辑测试。装有 playwright-cli 时，`bash chanapp/scripts/test_browser.sh` 一条命令起离线 demo 服务并跑真实接口的浏览器验收（`chanapp/tests/browser_demo_offline.js`）；其余 `chanapp/tests/browser_*.js` 仍需手动执行，用法见各文件头注释。其他浏览器未实测 |
 
 ## 默认额度能支撑多少自选
 

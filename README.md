@@ -65,6 +65,8 @@ bash chanapp/scripts/test_js.sh
 
 第一条是全量 Python 测试，`COLLECTOR_ENABLED=0` 让测试不启动后台采集；第二条用 node 逐个运行前端逻辑测试。provider 测试使用 `chanapp/tests/fixtures/` 里的录制数据，测试不访问外网。
 
+装有 playwright-cli 时，`bash chanapp/scripts/test_browser.sh` 另起一个离线 demo 服务，在真实浏览器里走一遍页面验收（不拦截业务接口），结束后自行清理。
+
 ## 文档
 
 | 想了解 | 读这里 |

@@ -28,7 +28,7 @@ bash chanapp/scripts/test_js.sh
 
 - 修缺陷时附一个在修复前失败、修复后通过的测试。
 - 测试不访问外网；provider 单测用 `chanapp/tests/fixtures/` 下的录制数据。
-- 改了 `chanapp/web/` 时，除 JS 测试外请在浏览器里手动走一遍受影响的页面。
+- 改了 `chanapp/web/` 时，除 JS 测试外再跑一次真实浏览器验收：`bash chanapp/scripts/test_browser.sh`（需要 playwright-cli；脚本自己起离线 demo 服务、跑完清理，不访问外网），并在浏览器里手动走一遍受影响的页面。
 
 ## 约束
 
