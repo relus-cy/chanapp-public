@@ -45,8 +45,7 @@ def slots(market: str, freq: str) -> tuple:
     return _SLOTS[(market, freq)]
 
 
-def bucket_end(market: str, freq: str, hhmm: str) -> str | None:
-    """hhmm 所在会话内，第一个不早于它的 freq 槽位；不在任何会话内返回 None。"""
+def _bucket_end(market: str, freq: str, hhmm: str) -> str | None:
     t = _minutes(hhmm)
     for start, end in SESSIONS[market]:
         begin, finish = _minutes(start), _minutes(end)
@@ -56,6 +55,22 @@ def bucket_end(market: str, freq: str, hhmm: str) -> str | None:
                 if begin < m <= finish and m >= t:
                     return label
     return None
+
+
+# 会话与槽位都是静态配置：按全天每个 HH:MM 预先算好；查不到的写法（非两位时分）照旧逐次计算
+def _bucket_table(market: str, freq: str) -> dict:
+    labels = (_label(t) for t in range(24 * 60))
+    return {hhmm: _bucket_end(market, freq, hhmm) for hhmm in labels}
+
+
+_BUCKETS = {(market, freq): _bucket_table(market, freq) for market in SESSIONS for freq in FREQ_MINUTES}
+_MISS = object()
+
+
+def bucket_end(market: str, freq: str, hhmm: str) -> str | None:
+    """hhmm 所在会话内，第一个不早于它的 freq 槽位；不在任何会话内返回 None。"""
+    label = _BUCKETS.get((market, freq), {}).get(hhmm, _MISS)
+    return _bucket_end(market, freq, hhmm) if label is _MISS else label
 
 
 def week_start(date_str: str) -> str:

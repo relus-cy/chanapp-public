@@ -302,8 +302,26 @@ def status(codes) -> dict:
     return _collector().status(list(codes), now=datetime.now())
 
 
+def _recorded_run(code, freq, input_data_version, calculation_id) -> dict | None:
+    """幂等键已有非失败记录时给出与写路径相同的结果；只读，不取写者锁（事实库为 WAL，读不等写事务）。
+    没有记录、记录为 failed（写路径负责恢复）或读取出错时返回 None，交写路径。"""
+    try:
+        row = (demo.find_calc_run(CACHE_DIR, code, freq, input_data_version, calculation_id) if is_demo()
+               else facts.find_calc_run(_reader(), code, freq, input_data_version, calculation_id))
+    except Exception:
+        log.debug("结论历史只读预查失败，改走写路径 code=%s freq=%s", code, freq, exc_info=True)
+        return None
+    if row is None or row["status"] == "failed":
+        return None
+    return {"recorded": True, "run_id": row["run_id"], "created": False}
+
+
 def record_calc_run(code: str, freq: str, *, input_start, input_end, input_data_version,
                     calculation_id, signals, source_kind="online_observed") -> dict:
+    """先只读查幂等键，已记录则直接返回（重复查看不排队等采集器写者锁）；未记录才进写路径，写事务内仍复核幂等键。"""
+    recorded = _recorded_run(code, freq, input_data_version, calculation_id)
+    if recorded is not None:
+        return recorded
     if is_demo():
         return demo.record_calc_run(CACHE_DIR, code, freq, input_start=input_start, input_end=input_end,
                                     input_data_version=input_data_version, calculation_id=calculation_id,

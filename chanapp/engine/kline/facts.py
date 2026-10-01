@@ -817,6 +817,14 @@ def record_calc_run(conn, code, freq, *, input_start, input_end, input_data_vers
         return {"recorded": False, "run_id": None, "created": False}
 
 
+def find_calc_run(conn, code, freq, input_data_version, calculation_id):
+    """只读：幂等键对应的结论记录行（run_id, status），没有为 None。不开写事务，供写入前先查。"""
+    return conn.execute(
+        "SELECT run_id, status FROM calc_runs WHERE code=? AND freq=?"
+        " AND input_data_version=? AND calculation_id=?",
+        (code, freq, input_data_version, calculation_id)).fetchone()
+
+
 def runs_as_of(conn, code, freq, as_of: str) -> list[dict]:
     """「当时已记录」查询：只含在线观测且 recorded_at <= as_of；回算永不混入。"""
     return [dict(r) for r in conn.execute(

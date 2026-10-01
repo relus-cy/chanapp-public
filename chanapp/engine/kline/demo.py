@@ -1,4 +1,5 @@
 """离线实例的本地目录、历史报价与独立计算审计；图表仍使用同一 views/计算核心。"""
+import sqlite3
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
@@ -56,7 +57,22 @@ def status(conn, codes):
             "datasets": datasets, "probes": [], "budget": {}, "calendar_export": None}
 
 
+def _audit_path(cache_dir) -> Path:
+    return Path(cache_dir) / "demo-audit.sqlite"
+
+
 def record_calc_run(cache_dir, code, freq, **values):
     # 复用现有审计 schema/事务/幂等约束；此库只记录计算，绝不作为事实读取入口。
-    with closing(facts.open_facts(Path(cache_dir) / "demo-audit.sqlite")) as conn:
+    with closing(facts.open_facts(_audit_path(cache_dir))) as conn:
         return facts.record_calc_run(conn, code, freq, source_kind="historical_recompute", **values)
+
+
+def find_calc_run(cache_dir, code, freq, input_data_version, calculation_id):
+    """只读查审计库里幂等键对应的记录行；审计库尚未建立时为 None（不建库、不迁移，交给写路径）。
+    每次新开只读连接：审计库被删除或替换后不会读到旧文件。"""
+    path = _audit_path(cache_dir).resolve()
+    if not path.exists():
+        return None
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+        conn.row_factory = sqlite3.Row
+        return facts.find_calc_run(conn, code, freq, input_data_version, calculation_id)

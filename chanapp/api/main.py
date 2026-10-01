@@ -254,11 +254,13 @@ def api_chart(request: Request,
     except Exception as e:
         log.exception("chart calculation failed code=%s freq=%s profile=%s", code, freq, rule_profile)
         raise HTTPException(status_code=502, detail="结构计算暂不可用", headers=extra or None) from e
-    body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    # 先算 ETag 再比 If-None-Match：命中 304 不序列化响应体（ETag 的规范化序列化同样拒绝 NaN）
     etag = _chart_etag(payload)
     headers = {"ETag": etag, "Cache-Control": "no-cache", **extra}
-    t_end = time.monotonic()
     hit = _etag_matches(request.headers.get("if-none-match"), etag)
+    body = None if hit else json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                                       allow_nan=False)
+    t_end = time.monotonic()
     log.info("[timing] chart code=%s freq=%s bars=%dms compute=%dms resonance=%dms total=%dms etag=%s",
              code, freq, int((t_bars - t0) * 1000), timings["compute_ms"],
              timings["resonance_ms"], int((t_end - t0) * 1000), "304" if hit else "200")

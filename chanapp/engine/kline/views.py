@@ -92,6 +92,56 @@ class _Ctx:
         self.cold = {bindings.binding(self.market, self.kind, item).cold
                      for item in (FetchItem.DAY_HISTORY, FetchItem.MINUTE_HISTORY,
                                   FetchItem.MINUTE_LIVE)} - {None}
+        self._memo, self._minutes = {}, {}
+
+    # 以下读取只在本上下文（同一读事务、同一快照）内复用，不跨请求保留
+    def memo(self, key, fn):
+        if key not in self._memo:
+            self._memo[key] = fn()
+        return self._memo[key]
+
+    def minute_rows(self, fact_freq, start_slot=None, end_slot=None, *, desc=False, limit=None) -> list:
+        """facts.read_minute_rows 的复用版，结果与直接读取相同；返回的列表只读。
+
+        参数完全相同直接复用，另有几种可证等价的截取（同一快照；每槽只取最大修订，按 slot_end 全序；隔离过滤逐行
+        进行，与按 slot_end 截取可交换）。截不出时照常读库。"""
+        key = (fact_freq, start_slot, end_slot, desc, limit)
+        if key not in self._minutes:
+            rows = self._derive(*key)
+            if rows is None:
+                rows = facts.read_minute_rows(self.conn, self.code, fact_freq, start_slot, end_slot,
+                                              desc=desc, limit=limit)
+            self._minutes[key] = rows
+        return self._minutes[key]
+
+    def _derive(self, fact_freq, start_slot, end_slot, desc, limit):
+        for (freq, start, end, d, n), cached in self._minutes.items():
+            if freq != fact_freq:
+                continue
+            if not desc and not limit and start_slot is not None:
+                # 无上限的升序区间 [start_slot, end_slot)：
+                # - 已读过同一终点、起点不晚的无上限区间：按起点截取；
+                # - 已读过不设起点、终点不早的「最近 n 槽」：其最早一行不晚于 start_slot 时，区间内的每一槽都在这 n
+                #   槽之内（最近 n 槽即 slot_end 不小于第 n 大者的全部槽），按起止截取。
+                if not d and not n and end == end_slot and (start is None or start <= start_slot):
+                    return [r for r in cached if r["slot_end"] >= start_slot]
+                covers = end is None or (end_slot is not None and end_slot <= end)
+                if d and n and start is None and covers and cached and cached[0]["slot_end"] <= start_slot:
+                    return [r for r in cached
+                            if r["slot_end"] >= start_slot and (end_slot is None or r["slot_end"] < end_slot)]
+            elif desc and limit and start_slot is None:
+                # 最近 limit 槽：已读过同一终点、上限不小的最近 n 槽，且没有隔离槽（过滤前后行数相同）时取其最近
+                # limit 行；有隔离槽时过滤后的行数不能还原读库时的截断位置，不截取。
+                if d and n and n >= limit and start is None and end == end_slot and not self.hidden(fact_freq):
+                    return cached[-limit:]
+        return None
+
+    def hidden(self, dataset) -> set:
+        return self.memo(("hidden", dataset), lambda: facts.quarantined_keys(self.conn, self.code, dataset))
+
+    def required_slots(self, fact_freq, day) -> set:
+        return self.memo(("required_slots", fact_freq, day),
+                         lambda: calendar.required_slots(self.conn, self.market, fact_freq, day))
 
     def multiplier(self, trade_date):
         if self.adjust == "raw":
@@ -127,8 +177,7 @@ def _day_bars(ctx, *, raw=False) -> list:
                      "forming": r["provenance"] == "live", "source": r["source"],
                      "sources": [r["source"]]})
     if not have_today and ctx.fact_freq:
-        minutes = facts.read_minute_rows(ctx.conn, ctx.code, ctx.fact_freq,
-                                         f"{ctx.today} 00:00", f"{ctx.today} 23:59")
+        minutes = ctx.minute_rows(ctx.fact_freq, f"{ctx.today} 00:00", f"{ctx.today} 23:59")
         bar = periods.day_bar_from_minutes(minutes, trade_date=ctx.today, forming=True)
         if bar:
             bars.append(bar)
@@ -141,8 +190,7 @@ def _minute_bars(ctx, freq, before, limit) -> tuple:
     if target < base or target % base:
         raise periods.UnsupportedPeriod(ctx.market, freq)
     read_limit = limit * (target // base) + len(sessions.slots(ctx.market, fact))
-    rows = facts.read_minute_rows(ctx.conn, ctx.code, fact, end_slot=before, desc=True,
-                                  limit=read_limit)
+    rows = ctx.minute_rows(fact, end_slot=before, desc=True, limit=read_limit)
     bars = periods.aggregate_minutes(rows, market=ctx.market, fact_freq=fact, target_freq=freq)
     if before:
         bars = [b for b in bars if b["dt"] < before]      # 与分页锚点同桶的残段不出
@@ -188,7 +236,7 @@ def _vendor_bars(ctx, freq, before, limit) -> tuple:
     if base == "day":
         tail = [b for b in _day_bars(ctx, raw=True) if b["dt"] > last]
     else:
-        tail = [r for r in facts.read_minute_rows(ctx.conn, ctx.code, "m30") if r["slot_end"] > last]
+        tail = [r for r in ctx.minute_rows("m30") if r["slot_end"] > last]
     meta = {**meta, "lagging": any(b["trade_date"] < ctx.today for b in tail), "through": last[:10]}
     if meta["frozen"] or meta["stale"] or meta["lagging"]:
         tail = []
@@ -278,10 +326,10 @@ def _day_complete(ctx, day, minute) -> bool:
         return True
     if any(r["trade_date"] == day and r["sf"] == 1 and r["provenance"] == "final" for r in ctx.day_rows):
         return True
-    rows = facts.read_minute_rows(ctx.conn, ctx.code, ctx.fact_freq, f"{day} 00:00", f"{day} 23:59")
+    rows = ctx.minute_rows(ctx.fact_freq, f"{day} 00:00", f"{day} 23:59")
     closed = {r["slot_end"] for r in rows if r["state"] == "closed"}
     return (not any(r["state"] == "forming" for r in rows)
-            and calendar.required_slots(ctx.conn, ctx.market, ctx.fact_freq, day) <= closed)
+            and ctx.required_slots(ctx.fact_freq, day) <= closed)
 
 
 def _data_status(ctx, freq, vendor_meta) -> dict:
@@ -329,7 +377,8 @@ def _stale_dataset(ctx, freq) -> str | None:
 
 def _backfill_notices(ctx, count, limit) -> list:
     # known_gap 已不再自动补取，不能让「加载中」一直挂着
-    if not any(g["reason"] != "known_gap" for g in facts.open_gaps(ctx.conn, ctx.code, ctx.fact_freq)):
+    gaps = ctx.memo(("open_gaps", ctx.fact_freq), lambda: facts.open_gaps(ctx.conn, ctx.code, ctx.fact_freq))
+    if not any(g["reason"] != "known_gap" for g in gaps):
         return []
     out = [_notice("backfill_pending")]
     if count < limit:
@@ -342,7 +391,7 @@ def _incomplete_days(ctx, bars) -> list:
     槽位不足或整日无分钟（停牌日除外）、仍有 forming（定稿失败）、分钟与日线或槽位冲突待核验。"""
     first = bars[0]["dt"][:10]
     by_day = {}
-    for r in facts.read_minute_rows(ctx.conn, ctx.code, ctx.fact_freq, f"{first} 00:00", f"{ctx.today} 00:00"):
+    for r in ctx.minute_rows(ctx.fact_freq, f"{first} 00:00", f"{ctx.today} 00:00"):
         n, forming = by_day.get(r["trade_date"], (0, False))
         by_day[r["trade_date"]] = (n + 1, forming or r["state"] == "forming")
     suspended = {r["trade_date"] for r in ctx.day_rows if r["sf"] == 1 and r["provenance"] != "preopen"}
@@ -354,14 +403,15 @@ def _incomplete_days(ctx, bars) -> list:
         n, forming = by_day[d]
         if forming:
             out.append({"date": d, "kind": "forming", "slots": n})
-        elif n < len(calendar.required_slots(ctx.conn, ctx.market, ctx.fact_freq, d)):
+        elif n < len(ctx.required_slots(ctx.fact_freq, d)):
             out.append({"date": d, "kind": "incomplete", "slots": n})
     review = facts.review_days(ctx.conn, ctx.code, ctx.fact_freq, first)
     out += [{"date": d, "kind": "pending_review"} for d in sorted(review)]
     return sorted(out, key=lambda x: x["date"])
 
 
-def _token(ctx, freq) -> str:
+def _token_parts(ctx) -> tuple:
+    """令牌里与周期无关的部分：同一上下文内各周期相同，只取一次。"""
     deps = [[ds, facts.series_gens(ctx.conn, ctx.code, ds)[1]]
             for ds in ("day", ctx.fact_freq) if ds]
     gens = [[r["kind"], r["item"], r["binding_gen"]] for r in ctx.conn.execute(
@@ -370,9 +420,14 @@ def _token(ctx, freq) -> str:
     chain = [ctx.chain.anchor, ctx.chain.today_confirmed] if ctx.chain else None
     # 前复权相邻性与周线归属都读日历：只改日历（补入开市日、推出休市日）也要让旧分页 409
     cal = hashlib.sha256(json.dumps([ctx.trading_days, ctx.closed_days]).encode()).hexdigest()
+    return (deps, gens, chain, cal, facts.run_identity(ctx.conn),
+            hk_vendor_qfq.cache_version(ctx.conn, ctx.code) if ctx.vendor else None)
+
+
+def _token(ctx, freq) -> str:
+    deps, gens, chain, cal, run_id, vendor = ctx.memo("token_parts", lambda: _token_parts(ctx))
     payload = [ctx.code, freq, ctx.adjust, config.READ_RULES_VERSION, deps, gens, ctx.today,
-               chain, cal, facts.run_identity(ctx.conn),
-               hk_vendor_qfq.cache_version(ctx.conn, ctx.code) if ctx.vendor else None]
+               chain, cal, run_id, vendor]
     return hashlib.sha256(json.dumps(payload).encode()).hexdigest()[:24]
 
 
@@ -393,10 +448,10 @@ def _has_facts(ctx) -> bool:
                for table in ("current_day_bars", "minute_bars"))
 
 
-def _read(conn, code, freq, adjust, before, limit, now) -> View | None:
+def _read(conn, code, freq, adjust, before, limit, now, ctx=None) -> View | None:
     if freq not in PERIODS:
         raise ValueError(f"unsupported freq: {freq}")
-    ctx = _Ctx(conn, code, adjust, now)
+    ctx = ctx or _Ctx(conn, code, adjust, now)
     if not _has_facts(ctx) and not (freq in MINUTE_PERIODS and ctx.fact_freq is None):
         return None
     notices, bars, has_more, week_incomplete, vendor_meta = _notices(ctx), [], False, [], None
@@ -457,8 +512,14 @@ def read_view(conn, code, freq, *, adjust="qfq", before=None, limit=config.DEFAU
 
 
 def read_bundle(conn, code, freqs, *, adjust="qfq", now=None) -> dict:
+    """各周期共用一个读取上下文（日线、日历、因子链与本次读取内的分钟行只取一次）；上下文随本次调用结束。"""
     with facts.read_txn(conn):
-        return {f: _read(conn, code, f, adjust, None, config.DEFAULT_WINDOW, now) for f in freqs}
+        out, ctx = {}, None
+        for f in freqs:
+            if ctx is None and f in PERIODS:
+                ctx = _Ctx(conn, code, adjust, now)
+            out[f] = _read(conn, code, f, adjust, None, config.DEFAULT_WINDOW, now, ctx)
+        return out
 
 
 

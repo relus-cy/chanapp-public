@@ -1,6 +1,7 @@
 """周期派生纯函数（spec §6.2）：按市场会话钟点桶聚合分钟事实，生成当日日线与周线。"""
 from __future__ import annotations
 
+import sqlite3
 from datetime import date, timedelta
 
 from chanapp.engine.kline import sessions
@@ -13,6 +14,14 @@ class UnsupportedPeriod(ValueError):
 
 
 def _source_of(row):
+    # 热路径：sqlite3.Row 与 dict 直接取，不为每行生成 keys 列表；其余类型照旧
+    if type(row) is sqlite3.Row:
+        try:
+            return row["source"]
+        except IndexError:
+            return None
+    if type(row) is dict:
+        return row.get("source")
     keys = row.keys() if hasattr(row, "keys") else ()
     return row["source"] if "source" in keys else None
 
