@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 from chanapp.engine import channels
-from chanapp.engine.structure import compute_structure
+from chanapp.engine.chanpy_adapter import compute_analysis
 
 FIX = Path(__file__).parent / "fixtures" / "sh000688_m30.csv"
 
@@ -105,7 +105,7 @@ class TestChannelFixtureSmoke(unittest.TestCase):
              "volume": float(r["volume"])}
             for r in rows
         ]
-        cls.structure = compute_structure(cls.bars, "sh000688", "m30")
+        cls.structure = compute_analysis(cls.bars, "m30")["structure"]
         cls.channels = channels.build(cls.structure["bi"], cls.structure["xd"])
 
     def test_has_channel_matching_last_completed_xd(self):

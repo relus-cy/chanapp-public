@@ -1,15 +1,13 @@
 """Native evidence does not synthesize old anchor or exhaustion metrics."""
 import unittest
 from chanapp.tests.test_engine import load_fixture
-from chanapp.engine.structure import compute_structure
-from chanapp.engine.signals import compute_signals
-from chanapp.engine.evidence import build_evidence
+from chanapp.engine.chanpy_adapter import compute_analysis
 
 class TestNativeEvidence(unittest.TestCase):
     def test_actual_native_features_only(self):
-        bars=load_fixture(); structure=compute_structure(bars,'test')
-        signals=compute_signals(bars,structure)['signals']
-        cards=build_evidence(signals,structure)
+        result=compute_analysis(load_fixture())
+        signals=result['sig']['signals']
+        cards=result['evidence']
         self.assertTrue(cards)
         for signal,card in zip(signals,cards):
             self.assertEqual(card['detail']['features'],signal['features'])

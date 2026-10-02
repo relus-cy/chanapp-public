@@ -78,7 +78,6 @@ from pathlib import Path
 from .kline import http as _http
 from . import cache_store, data_identity, swr
 from .kline.instance import is_demo
-from .feeds.secid import secid as _secid
 
 THROTTLE_INTERVAL = 0.5
 BACKOFF_SECONDS = 30          # 退避冷却（连续 BACKOFF_AFTER_FAILURES 次失败才触发）
@@ -98,6 +97,13 @@ import functools
 _throttle = functools.partial(_http.throttle, THROTTLE_INTERVAL)  # 限速统一由本模块做
 
 log = logging.getLogger(__name__)
+
+
+def _secid(code: str) -> str:
+    market = {"sh": "1", "sz": "0", "hk": "116"}.get(code[:2])
+    if market is None:
+        raise ValueError(f"unsupported code prefix: {code}")
+    return f"{market}.{code[2:]}"
 
 
 class Push2Blocked(RuntimeError):

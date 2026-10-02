@@ -37,14 +37,12 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from chanapp.api import view_log as api_view_log
+from chanapp.engine import chanpy_adapter
 from chanapp.engine import chart_payload as engine_chart_payload
 from chanapp.engine import compute_cache as engine_compute_cache
 from chanapp.engine import data as engine_data
-from chanapp.engine import evidence as engine_evidence
 from chanapp.engine import instance_paths
 from chanapp.engine import llm as engine_llm
-from chanapp.engine import signals as engine_signals
-from chanapp.engine import structure as engine_structure
 from chanapp.engine import data_identity
 from chanapp.engine.chanpy_profiles import profile_identity
 
@@ -316,9 +314,8 @@ def api_analysis(code: str = Query(..., min_length=2),
             if hit is not None:
                 structure, sig, evidence = hit["structure"], hit["sig"], hit["evidence"]
             else:
-                structure = engine_structure.compute_structure(bars, code, frame, rule_profile=rule_profile, signal_scope=signal_scope)
-                sig = engine_signals.compute_signals(bars, structure)
-                evidence = engine_evidence.build_evidence(sig["signals"], structure)
+                result = chanpy_adapter.compute_analysis(bars, frame, rule_profile=rule_profile, signal_scope=signal_scope)
+                structure, sig, evidence = result["structure"], result["sig"], result["evidence"]
                 engine_compute_cache.put(code, frame, data_version, structure, sig, evidence,
                                          calculation_id=rules["calculation_id"])
         except Exception as e:

@@ -70,6 +70,8 @@
 
 其余参数都是上游默认。生效配置连同引擎提交号一起哈希成 `calculation_id`，任一项变化，计算缓存都不再命中。MACD 参数为 (12, 26, 9)，`hist = 2 × (DIF − DEA)`。
 
+主图、共振摘要与 AI 分析共用 `chanapp/engine/chanpy_adapter.py` 的 `compute_analysis` 入口，一次计算返回结构、信号、MACD 与依据卡；缓存仍按标的、周期、完整数据版本和计算身份隔离。
+
 **默认值的理由**
 
 - 严格成笔与上游 chan.py 的默认一致。

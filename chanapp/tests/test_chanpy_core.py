@@ -1,14 +1,11 @@
 import unittest
-from chanapp.engine.structure import compute_structure
+from chanapp.engine.chanpy_adapter import compute_analysis
 
 class CoreContractTest(unittest.TestCase):
-    def test_rule_identity(self):
-        import chanapp.engine.structure as module
-        self.assertIn('rule_profile', __import__('inspect').signature(module.compute_structure).parameters)
     def test_reject_duplicate_time(self):
         bar = dict(dt='2026-01-01', open=10., high=11., low=9., close=10., volume=1)
         with self.assertRaises(ValueError):
-            compute_structure([bar, bar], 'test')
+            compute_analysis([bar, bar])
 
     def test_profiles_differ_only_in_strictness(self):
         from chanapp.engine.chanpy_profiles import effective_config, profile_identity
@@ -25,9 +22,9 @@ class CoreContractTest(unittest.TestCase):
         good=dict(dt='2026-01-01',open=10.,high=11.,low=9.,close=10.,volume=1.)
         for patch in ({'high':8.},{'low':12.},{'close':float('nan')},{'open':0.},{'volume':-1.}):
             with self.subTest(patch=patch),self.assertRaises(ValueError):
-                compute_structure([{**good,**patch}],'test')
+                compute_analysis([{**good,**patch}])
         with self.assertRaises(ValueError):
-            compute_structure([{**good,'dt':'2026-01-02'},good],'test')
+            compute_analysis([{**good,'dt':'2026-01-02'},good])
 
     def test_weekly_structure(self):
         # 周线：520 根合成周线（周五标签）能跑出笔结构
@@ -39,15 +36,14 @@ class CoreContractTest(unittest.TestCase):
             mid = 100 + 20 * math.sin(i / 9) + i * 0.05
             bars.append(dict(dt=(start + timedelta(weeks=i)).isoformat(), open=mid, high=mid * 1.03,
                              low=mid * 0.97, close=mid * (1.01 if i % 2 else 0.99), volume=1000.))
-        result = compute_structure(bars, 'test', 'week')
+        result = compute_analysis(bars, 'week')['structure']
         self.assertGreater(len(result['bi']), 5)
 
     def test_empty_and_short(self):
-        from chanapp.engine.signals import compute_signals
         for bars in ([],[dict(dt='2026-01-01',open=10.,high=11.,low=9.,close=10.,volume=1.)]):
-            result=compute_structure(bars,'test')
-            self.assertEqual(result['bi'],[])
-            self.assertEqual(compute_signals(bars,result)['signals'],[])
+            result=compute_analysis(bars)
+            self.assertEqual(result['structure']['bi'],[])
+            self.assertEqual(result['sig']['signals'],[])
 
     def test_committed_effective_snapshots_match_runtime(self):
         import json
@@ -70,7 +66,7 @@ class CoreContractTest(unittest.TestCase):
                 bars.append(dict(dt=(datetime(2026,1,1)+timedelta(days=i)).strftime('%Y-%m-%d'),
                     open=value,close=value,high=value+width,low=value-width,volume=1.))
             for mode in ('strict','relaxed'):
-                result=compute_structure(bars,'test','day',mode)
+                result=compute_analysis(bars,'day',mode)['structure']
                 for line in result['bi']:
                     self.assertLess(line['x0'],line['x1'])
                     self.assertEqual(line['dt1'],bars[line['x1']]['dt'])

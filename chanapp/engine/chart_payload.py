@@ -7,13 +7,11 @@ import logging
 import time
 from collections.abc import Callable
 
+from chanapp.engine import chanpy_adapter
 from chanapp.engine import period_preferences
 from chanapp.engine import channels as engine_channels
 from chanapp.engine import compute_cache as engine_compute_cache
 from chanapp.engine import data as engine_data
-from chanapp.engine import evidence as engine_evidence
-from chanapp.engine import signals as engine_signals
-from chanapp.engine import structure as engine_structure
 from chanapp.engine.chanpy_profiles import profile_identity
 
 log = logging.getLogger(__name__)
@@ -113,10 +111,8 @@ def _level_summary(code: str, freq: str, dataset: dict | None,
         if cached is not None:
             structure, sig = cached["structure"], cached["sig"]
         else:
-            structure = engine_structure.compute_structure(bars, code, freq, rule_profile=rule_profile, signal_scope=signal_scope)
-            sig = engine_signals.compute_signals(bars, structure)
-            # evidence 必须一并算好：/api/analysis 命中同一缓存时直接复用
-            evidence = engine_evidence.build_evidence(sig["signals"], structure)
+            result = chanpy_adapter.compute_analysis(bars, freq, rule_profile=rule_profile, signal_scope=signal_scope)
+            structure, sig, evidence = result["structure"], result["sig"], result["evidence"]
             engine_compute_cache.put(code, freq, data_version, structure,
                                      sig, evidence, calculation_id=identity["calculation_id"])
         latest = {s["level"]: s for s in sig["signals"]}
@@ -161,9 +157,8 @@ def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
     data_version = engine_compute_cache.dataset_version(dataset)
     cached = engine_compute_cache.get(code, freq, data_version, identity["calculation_id"])
     if cached is None:
-        structure = engine_structure.compute_structure(bars, code, freq, rule_profile=rule_profile, signal_scope=signal_scope)
-        sig = engine_signals.compute_signals(bars, structure)
-        evidence = engine_evidence.build_evidence(sig["signals"], structure)
+        result = chanpy_adapter.compute_analysis(bars, freq, rule_profile=rule_profile, signal_scope=signal_scope)
+        structure, sig, evidence = result["structure"], result["sig"], result["evidence"]
         engine_compute_cache.put(code, freq, data_version, structure, sig, evidence,
                                  calculation_id=identity["calculation_id"])
     else:

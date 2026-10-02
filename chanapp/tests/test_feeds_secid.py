@@ -1,7 +1,7 @@
-"""显示层 secid 映射（迁自 test_em_data.py 的 secid 用例）。"""
+"""显示层请求的市场标识映射。"""
 import unittest
 
-from chanapp.engine.feeds.secid import secid
+from chanapp.engine.display_feed import _secid as secid
 
 
 class SecidTests(unittest.TestCase):

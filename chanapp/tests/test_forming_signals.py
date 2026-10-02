@@ -2,16 +2,14 @@
 import unittest
 from pathlib import Path
 from chanapp.tests.test_engine import load_fixture
-from chanapp.engine.chanpy_adapter import build_native, extract_structure
-from chanapp.engine.signals import compute_signals
+from chanapp.engine.chanpy_adapter import build_native, compute_analysis
 
 class TestFormingSignals(unittest.TestCase):
     def test_native_confirmation_and_no_duplicate_tail(self):
         bars=load_fixture(Path(__file__).parent/'fixtures'/'sh000688_m30.csv')
         for mode in ('strict','relaxed'):
             native=build_native(bars,'m30',mode)
-            structure=extract_structure(native,bars,mode)
-            output=compute_signals(bars,structure)
+            output=compute_analysis(bars,'m30',mode)['sig']
             self.assertNotIn('forming_signal',output)
             seen=set()
             for level, points in (('bi',native.bs_point_lst),('seg',native.seg_bs_point_lst)):

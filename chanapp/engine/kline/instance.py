@@ -103,11 +103,6 @@ _IMPORT_FREQS = {"CN": (None, "m5", "m15"), "HK": (None, "m30")}
 
 
 def _validate_market(market, value, *, mode):
-    # 没有安装在线 adapter 的公开包仍能校验、导入和读取本地样本；不能冒充真实来源。
-    if not REGISTRY and value.source == "import" and mode == "demo":
-        if value.minute_fact_freq not in _IMPORT_FREQS[market]:
-            raise ValueError(f"{market}.minute_fact_freq 不支持 {value.minute_fact_freq!r}")
-        return
     if not isinstance(value.source, str) or value.source not in REGISTRY:
         raise ValueError(f"{market}.source 必须为已注册来源")
     spec = REGISTRY[value.source]

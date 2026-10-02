@@ -178,11 +178,10 @@ class TestAnalysisApi(unittest.TestCase):
         （指令本身含「概率」二字），调整为：数据段（JSON）无 %，指令段含禁止约束。
         """
         from chanapp.api import analysis
-        from chanapp.engine import evidence, signals, structure
+        from chanapp.engine.chanpy_adapter import compute_analysis
         bars = load_bars()
-        st = structure.compute_structure(bars, "sh000001", "day")
-        sig = signals.compute_signals(bars, st)
-        ev = evidence.build_evidence(sig["signals"], st)
+        result = compute_analysis(bars, "day")
+        st, sig, ev = result["structure"], result["sig"], result["evidence"]
         data = analysis.collect_prompt_data("sh000001", "day", bars, st, sig, ev)
         p = analysis.build_prompt(data)
 
@@ -210,11 +209,10 @@ class TestAnalysisApi(unittest.TestCase):
         """prompt 指令段含贝叶斯契约：prior/posterior/update_watch 字段、
         证据必须引用输入信号 label 与价位、后验定性三档、current_state 含后验排序。"""
         from chanapp.api import analysis
-        from chanapp.engine import evidence, signals, structure
+        from chanapp.engine.chanpy_adapter import compute_analysis
         bars = load_bars()
-        st = structure.compute_structure(bars, "sh000001", "day")
-        sig = signals.compute_signals(bars, st)
-        ev = evidence.build_evidence(sig["signals"], st)
+        result = compute_analysis(bars, "day")
+        st, sig, ev = result["structure"], result["sig"], result["evidence"]
         data = analysis.collect_prompt_data("sh000001", "day", bars, st, sig, ev)
         p = analysis.build_prompt(data)
         rules = p.split("输出要求：", 1)[1].split("数据（JSON）：", 1)[0]
@@ -270,11 +268,10 @@ class TestAnalysisApi(unittest.TestCase):
     def test_prompt_places_contract_before_data(self):
         """稳定前缀：指令与输出契约在数据 JSON 之前（DeepSeek 前缀缓存友好）。"""
         from chanapp.api import analysis
-        from chanapp.engine import evidence, signals, structure
+        from chanapp.engine.chanpy_adapter import compute_analysis
         bars = load_bars()
-        st = structure.compute_structure(bars, "sh000001", "day")
-        sig = signals.compute_signals(bars, st)
-        ev = evidence.build_evidence(sig["signals"], st)
+        result = compute_analysis(bars, "day")
+        st, sig, ev = result["structure"], result["sig"], result["evidence"]
         p = analysis.build_prompt(analysis.collect_prompt_data("sh000001", "day", bars, st, sig, ev))
         self.assertLess(p.index("输出要求："), p.index("数据（JSON）："))
 

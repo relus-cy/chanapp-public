@@ -1,7 +1,9 @@
 """Map raw bars to the fixed native single-level calculation core."""
+from copy import deepcopy
 from datetime import datetime
 import math
 
+from .evidence import build_evidence
 from .chanpy_profiles import make_config, profile_identity
 from .chanpy_vendor.Common.CEnum import DATA_FIELD, FX_TYPE, KL_TYPE
 from .chanpy_vendor.Common.CTime import CTime
@@ -109,3 +111,14 @@ def extract_structure(native, bars, rule_profile='strict', signal_scope='expande
         **profile_identity(rule_profile, signal_scope),
         _native_signals=points,
         _native_macd=dict(dif=[k.macd.DIF for k in units], dea=[k.macd.DEA for k in units], hist=[k.macd.macd for k in units]))
+
+
+def compute_analysis(bars: list[dict], freq: str = 'day', rule_profile: str = 'strict',
+                     signal_scope: str = 'expanded') -> dict:
+    """Calculate one timeframe's structure, signals and evidence from raw bars."""
+    native = build_native(bars, freq, rule_profile, signal_scope)
+    structure = extract_structure(native, bars, rule_profile, signal_scope)
+    sig = dict(macd=deepcopy(structure['_native_macd']),
+               signals=deepcopy(structure['_native_signals']),
+               forming=next((deepcopy(b) for b in reversed(structure['bi']) if b['forming']), None))
+    return dict(structure=structure, sig=sig, evidence=build_evidence(sig['signals'], structure))

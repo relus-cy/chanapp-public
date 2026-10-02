@@ -7,7 +7,7 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
-from chanapp.engine import compute_cache, structure as real_structure
+from chanapp.engine import compute_cache, chanpy_adapter
 from chanapp.tests import cache_support, facade_support
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sh000001_day_qfq.csv"
@@ -44,7 +44,7 @@ class TestComputeCacheUnit(unittest.TestCase):
 
 
 class TestChartAnalysisReuse(unittest.TestCase):
-    """chart 算完后 analysis 同 code/freq/末bar 不再重复 compute_structure。"""
+    """chart 算完后 analysis 同 code/freq/末bar 不再重复 compute_analysis。"""
 
     def setUp(self):
         compute_cache.clear()
@@ -61,8 +61,8 @@ class TestChartAnalysisReuse(unittest.TestCase):
         payload = json.dumps({"current_state": "s", "scenarios": []})
         with facade_support.fake_facade(return_value=dataset), \
              mock.patch("chanapp.api.analysis.engine_llm.analyze", return_value=payload), \
-             mock.patch("chanapp.engine.structure.compute_structure",
-                        wraps=real_structure.compute_structure) as m:
+             mock.patch("chanapp.engine.chanpy_adapter.compute_analysis",
+                        wraps=chanpy_adapter.compute_analysis) as m:
             r1 = self.c.get("/api/chart?code=sh000001&freq=day")
             self.assertEqual(r1.status_code, 200)
             # AI 请求带主图给出的 analysis_tokens（与共振同一次读取）
