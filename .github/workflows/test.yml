@@ -24,6 +24,25 @@ jobs:
       - name: Run JS UI tests
         run: bash chanapp/scripts/test_js.sh
 
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Install playwright-cli and Chromium
+        run: |
+          npm install -g @playwright/cli@0.1.21
+          playwright-cli install-browser chromium --with-deps
+      - name: Run browser acceptance
+        run: PYTHON=python bash chanapp/scripts/test_browser.sh
+
   gitleaks:
     runs-on: ubuntu-latest
     steps:
