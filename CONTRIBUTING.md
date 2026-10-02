@@ -8,6 +8,8 @@ chanapp 是个人维护的项目，大部分开发由维护者完成；欢迎 is
 
 ## 本地开发
 
+后端使用 Python 3.12 / FastAPI。前端使用原生 JavaScript 和随包的 lightweight-charts，不依赖外部 CDN。缠论计算使用固定版本的 chan.py，见 [计算核心说明](docs/periods-and-analysis.md#缠论规则预设)。Python 包在 `chanapp/` 子目录，命令都在仓库根运行。
+
 环境准备见 [README · 安装](README.md#安装)；跑前端测试还需要 Node.js（用 `node --version` 确认，已在 Node 24 上通过）。克隆后启用仓库自带的 git hooks：
 
 ```bash
@@ -17,25 +19,16 @@ git config core.hooksPath chanapp/scripts/git-hooks
 - `commit-msg`：提交信息须符合 [Conventional Commits](https://www.conventionalcommits.org/)，如 `fix(kline): 修正港股午休标签`；可用类型见脚本里的 `TYPES`。
 - `pre-commit` 与 `commit-msg`：安装了 [gitleaks](https://github.com/gitleaks/gitleaks) 时扫描暂存内容和提交信息，命中凭据或本机路径即拒绝提交；规则在仓库根 `.gitleaks.toml`，CI 也会用同一份配置扫描。
 
-### 运行临时诊断脚本
-
-直接运行 `python /path/to/probe.py` 时，Python 把脚本所在目录加入导入路径；切到仓库根并不会自动让该脚本找到 `chanapp`。项目安装步骤只安装依赖。运行仓库外或 `tmp/` 中的脚本时，在仓库根为这一次调用指定包的父目录：
-
-```bash
-PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" COLLECTOR_ENABLED=0 \
-  .venv/bin/python /path/to/probe.py
-```
-
-`PYTHONPATH` 指向含有 `chanapp/` 的仓库根，不是包目录；使用其他虚拟环境时替换解释器路径。需要调用应用接口的诊断，先按 [离线 demo](README.md#离线-demo) 初始化独立实例。
-
 ## 测试
 
-在仓库根运行：
+在仓库根运行全量 Python 测试和前端逻辑测试：
 
 ```bash
 COLLECTOR_ENABLED=0 .venv/bin/python -m unittest discover -s chanapp/tests
 bash chanapp/scripts/test_js.sh
 ```
+
+第一条命令用 `COLLECTOR_ENABLED=0` 关闭后台采集；第二条用 Node.js 运行前端逻辑测试。CI 会运行这两项和浏览器验收。
 
 - 修缺陷时附一个在修复前失败、修复后通过的测试。
 - 测试不访问外网；provider 单测用 `chanapp/tests/fixtures/` 下的录制数据。
@@ -48,3 +41,14 @@ bash chanapp/scripts/test_js.sh
 - 新增依赖请在 PR 里说明理由。
 
 提交的贡献按本仓库的 [MIT 许可证](LICENSE) 发布。
+
+## 运行临时诊断脚本
+
+直接运行 `python /path/to/probe.py` 时，Python 把脚本所在目录加入导入路径；切到仓库根并不会自动让该脚本找到 `chanapp`。项目安装步骤只安装依赖。运行仓库外或 `tmp/` 中的脚本时，在仓库根为这一次调用指定包的父目录：
+
+```bash
+PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" COLLECTOR_ENABLED=0 \
+  .venv/bin/python /path/to/probe.py
+```
+
+`PYTHONPATH` 指向含有 `chanapp/` 的仓库根，不是包目录；使用其他虚拟环境时替换解释器路径。需要调用应用接口的诊断，先按 [离线 demo](README.md#离线-demo) 初始化独立实例。

@@ -143,8 +143,9 @@ demo 不调用在线来源，分钟粒度只按导入可用的粒度校验，不
 ```bash
 export MAIRUI_LICENCE='<your-licence>'
 export LONGBRIDGE_APP_KEY='<your-app-key>' LONGBRIDGE_APP_SECRET='<your-app-secret>' LONGBRIDGE_ACCESS_TOKEN='<your-access-token>'
-export LLM_API_KEY='<your-llm-key>'
 ```
+
+AI 分析是可选功能。需要时另设 `LLM_API_KEY`；启动真实模式不需要这个变量。
 
 ## 例子
 
@@ -154,11 +155,29 @@ export LLM_API_KEY='<your-llm-key>'
 {"mode": "demo", "markets": {"CN": {"minute_fact_freq": null}}, "instance_dir": "."}
 ```
 
-真实模式实例，A 股分钟事实改为 5 分，其余取默认（需要上文「来源凭据」里两个默认来源的全部变量）：
+### 真实模式实例
 
-```json
-{"mode": "real", "markets": {"CN": {"minute_fact_freq": "m5"}}, "instance_dir": "."}
+这个实例把 A 股分钟事实设为 5 分，其余取默认值。A 股使用 `mairui`，港股使用 `longbridge`。
+
+创建实例目录：
+
+```bash
+mkdir -p .cache/real
 ```
+
+保存实例配置：
+
+```bash
+cat > .cache/real/instance.json <<'EOF'
+{"mode": "real", "markets": {"CN": {"minute_fact_freq": "m5"}}, "instance_dir": "."}
+EOF
+```
+
+启动前，按 [来源凭据](#来源凭据) 设置两个市场所需的全部凭据。无需设置 `LLM_API_KEY`，除非要使用 AI 分析。
+
+凭据设置完成后，按 [运维 · 启动](operations.md#启动) 启动这个实例。
+
+### 自定义来源实例
 
 接入自己的来源后，在 `source` 里写它注册的名称即可，见 [数据契约 · 接入其他在线来源](data-contract.md#接入其他在线来源)：
 

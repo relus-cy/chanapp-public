@@ -153,13 +153,27 @@ UTF-8 CSV（允许 BOM），逗号分隔，首行表头恰好是下面 12 列（
 
 ### 例子：导入并查看
 
-下面的数据取自随仓库发布的 demo 样本（中际旭创 `sz300308` 与上证指数 2026-09-14 至 09-18 的日线，以及中际旭创 09-18 由 5 分线聚合成的 16 根 15 分线）。先建一个独立的 demo 实例，A 股分钟事实粒度设为 m15：
+如果端口 8899 上仍有 demo 服务运行，先在它的终端按 `Ctrl+C` 停止服务。确认当前终端没有设置 `CHANAPP_CACHE_DIR`、`WATCHLIST_PATH`、`VIEW_LOG_PATH`、`ANALYSIS_CACHE_DIR` 路径覆盖，避免读写其他实例。路径规则见 [配置 · 实例目录与数据路径](configuration.md#实例目录与数据路径)。
+
+下面的数据取自随仓库发布的 demo 样本。它包含中际旭创 `sz300308` 与上证指数 2026-09-14 至 09-18 的日线，以及中际旭创 09-18 的 16 根 15 分线。15 分线由样本的 5 分线聚合。
+
+创建独立的 demo 实例目录：
 
 ```bash
 mkdir -p .cache/csv
+```
+
+保存实例配置。A 股分钟事实粒度设为 `m15`：
+
+```bash
 cat > .cache/csv/instance.json <<'EOF'
 {"mode": "demo", "markets": {"CN": {"minute_fact_freq": "m15"}}, "instance_dir": "."}
 EOF
+```
+
+保存示例 CSV：
+
+```bash
 cat > .cache/csv/example.csv <<'EOF'
 code,freq,dt,open,high,low,close,volume,volume_unit,amount,pc,suspended
 sh000001,day,2026-09-14,3867.02,3895.51,3867.02,3885.33,458888916.0,lot,779281246497.0,3888.11,0
@@ -189,6 +203,11 @@ sz300308,m15,2026-09-18 14:30,924.91,926.02,921.58,925.98,6106.0,lot,564148910.0
 sz300308,m15,2026-09-18 14:45,925.78,928.78,923.63,926.13,8375.0,lot,775953943.0,,0
 sz300308,m15,2026-09-18 15:00,926.1,927.45,925.92,926.43,14825.0,lot,1373672842.0,,0
 EOF
+```
+
+导入 CSV：
+
+```bash
 CHANAPP_INSTANCE_CONFIG=.cache/csv/instance.json .venv/bin/python -m chanapp.engine.kline.ingest .cache/csv/example.csv
 ```
 
@@ -210,7 +229,25 @@ CHANAPP_INSTANCE_CONFIG=.cache/csv/instance.json .venv/bin/python -m chanapp.eng
 
 再运行一次，各项变为 `inserted: 0` 与全部 `skipped`。事实库写在 `.cache/csv/data/facts.sqlite`。
 
-用门面读取（脚本直接调用门面时，先进入 `configure_instance()`）：
+启动这个实例的服务：
+
+```bash
+CHANAPP_INSTANCE_CONFIG=.cache/csv/instance.json .venv/bin/python -m uvicorn chanapp.api.main:app --host 127.0.0.1 --port 8899
+```
+
+在浏览器打开 <http://127.0.0.1:8899/>。
+
+在页面中搜索 `sz300308`，打开中际旭创的图表。日线有 5 根，历史截止于 2026-09-18。30 分线有 8 根，60 分线有 4 根。
+
+如需检查 HTTP 返回值，另开一个终端执行：
+
+```bash
+curl -s 'http://127.0.0.1:8899/api/chart?code=sz300308&freq=m60&adjust=raw'
+```
+
+#### Python 接口示例
+
+完成上面的 CSV 导入后，可以另开一个终端运行下面的脚本。脚本直接调用门面时，先进入 `configure_instance()`：
 
 ```bash
 CHANAPP_INSTANCE_CONFIG=.cache/csv/instance.json .venv/bin/python - <<'EOF'
@@ -241,12 +278,7 @@ EOF
 TokenMismatch True
 ```
 
-成交量 295,055 手读出为 29,505,500 股；16 根 15 分线合成 8 根 30 分线（经 HTTP 读 60 分为 4 根）。也可以用这份配置启动应用，在页面里查看：
-
-```bash
-CHANAPP_INSTANCE_CONFIG=.cache/csv/instance.json .venv/bin/python -m uvicorn chanapp.api.main:app --host 127.0.0.1 --port 8899
-curl -s 'http://127.0.0.1:8899/api/chart?code=sz300308&freq=m60&adjust=raw'
-```
+成交量 295,055 手读出为 29,505,500 股。16 根 15 分线合成 8 根 30 分线，经 HTTP 读 60 分为 4 根。
 
 ### 例子：被拒绝的文件
 
@@ -276,6 +308,10 @@ CHANAPP_INSTANCE_CONFIG=.cache/csv/instance.json .venv/bin/python -m chanapp.eng
 退出码为 1。第 3 行单位 `hand` 不合法，第 4 行最高价低于收盘价，第 5 行 09:50 不在 15 分钟槽位上；第 2 行本身合格，也随整份文件一起不写入。
 
 ### 随包 demo 的初始化
+
+随包样本在 `chanapp/samples/demo/`。它包含中际旭创 `sz300308` 和上证指数 `sh000001`，覆盖 2025-09-24 至 2026-09-24。每个标的有 243 根日线和 11,664 根 5 分线。
+
+[`manifest.json`](../chanapp/samples/demo/manifest.json) 记录输入语义、覆盖范围和各文件的 SHA-256。
 
 `python -m chanapp.engine.kline.seed_demo DIR` 先按 `chanapp/samples/demo/manifest.json` 核对样本的字节数与 SHA-256，再经同一导入入口写入事实库，并在同一写者锁内写入交易日历与标的名称。它只接受空目录或已有同一份 demo 配置的目录，拒绝目录内的符号链接，要求先清除 `CHANAPP_INSTANCE_CONFIG`、`CHANAPP_CACHE_DIR`、`WATCHLIST_PATH`、`VIEW_LOG_PATH`、`ANALYSIS_CACHE_DIR`。重复执行不新增行情行、不改令牌、不覆盖个人自选与周期偏好。
 
