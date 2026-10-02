@@ -25,7 +25,7 @@ class TestApiStatus(unittest.TestCase):
 
 class TestApiVersion(unittest.TestCase):
     def test_openapi_reports_package_version(self):
-        self.assertEqual(TestClient(main.app).get("/openapi.json").json()["info"]["version"], "0.7.17")
+        self.assertEqual(TestClient(main.app).get("/openapi.json").json()["info"]["version"], "0.7.18")
 
 
 if __name__ == "__main__":
