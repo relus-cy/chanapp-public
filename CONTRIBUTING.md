@@ -17,6 +17,17 @@ git config core.hooksPath chanapp/scripts/git-hooks
 - `commit-msg`：提交信息须符合 [Conventional Commits](https://www.conventionalcommits.org/)，如 `fix(kline): 修正港股午休标签`；可用类型见脚本里的 `TYPES`。
 - `pre-commit` 与 `commit-msg`：安装了 [gitleaks](https://github.com/gitleaks/gitleaks) 时扫描暂存内容和提交信息，命中凭据或本机路径即拒绝提交；规则在仓库根 `.gitleaks.toml`，CI 也会用同一份配置扫描。
 
+### 运行临时诊断脚本
+
+直接运行 `python /path/to/probe.py` 时，Python 把脚本所在目录加入导入路径；切到仓库根并不会自动让该脚本找到 `chanapp`。项目安装步骤只安装依赖。运行仓库外或 `tmp/` 中的脚本时，在仓库根为这一次调用指定包的父目录：
+
+```bash
+PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" COLLECTOR_ENABLED=0 \
+  .venv/bin/python /path/to/probe.py
+```
+
+`PYTHONPATH` 指向含有 `chanapp/` 的仓库根，不是包目录；使用其他虚拟环境时替换解释器路径。需要调用应用接口的诊断，先按 [离线 demo](README.md#离线-demo) 初始化独立实例。
+
 ## 测试
 
 在仓库根运行：
