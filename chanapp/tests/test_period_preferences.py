@@ -16,7 +16,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from chanapp.api.main import app
 from chanapp.engine import data
-from chanapp.engine.kline.providers.registry import REGISTRY
+from chanapp.engine.kline.providers.catalog import REGISTRY
 
 
 class PeriodPreferencesTests(unittest.TestCase):

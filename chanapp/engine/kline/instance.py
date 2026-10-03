@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from chanapp.engine.kline import config
-from chanapp.engine.kline.providers.registry import REGISTRY
+from chanapp.engine.kline.providers.catalog import REGISTRY
 
 log = logging.getLogger(__name__)
 

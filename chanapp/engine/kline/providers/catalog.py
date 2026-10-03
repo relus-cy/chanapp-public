@@ -1,21 +1,42 @@
-"""在线来源安装清单：注册各来源的能力与凭据名，并给出默认来源绑定。"""
+"""在线来源安装清单：注册各来源的能力与凭据名，并给出默认来源绑定。
 
-def source_specs(ProviderSpec):
-    return {
-        "mairui": ProviderSpec("chanapp.engine.kline.providers.mairui", "MairuiProvider", "CN",
-                               ("stock", "index"), ("m5", "m15"), calendar=True, preopen=True,
-                               credentials=("MAIRUI_LICENCE",), budgeted=True),
-        "longbridge": ProviderSpec("chanapp.engine.kline.providers.longbridge", "LongbridgeProvider", "HK",
-                                   ("stock",), ("m30",), calendar=True, vendor_qfq=True,
-                                   credentials=("LONGBRIDGE_APP_KEY", "LONGBRIDGE_APP_SECRET",
-                                                "LONGBRIDGE_ACCESS_TOKEN")),
-        "baostock": ProviderSpec("chanapp.engine.kline.providers.baostock_raw", "BaostockRawProvider", "CN",
-                                 ("stock",), (), calendar=True),
-        "pytdx": ProviderSpec("chanapp.engine.kline.providers.pytdx_raw", "PytdxRawProvider", "CN",
-                              ("index",), ("m5", "m15")),
-        "yahoo": ProviderSpec("chanapp.engine.kline.providers.yahoo_raw", "YahooRawProvider", "HK",
-                              ("stock",), ("m30",)),
-    }
+静态来源注册：工厂与可部署能力；冷备的局部能力不冒充完整市场来源。
+
+minute_freqs=() 可声明没有分钟数据。m60 是合法产品规则，但当前没有
+完整市场来源实现它，故仍拒绝选择；不能把数学可聚合当作已实测能力。
+"""
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ProviderSpec:
+    module: str
+    factory: str
+    market: str
+    day_kinds: tuple[str, ...]
+    minute_freqs: tuple[str, ...]
+    calendar: bool = False
+    preopen: bool = False
+    vendor_qfq: bool = False
+    credentials: tuple[str, ...] = ()
+    budgeted: bool = False
+
+
+REGISTRY = {
+    "mairui": ProviderSpec("chanapp.engine.kline.providers.mairui", "MairuiProvider", "CN",
+                           ("stock", "index"), ("m5", "m15"), calendar=True, preopen=True,
+                           credentials=("MAIRUI_LICENCE",), budgeted=True),
+    "longbridge": ProviderSpec("chanapp.engine.kline.providers.longbridge", "LongbridgeProvider", "HK",
+                               ("stock",), ("m30",), calendar=True, vendor_qfq=True,
+                               credentials=("LONGBRIDGE_APP_KEY", "LONGBRIDGE_APP_SECRET",
+                                            "LONGBRIDGE_ACCESS_TOKEN")),
+    "baostock": ProviderSpec("chanapp.engine.kline.providers.baostock_raw", "BaostockRawProvider", "CN",
+                             ("stock",), (), calendar=True),
+    "pytdx": ProviderSpec("chanapp.engine.kline.providers.pytdx_raw", "PytdxRawProvider", "CN",
+                          ("index",), ("m5", "m15")),
+    "yahoo": ProviderSpec("chanapp.engine.kline.providers.yahoo_raw", "YahooRawProvider", "HK",
+                          ("stock",), ("m30",)),
+}
 
 BINDING_DEFAULTS = (
     ("CN", "stock", 'day_history', "mairui", "baostock", "P1"),

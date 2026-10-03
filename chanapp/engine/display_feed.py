@@ -75,7 +75,7 @@ import logging
 import time
 from pathlib import Path
 
-from .kline import http as _http
+from .feeds.throttle import throttle as _throttle_fn
 from . import cache_store, data_identity, swr
 from .kline.instance import is_demo
 
@@ -94,7 +94,7 @@ _F10_FIELDS = ("f124,f43,f48,f49,f50,f51,f52,f116,f117,f127,f129,f161,f164,f167,
 
 import functools
 
-_throttle = functools.partial(_http.throttle, THROTTLE_INTERVAL)  # 限速统一由本模块做
+_throttle = functools.partial(_throttle_fn, THROTTLE_INTERVAL)  # 限速统一由本模块做
 
 log = logging.getLogger(__name__)
 
@@ -110,12 +110,8 @@ class Push2Blocked(RuntimeError):
     pass
 
 
-_primary_backoff = swr.BackoffPolicy(BACKOFF_AFTER_FAILURES, BACKOFF_SECONDS,
-                                     scope=swr.Scope.GLOBAL, count_source=swr.CountSource.EMBEDDED,
-                                     never_count=(Push2Blocked,))
-_backup_backoff = swr.BackoffPolicy(BACKOFF_AFTER_FAILURES, BACKOFF_SECONDS,
-                                    scope=swr.Scope.GLOBAL, count_source=swr.CountSource.EMBEDDED,
-                                    never_count=(Push2Blocked,))
+_primary_backoff = swr.BackoffPolicy(BACKOFF_AFTER_FAILURES, BACKOFF_SECONDS)
+_backup_backoff = swr.BackoffPolicy(BACKOFF_AFTER_FAILURES, BACKOFF_SECONDS)
 
 
 def _reset_blocked() -> None:  # 测试辅助
@@ -129,12 +125,12 @@ def _check_blocked() -> None:
 
 
 def _record_success() -> None:
-    _primary_backoff.record_success(None)
+    _primary_backoff.record_success()
 
 
 def _record_failure() -> None:
     """连续 BACKOFF_AFTER_FAILURES 次失败才进入退避（单次抖动不退避）。"""
-    _primary_backoff.record_failure(None)
+    _primary_backoff.record_failure()
 
 
 def _sources_blocked() -> bool:
@@ -198,12 +194,11 @@ def _write_cache(name: str, data, requested_codes=None) -> str:
     identity = {"data": data, "source": "baseline_display", "normalization": "display-v1"}
     if requested_codes is not None:
         identity["requested_codes"] = sorted(set(requested_codes))
-    result = cache_store.publish_json(_cache_dir() / name,
-                             {"ts": time.time(), "data": data,
-                              **({"requested_codes": sorted(set(requested_codes))} if requested_codes is not None else {}),
-                              "source": "baseline_display", "normalization": "display-v1",
-                              "data_version": data_identity.version([], identity)})
-    return cache_store.require_published(result)
+    return cache_store.publish_json(_cache_dir() / name,
+                                    {"ts": time.time(), "data": data,
+                                     **({"requested_codes": sorted(set(requested_codes))} if requested_codes is not None else {}),
+                                     "source": "baseline_display", "normalization": "display-v1",
+                                     "data_version": data_identity.version([], identity)})
 
 
 def _fetch_quotes(codes: list[str]) -> dict:
@@ -255,12 +250,12 @@ def _call_source(fetch, *args, backup=False, usable=None):
         raise
     except Exception:
         if backup:
-            _backup_backoff.record_failure(None)
+            _backup_backoff.record_failure()
         else:
             _record_failure()
         raise
     if backup:
-        _backup_backoff.record_success(None)
+        _backup_backoff.record_success()
     else:
         _record_success()
     return result

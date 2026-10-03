@@ -19,7 +19,7 @@ for key in ("WATCHLIST_PATH", "VIEW_LOG_PATH", "CHANAPP_CACHE_DIR", "ANALYSIS_CA
     os.environ.pop(key, None)
 os.environ["COLLECTOR_ENABLED"] = "1"
 from chanapp.engine.kline import bindings, collector, instance, sessions
-from chanapp.engine.kline.providers.registry import REGISTRY
+from chanapp.engine.kline.providers.catalog import REGISTRY
 # The deterministic fixture implements every minute grid; declare that capability
 # so the real deployment validator can exercise a future m60-capable adapter.
 cn_source = instance.InstanceConfig().markets["CN"].source

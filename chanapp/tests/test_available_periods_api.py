@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from chanapp.api.main import app
 from chanapp.engine import data, period_preferences
 from chanapp.engine.kline import bindings, collector, sessions
-from chanapp.engine.kline.providers.registry import REGISTRY
+from chanapp.engine.kline.providers.catalog import REGISTRY
 from chanapp.tests.test_kline_collector import Clock, DAY_VOL, _list_since
 from chanapp.tests.test_kline_viewing_tracking import Recording, at
 

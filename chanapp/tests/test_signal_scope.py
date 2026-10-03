@@ -78,12 +78,12 @@ class SignalScopeTest(unittest.TestCase):
                       label='B2', dt='2026-01-01', price=10., side='buy', forming=False,
                       context=dict(origin='zero_center', origin_source='related_bsp1', zs_count=2),
                       strength=dict(metric='peak', value=None, state='unavailable'))
-        card = build_evidence([signal], {})[0]
+        card = build_evidence([signal])[0]
         self.assertIn('关联无中枢一类点', card['text'])
         self.assertIn('MACD同向柱峰值', card['text'])
         self.assertIn('无可用原生力度比', card['text'])
         self.assertEqual(card['detail']['context'], signal['context'])
         signal['strength'] = dict(metric='slope', value=0., state='weaker')
-        text = build_evidence([signal], {})[0]['text']
+        text = build_evidence([signal])[0]['text']
         self.assertIn('价格变化斜率', text)
         self.assertIn('力度比 0（减弱）', text)

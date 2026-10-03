@@ -15,7 +15,7 @@ from unittest.mock import patch
 from chanapp.engine import data
 from chanapp.engine.kline import bindings, collector, facts, instance
 from chanapp.engine.kline.providers.mairui import MairuiProvider
-from chanapp.engine.kline.providers.registry import REGISTRY
+from chanapp.engine.kline.providers.catalog import REGISTRY
 from chanapp.engine.kline.rows import FetchItem, RawDayRow, new_batch_id
 from chanapp.tests import cache_support
 

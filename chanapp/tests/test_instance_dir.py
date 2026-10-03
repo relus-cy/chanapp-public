@@ -184,7 +184,7 @@ class InstanceDirTests(unittest.TestCase):
 
     def test_author_production_instance_keeps_reading_and_writing_the_same_files(self):
         # 生产 unit 的环境变量（凭据值为占位，名字取自注册表）+ runbook 里的作者实例配置（不写 instance_dir）
-        from chanapp.engine.kline.providers.registry import REGISTRY
+        from chanapp.engine.kline.providers.catalog import REGISTRY
         app_dir, parent = self.tmp / "app", self.tmp
         watchlist = parent / "chanapp.watchlist.json"
         watchlist.write_text(json.dumps([{"code": "sz300308", "name": "中际旭创", "starred": True,

@@ -37,7 +37,7 @@ class InstanceConfigTests(unittest.TestCase):
     def test_registry_matches_provider_capabilities(self):
         # 能力与凭据名必须与 provider 实现一致，否则启动校验放行、首取才失败
         from chanapp.engine.kline.providers import longbridge, mairui
-        from chanapp.engine.kline.providers.registry import REGISTRY
+        from chanapp.engine.kline.providers.catalog import REGISTRY
         self.assertEqual(set(REGISTRY["mairui"].minute_freqs), set(mairui._MINUTE_PATH))
         self.assertEqual(REGISTRY["longbridge"].credentials, longbridge._CRED_NAMES)
         for name in REGISTRY["mairui"].credentials:

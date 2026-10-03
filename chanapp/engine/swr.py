@@ -6,23 +6,12 @@ TTL、wire 字段映射、日志措辞均留在消费方。
 """
 from __future__ import annotations
 
-import importlib.util
 import logging
 import threading
 import time
 import weakref
 from dataclasses import dataclass
-from enum import Enum
 from typing import Callable
-
-if importlib.util.find_spec("chanapp.engine.cache_store") is not None:
-    from chanapp.engine import cache_store
-    _Obsolete = cache_store.ObsoletePublication
-else:
-    # 公开演示不含版本化缓存层：ObsoletePublication 永远不会被抛出，占位类仅保证类型引用有效。
-    cache_store = None
-    class _Obsolete(Exception):
-        pass
 
 log = logging.getLogger(__name__)
 
@@ -39,75 +28,37 @@ class SwrIO:
     sync_fetch: Callable[[], dict]                    # 抓取+落盘+superseded 回读；失败抛异常
 
 
-class Scope(Enum):
-    PER_KEY = "per-key"
-    GLOBAL = "global"
-
-
-class CountSource(Enum):
-    BACKGROUND_ONLY = "background"  # 仅后台线程失败计数
-    UNIFIED = "unified"             # 冷路径与后台同语义计数
-    EMBEDDED = "embedded"           # 内核从不计数：计数嵌在消费方 fetch 内（显示层主源/备用源）
-
-
-_GLOBAL_KEY = ("__global__",)
-
-
 class BackoffPolicy:
-    """连败退避状态机：after_failures 次连败冷却 seconds 秒（单次抖动不冷却）。
+    """连败退避状态机：after_failures 次连败冷却 seconds 秒（单次抖动不冷却）。"""
 
-    PER_KEY：状态按 key 存表，表长 ≥512 时记录失败前全清；GLOBAL：单标量（key 忽略）。
-    ObsoletePublication 与 never_count 异常永不计数。"""
-
-    def __init__(self, after_failures: int, seconds: float, *,
-                 scope: Scope, count_source: CountSource,
-                 never_count: tuple = ()):
+    def __init__(self, after_failures: int, seconds: float):
         self.after_failures = after_failures
         self.seconds = seconds
-        self.scope = scope
-        self.count_source = count_source
-        self.never_count = tuple(never_count) + (_Obsolete,)
-        self._failures: dict = {}
-        self._cool_until: dict = {}
+        self._failures = 0
+        self._cool_until = 0.0
         self._guard = threading.Lock()
 
-    def _resolve(self, key):
-        return _GLOBAL_KEY if self.scope is Scope.GLOBAL else key
+    def blocked(self) -> bool:
+        return time.monotonic() < self._cool_until
 
-    def blocked(self, key=None) -> bool:
-        return time.monotonic() < self._cool_until.get(self._resolve(key), 0.0)
+    def failure_count(self) -> int:  # 测试内省
+        return self._failures
 
-    def failure_count(self, key=None) -> int:  # 测试内省
-        return self._failures.get(self._resolve(key), 0)
-
-    def record_success(self, key) -> None:
-        resolved = self._resolve(key)
+    def record_success(self) -> None:
         with self._guard:
-            self._failures.pop(resolved, None)
-            self._cool_until.pop(resolved, None)
+            self._failures = 0
+            self._cool_until = 0.0
 
-    def record_failure(self, key, exc: BaseException | None = None) -> None:
-        if exc is not None and isinstance(exc, self.never_count):
-            return
-        resolved = self._resolve(key)
+    def record_failure(self) -> None:
         with self._guard:
-            if self.scope is not Scope.GLOBAL and len(self._failures) >= 512:
-                # Backoff is advisory; bound the table instead of tracking every key forever.
-                self._failures.clear()
-                self._cool_until.clear()
-            n = self._failures.get(resolved, 0) + 1
-            self._failures[resolved] = n
-            if n >= self.after_failures:
-                self._cool_until[resolved] = time.monotonic() + self.seconds
+            self._failures += 1
+            if self._failures >= self.after_failures:
+                self._cool_until = time.monotonic() + self.seconds
 
     def reset(self) -> None:  # 测试辅助
         with self._guard:
-            self._failures.clear()
-            self._cool_until.clear()
-
-
-class RefreshBlocked(RuntimeError):
-    """raise_when_blocked 下退避中进入同步路径时抛出（不计失败）。"""
+            self._failures = 0
+            self._cool_until = 0.0
 
 
 @dataclass
@@ -134,45 +85,24 @@ def _default_log_failure(key, exc):
     log.warning("后台刷新失败 %s", key, exc_info=True)
 
 
-def _refresh_in_background(key, ttl, io, policy,
-                           on_refreshed, log_failure, log_success):
+def _refresh_in_background(key, ttl, io, log_failure):
     """后台刷新：与冷路径同一把 per-key 锁、同一份 sync_fetch；锁内双检提前
-    return 未发请求，不计数。"""
+    return 未发请求。"""
     try:
         with _lock_for(key):
             current = io.read()
             if current is not None and (time.time() - current[1]) <= ttl:
                 return  # 等锁期间已被刷新（首冷/另一后台），无需重复抓取
             io.sync_fetch()
-        if policy is not None and policy.count_source is not CountSource.EMBEDDED:
-            policy.record_success(key)
-        if log_success is not None:
-            log_success(key)
-    except _Obsolete:
-        return
     except Exception as exc:
-        if policy is not None and policy.count_source is not CountSource.EMBEDDED:
-            policy.record_failure(key, exc)
         (log_failure or _default_log_failure)(key, exc)
-        return
-    if on_refreshed is not None:
-        try:
-            current = io.read()
-            if current is not None:
-                on_refreshed(key, current[0])
-        except Exception:
-            log.warning("刷新后回调失败 %s", key, exc_info=True)
 
 
-def _trigger(key, ttl, io, policy, should_trigger,
-             on_refreshed, log_failure, log_success, domain):
+def _trigger(key, ttl, io, should_trigger, log_failure, domain):
     """过期缓存的后台异步刷新：同 key 同时只允许一个在飞（防踩踏）。
 
-    已完成线程在下次触发时回收；连败冷却/自定义谓词抑制时不起线程。"""
-    if should_trigger is not None:
-        if not should_trigger(key):
-            return
-    elif policy is not None and policy.blocked(key):
+    已完成线程在下次触发时回收；自定义谓词抑制时不起线程。"""
+    if should_trigger is not None and not should_trigger(key):
         return
     with _inflight_guard:
         for old, thread in list(_inflight.items()):
@@ -182,8 +112,7 @@ def _trigger(key, ttl, io, policy, should_trigger,
         if t is not None and t.is_alive():
             return
         def refresh():
-            _refresh_in_background(key, ttl, io, policy,
-                                   on_refreshed, log_failure, log_success)
+            _refresh_in_background(key, ttl, io, log_failure)
 
         t = threading.Thread(target=refresh,
                              name=f"swr-refresh-{domain or key[-1]}", daemon=True)
@@ -192,15 +121,11 @@ def _trigger(key, ttl, io, policy, should_trigger,
 
 
 def serve(key, ttl: float, io: SwrIO, *,
-          policy: BackoffPolicy | None = None,
           hit_when: Callable[[dict, float], bool] | None = None,
           require_fresh: bool = False,
           serve_stale_on_cold_failure: bool = False,
-          raise_when_blocked: bool = False,
           should_trigger: Callable[[tuple], bool] | None = None,
-          on_refreshed: Callable[[tuple, dict], None] | None = None,
           log_failure: Callable[[tuple, BaseException], None] | None = None,
-          log_success: Callable[[tuple], None] | None = None,
           domain: str = "") -> ServeResult:
     """三分支：TTL 内命中直返；过期回旧 + 触发后台刷新；仅无缓存同步抓取（首冷）。
 
@@ -220,26 +145,17 @@ def serve(key, ttl: float, io: SwrIO, *,
         if is_hit(payload, written_at):
             return ServeResult(payload, written_at, False, "hit")
     if payload is not None and not require_fresh and age > ttl:
-        _trigger(key, ttl, io, policy, should_trigger,
-                 on_refreshed, log_failure, log_success, domain)
+        _trigger(key, ttl, io, should_trigger, log_failure, domain)
         return ServeResult(payload, written_at, True, "stale")
     with _lock_for(key):
         if not require_fresh:
             recheck = io.read()
             if recheck is not None and is_hit(recheck[0], recheck[1]):
                 return ServeResult(recheck[0], recheck[1], False, "hit")
-        if raise_when_blocked and policy is not None and policy.blocked(key):
-            raise RefreshBlocked(f"swr 退避中（{domain or key}）")
         try:
             fresh_payload = io.sync_fetch()
-        except _Obsolete:
-            raise
-        except Exception as exc:
-            if policy is not None and policy.count_source is CountSource.UNIFIED:
-                policy.record_failure(key, exc)
+        except Exception:
             if serve_stale_on_cold_failure and payload is not None and not require_fresh:
                 return ServeResult(payload, written_at, age > ttl, "stale")
             raise
-        if policy is not None and policy.count_source is CountSource.UNIFIED:
-            policy.record_success(key)
     return ServeResult(fresh_payload, time.time(), False, "miss")

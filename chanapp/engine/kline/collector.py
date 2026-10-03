@@ -69,7 +69,7 @@ from chanapp.engine.kline import bindings, calendar, config, facts, hk_vendor_qf
 from chanapp.engine.kline.providers.raw import (ProviderConnectionError, ProviderError,  # noqa: F401
                                                 ProviderRangeError, ProviderServerError, ProviderUnsupported)
 from chanapp.engine.kline.rows import FetchItem, InstrumentRow, kind_of, market_of
-from chanapp.engine.kline.providers.registry import REGISTRY
+from chanapp.engine.kline.providers.catalog import REGISTRY
 
 log = logging.getLogger(__name__)
 

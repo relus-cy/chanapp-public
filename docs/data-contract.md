@@ -326,7 +326,7 @@ adapter 只负责取数、结构检查、单位与标签归一，输出上文同
 再接入一个来源需要两处改动：
 
 1. **provider 模块**（例如 `chanapp/engine/kline/providers/<名称>.py`）：模块级常量 `CONTRACT_VERSION`（字符串，改变取数口径时更新），以及一个无参构造的类。来源的验证结论按 `CONTRACT_VERSION` 与 `chanapp/tests/fixtures/kline_raw/<来源名>/` 下录制数据的哈希记录，两者任一变化，旧结论即失效。
-2. **在安装清单 `catalog.py` 里注册**：在 `source_specs(ProviderSpec)` 返回的字典里加一项。能力完整的来源注册后就能在实例配置的 `markets.<市场>.source` 里选用，选中后该市场的全部取数项都以它为主来源，`BINDING_DEFAULTS` 里登记的冷备保持不变。只有想改变产品默认来源，或要把新来源登记为某个取数项的冷备时，才需要改 `BINDING_DEFAULTS`。
+2. **在安装清单 `catalog.py` 里注册**：在 `REGISTRY` 字典里加一项。能力完整的来源注册后就能在实例配置的 `markets.<市场>.source` 里选用，选中后该市场的全部取数项都以它为主来源，`BINDING_DEFAULTS` 里登记的冷备保持不变。只有想改变产品默认来源，或要把新来源登记为某个取数项的冷备时，才需要改 `BINDING_DEFAULTS`。
 
 ### provider 方法
 
@@ -389,21 +389,20 @@ adapter 只负责取数、结构检查、单位与标签归一，输出上文同
 
 下面的骨架只演示接口形状：在已有来源之外注册一个 A 股来源和一个港股来源，所有取数都报「不支持」。它能让选用它们的真实模式通过启动校验，配合 CSV 导入使用；要持续更新数据，需要把方法换成真实取数。
 
-建议先在一个独立的实例目录里试装（例如下文的 `.cache/real/`），不要直接用于已有实例。只在 `source_specs` 里加项、不改 `BINDING_DEFAULTS` 时，产品默认来源不变，已有的 demo 与真实模式实例不受影响。
+建议先在一个独立的实例目录里试装（例如下文的 `.cache/real/`），不要直接用于已有实例。只在 `REGISTRY` 里加项、不改 `BINDING_DEFAULTS` 时，产品默认来源不变，已有的 demo 与真实模式实例不受影响。
 
-在 `chanapp/engine/kline/providers/catalog.py` 的 `source_specs` 字典里加两项（已有各项保持不变）：
+在 `chanapp/engine/kline/providers/catalog.py` 的 `REGISTRY` 字典里加两项（已有各项保持不变）：
 
 ```python
-def source_specs(ProviderSpec):
-    return {
-        # ……已有来源保持不变……
-        "example_cn": ProviderSpec("chanapp.engine.kline.providers.example", "ExampleCnProvider", "CN",
-                                   ("stock", "index"), ("m15",), calendar=True, preopen=True,
-                                   credentials=("EXAMPLE_CN_TOKEN",), budgeted=True),
-        "example_hk": ProviderSpec("chanapp.engine.kline.providers.example", "ExampleHkProvider", "HK",
-                                   ("stock",), ("m30",), calendar=True, vendor_qfq=True,
-                                   credentials=("EXAMPLE_HK_TOKEN",)),
-    }
+REGISTRY = {
+    # ……已有来源保持不变……
+    "example_cn": ProviderSpec("chanapp.engine.kline.providers.example", "ExampleCnProvider", "CN",
+                               ("stock", "index"), ("m15",), calendar=True, preopen=True,
+                               credentials=("EXAMPLE_CN_TOKEN",), budgeted=True),
+    "example_hk": ProviderSpec("chanapp.engine.kline.providers.example", "ExampleHkProvider", "HK",
+                               ("stock",), ("m30",), calendar=True, vendor_qfq=True,
+                               credentials=("EXAMPLE_HK_TOKEN",)),
+}
 ```
 
 新建 `chanapp/engine/kline/providers/example.py`：

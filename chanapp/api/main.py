@@ -32,12 +32,10 @@ GET /api/views → {recent: [{code, name, freq, adjust, first_viewed_at, last_vi
 demo 模式为 disabled，照常读取）。同一标的重拉在途时读取只读现有快照（不等它的锁），
 没有可服务快照时 503「正在更新」。
 
-联想搜索：GET /api/search?q=（外部联想接口，返回 [{code,name,type}]，仅 sh/sz/hk；
-适配层未安装时 503）。
+联想搜索：GET /api/search?q=（外部联想接口，返回 [{code,name,type}]，仅 sh/sz/hk）。
 
 行情显示层：GET /api/quotes（自选股快照）、GET /api/quote?code=（单代码报价：搜索查看的非自选代码；A 股同自选行
-取事实派生价格，港股走显示层单代码缓存、不覆盖自选缓存）、GET /api/f10?code=（F10+资金流+板块涨幅）；
-适配层未安装时 503。/api/quotes 的 A 股行只取门面 quote（K 线事实派生）的 price、pct、limit_up、
+取事实派生价格，港股走显示层单代码缓存、不覆盖自选缓存）、GET /api/f10?code=（F10+资金流+板块涨幅）。/api/quotes 的 A 股行只取门面 quote（K 线事实派生）的 price、pct、limit_up、
 price_time、price_label（最新/昨收），事实缺失时价格为空并标 price_unavailable；港股行保持显示层值。缓存过期先回旧数据并后台异步刷新，仅首冷同步抓取；
 degraded=True 一律表示「本次回的是过期旧缓存」，此时 fetch_time 为旧缓存时间（数据年龄）。
 
@@ -78,7 +76,9 @@ from chanapp.engine import atomic_file  # noqa: E402
 from chanapp.engine import chart_payload as engine_chart_payload  # noqa: E402
 from chanapp.engine import data as engine_data  # noqa: E402
 from chanapp.engine import data_identity  # noqa: E402
+from chanapp.engine import display_feed as engine_feed  # noqa: E402
 from chanapp.engine import instance_paths, period_preferences  # noqa: E402
+from chanapp.engine import search as engine_search  # noqa: E402
 from chanapp.engine import session as engine_session  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -91,17 +91,6 @@ if not _chanapp_log.handlers:
     _chanapp_log.addHandler(_h)
 _chanapp_log.setLevel(logging.INFO)
 _chanapp_log.propagate = False  # root 日后若也配 handler，避免日志双写
-
-# 行情显示层 / 联想搜索为可选数据适配层：
-# 未安装时对应路由返回 503，K 线/结构/信号主链路不受影响。
-try:  # noqa: E402
-    from chanapp.engine import display_feed as engine_feed
-except ImportError:  # 适配层未安装
-    engine_feed = None
-try:  # noqa: E402
-    from chanapp.engine import search as engine_search
-except ImportError:  # 适配层未安装
-    engine_search = None
 
 
 @asynccontextmanager
@@ -343,10 +332,6 @@ def api_session():
 @app.get("/api/search")
 def api_search(q: str = Query("")) -> list[dict]:
     """外部联想接口：返回 [{code, name, type}]，仅 sh/sz/hk。空 q 返回 []。"""
-    if engine_data.is_demo():
-        return engine_data.search_samples(q)
-    if engine_search is None:
-        raise HTTPException(status_code=503, detail="搜索适配层未安装")
     try:
         return engine_search.search(q)
     except Exception as e:  # 上游失败统一成 502
@@ -498,7 +483,7 @@ def set_tags(code: str, body: WatchTags) -> list[dict]:
         return _ordered(items)
 
 
-# ---------- 行情显示层（快照 / F10，适配层可选） ----------
+# ---------- 行情显示层（快照 / F10） ----------
 
 
 _FACT_QUOTE_KEYS = ("price", "pct", "limit_up", "price_time", "price_label", "stale")
@@ -532,8 +517,6 @@ def _with_fact_quotes(items: list[dict], display: dict) -> dict:
 
 @app.get("/api/quotes")
 def api_quotes():
-    if engine_feed is None and not engine_data.is_demo():
-        raise HTTPException(status_code=503, detail="行情快照适配层未安装")
     items = _read_watchlist_raw()
     try:
         codes = [it["code"] for it in items]
@@ -555,11 +538,8 @@ def api_quote(code: str = Query(..., pattern=r"^(sh|sz)\d{6}$|^hk\d{5}$")):
     if code.startswith(("sh", "sz")) or engine_data.is_demo():
         return {"code": code, "quote": _fact_quote_row({"code": code, "name": ""}, None, quote_fn),
                 "degraded": False}
-    get_quote = getattr(engine_feed, "get_quote", None)
-    if get_quote is None:
-        raise HTTPException(status_code=503, detail="行情快照适配层未安装")
     try:
-        r = get_quote(code)
+        r = engine_feed.get_quote(code)
     except Exception as e:  # 数据层错误统一成 502
         raise HTTPException(status_code=502, detail="报价暂不可用") from e
     return {"code": code, "quote": r["quotes"].get(code), "degraded": r["degraded"], "meta": r.get("meta", {})}
@@ -567,8 +547,6 @@ def api_quote(code: str = Query(..., pattern=r"^(sh|sz)\d{6}$|^hk\d{5}$")):
 
 @app.get("/api/f10")
 def api_f10(code: str = Query(..., pattern="^(sh|sz|hk)\\d+$")):
-    if engine_feed is None and not engine_data.is_demo():
-        raise HTTPException(status_code=503, detail="F10 适配层未安装")
     try:
         r = ({"f10": {}, "flow": {}, "industry_pct": None, "degraded": False,
               "ts": 0, "meta": {"mode": "demo"}} if engine_data.is_demo() else engine_feed.get_f10(code))

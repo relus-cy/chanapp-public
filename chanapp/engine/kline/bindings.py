@@ -18,7 +18,7 @@ from pathlib import Path
 
 from chanapp.engine.kline import facts, hk_vendor_qfq
 from chanapp.engine.kline.rows import FetchItem
-from chanapp.engine.kline.providers.registry import REGISTRY, BINDING_DEFAULTS
+from chanapp.engine.kline.providers.catalog import REGISTRY, BINDING_DEFAULTS
 
 _FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "kline_raw"
 VERDICTS = ("pending", "pass", "fail", "waived")

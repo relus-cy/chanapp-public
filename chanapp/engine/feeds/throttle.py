@@ -1,4 +1,4 @@
-"""显示层请求限速（display_feed 与 feeds/baseline_backup 共用）。
+"""显示层请求限速（display_feed、feeds/baseline_backup 与 search 共用）。
 
 K 线 raw provider 各自管理传输，不经过本模块。
 """

@@ -20,15 +20,8 @@ def dataset_version(dataset: dict) -> str:
         key: dataset.get(key, metadata.get(key)) for key in ("source", "fqf", "adjust")})
 
 
-def _identity(calculation_id: str | None) -> str:
-    if calculation_id is None:
-        from chanapp.engine.chanpy_profiles import profile_identity
-        return profile_identity()["calculation_id"]
-    return calculation_id
-
-
-def get(code: str, freq: str, data_version: str, calculation_id: str | None = None) -> dict | None:
-    key = (code, freq, data_version, _identity(calculation_id))
+def get(code: str, freq: str, data_version: str, calculation_id: str) -> dict | None:
+    key = (code, freq, data_version, calculation_id)
     with _LOCK:
         entry = _CACHE.get(key)
         if entry is not None:
@@ -37,8 +30,8 @@ def get(code: str, freq: str, data_version: str, calculation_id: str | None = No
 
 
 def put(code: str, freq: str, data_version: str,
-        structure: dict, sig: dict, evidence: list, calculation_id: str | None = None) -> None:
-    key = (code, freq, data_version, _identity(calculation_id))
+        structure: dict, sig: dict, evidence: list, calculation_id: str) -> None:
+    key = (code, freq, data_version, calculation_id)
     with _LOCK:
         _CACHE[key] = {"data_version": data_version, "structure": structure,
                        "sig": sig, "evidence": evidence}

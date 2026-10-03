@@ -2,7 +2,7 @@
 
 三类：spec §15 待定、须所有者确认（计划 B Q3）；已有 spec 依据；可逆的实现参数（实测后可调）。
 """
-from chanapp.engine.kline.providers.registry import REGISTRY
+from chanapp.engine.kline.providers.catalog import REGISTRY
 
 # spec §15 待定项，计划 B Q3 于 2026-09-28 由所有者确认（FINALIZE_DEADLINE 暂定，切换后首个交易日复核；
 # 2026-09-30 所有者把 A 股首个定稿时点改到 20:00，A 股截止随之后移，港股不变）

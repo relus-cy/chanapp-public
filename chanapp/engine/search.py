@@ -14,16 +14,18 @@ import urllib.parse
 import urllib.request
 
 from chanapp.engine import data as engine_data
+from chanapp.engine.feeds.throttle import throttle
 
 SMARTBOX_URL = "https://smartbox.gtimg.cn/s3/?v=2&q={q}&t=all"
 KEEP_MARKETS = ("sh", "sz", "hk")
+MIN_REQUEST_INTERVAL = 0.3
 
 _HINT_RE = re.compile(r'v_hint="([^"]*)"')
 _UESC_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
 
 
 def _fetch_bytes(url: str) -> bytes:
-    engine_data._throttle()
+    throttle(MIN_REQUEST_INTERVAL)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=10) as resp:
         return resp.read()

@@ -31,7 +31,7 @@ from fastapi.testclient import TestClient
 from chanapp.api.main import app
 from chanapp.engine import data as engine_data
 from chanapp.engine.kline import collector, facts, ingest
-from chanapp.engine.kline.providers.registry import REGISTRY
+from chanapp.engine.kline.providers.catalog import REGISTRY
 
 EXAMPLE = Path(__file__).parent / "fixtures" / "ingest" / "cn-example.csv"
 

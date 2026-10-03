@@ -21,7 +21,6 @@
   bars 元素 {dt, open, high, low, close, volume}，volume 恒为股。
 - 读连接按线程各开一条（只读事务），写入一律经采集器的单写者锁。
 - 导入时向 engine/session.py 注册交易日历钩子。
-- HTTP 请求间隔 >= 0.3 秒（_throttle，engine/search.py 调用）。
 """
 from __future__ import annotations
 
@@ -40,12 +39,9 @@ CACHE_DIR = instance_paths.resolve().cache_dir     # CHANAPP_CACHE_DIR，缺省�
 N_BARS = config.DEFAULT_WINDOW
 FREQS = views.PERIODS
 ADJUSTS = views.ADJUSTS
-MIN_REQUEST_INTERVAL = 0.3
 WINDOW_RETRY_S = 600          # 短窗口补取节流：新上市等确实没有更早数据的标的不每次请求都触发
 _BAR_KEYS = ("dt", "open", "high", "low", "close", "volume")
 
-_last_request_ts = 0.0
-_throttle_lock = threading.Lock()
 _local = threading.local()
 _clock = time.monotonic
 _window_attempts: dict = {}   # (code, freq) → (最近补窗口时刻, 周期偏好版本)
@@ -74,16 +70,6 @@ class TokenMismatch(Exception):
     def __init__(self, token: str):
         super().__init__("数据已更新")
         self.token = token
-
-
-def _throttle() -> None:
-    """全部请求带 0.3s 间隔限速（请求线程之间并发安全）。"""
-    global _last_request_ts
-    with _throttle_lock:
-        wait = MIN_REQUEST_INTERVAL - (time.monotonic() - _last_request_ts)
-        if wait > 0:
-            time.sleep(wait)
-        _last_request_ts = time.monotonic()
 
 
 def _reader():
@@ -290,7 +276,7 @@ def search_samples(q: str) -> list[dict]:
 
 
 def sample_quotes(codes):
-    """离线历史报价，公开包不依赖显示层 adapter。"""
+    """demo 模式的离线历史报价。"""
     quotes = {code: q for code in codes if (q := quote(code)) is not None}
     return {"quotes": quotes, "degraded": False, "ts": 0, "meta": {"mode": "demo"},
             "missing_codes": [code for code in codes if code not in quotes], "invalid_codes": []}

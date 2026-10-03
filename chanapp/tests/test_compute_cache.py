@@ -25,22 +25,22 @@ class TestComputeCacheUnit(unittest.TestCase):
         compute_cache.clear()
 
     def test_hit_and_miss(self):
-        compute_cache.put("sh000001", "day", "2026-08-25", {"bi": []}, {"signals": []}, [])
-        self.assertIsNotNone(compute_cache.get("sh000001", "day", "2026-08-25"))
-        self.assertIsNone(compute_cache.get("sh000001", "day", "2026-08-26"))  # 末bar 变化
-        self.assertIsNone(compute_cache.get("sh000001", "m30", "2026-08-25"))  # freq 不同
+        compute_cache.put("sh000001", "day", "2026-08-25", {"bi": []}, {"signals": []}, [], "calc-id")
+        self.assertIsNotNone(compute_cache.get("sh000001", "day", "2026-08-25", "calc-id"))
+        self.assertIsNone(compute_cache.get("sh000001", "day", "2026-08-26", "calc-id"))  # 末bar 变化
+        self.assertIsNone(compute_cache.get("sh000001", "m30", "2026-08-25", "calc-id"))  # freq 不同
 
     def test_late_put_preserves_new_content_version(self):
-        compute_cache.put('a', 'day', 'new', {'value': 2}, {}, [])
-        compute_cache.put('a', 'day', 'old', {'value': 1}, {}, [])
-        self.assertEqual(compute_cache.get('a', 'day', 'new')['structure'], {'value': 2})
-        self.assertEqual(compute_cache.get('a', 'day', 'old')['structure'], {'value': 1})
+        compute_cache.put('a', 'day', 'new', {'value': 2}, {}, [], "calc-id")
+        compute_cache.put('a', 'day', 'old', {'value': 1}, {}, [], "calc-id")
+        self.assertEqual(compute_cache.get('a', 'day', 'new', "calc-id")['structure'], {'value': 2})
+        self.assertEqual(compute_cache.get('a', 'day', 'old', "calc-id")['structure'], {'value': 1})
 
     def test_lru_eviction(self):
         for i in range(40):
-            compute_cache.put(f"code{i:03d}", "day", "d", {}, {}, [])
-        self.assertIsNone(compute_cache.get("code000", "day", "d"))
-        self.assertIsNotNone(compute_cache.get("code039", "day", "d"))
+            compute_cache.put(f"code{i:03d}", "day", "d", {}, {}, [], "calc-id")
+        self.assertIsNone(compute_cache.get("code000", "day", "d", "calc-id"))
+        self.assertIsNotNone(compute_cache.get("code039", "day", "d", "calc-id"))
 
 
 class TestChartAnalysisReuse(unittest.TestCase):

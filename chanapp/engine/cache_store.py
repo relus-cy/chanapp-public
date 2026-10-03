@@ -1,7 +1,6 @@
 """Atomic display-cache publication: newest data wins, damaged files are quarantined."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import fcntl
 import json
 import logging
@@ -16,21 +15,8 @@ from chanapp.engine import atomic_file
 log = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class PublishResult:
-    status: str  # 'published' | 'superseded'
-    reason: str = ''
-
-    def __bool__(self):
-        return self.status == 'published'
-
-
 class CachePublicationError(RuntimeError):
     pass
-
-
-class ObsoletePublication(CachePublicationError):
-    """A finished old task must not retry or count a refresh failure."""
 
 
 def valid_timestamp(stamp):
@@ -72,13 +58,6 @@ def publish_json(path, payload):
             _quarantine(path)
             old = {}
         if old and old['ts'] > payload['ts']:
-            return PublishResult('superseded', 'newer_data')
+            return 'superseded'
         atomic_json(path, payload)
-    return PublishResult('published')
-
-
-def require_published(result):
-    """Return the publication status ('published' or 'superseded')."""
-    if result.status not in ('published', 'superseded'):
-        raise CachePublicationError(f'unexpected cache publication status: {result.status}')
-    return result.status
+    return 'published'

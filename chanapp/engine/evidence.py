@@ -1,7 +1,7 @@
 """Explain only facts carried by native morphological points."""
 
 
-def build_evidence(signals: list[dict], structure: dict) -> list[dict]:
+def build_evidence(signals: list[dict]) -> list[dict]:
     cards = []
     for signal in signals:
         unit = '段' if signal['level'] == 'seg' else '笔'

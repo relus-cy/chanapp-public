@@ -121,4 +121,4 @@ def compute_analysis(bars: list[dict], freq: str = 'day', rule_profile: str = 's
     sig = dict(macd=deepcopy(structure['_native_macd']),
                signals=deepcopy(structure['_native_signals']),
                forming=next((deepcopy(b) for b in reversed(structure['bi']) if b['forming']), None))
-    return dict(structure=structure, sig=sig, evidence=build_evidence(sig['signals'], structure))
+    return dict(structure=structure, sig=sig, evidence=build_evidence(sig['signals']))

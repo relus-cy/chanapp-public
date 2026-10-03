@@ -81,7 +81,7 @@ class BaselineResilienceTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     feed.get_quotes(['sz000001'])
         self.assertEqual(feed._backup_backoff.failure_count(), 2)
-        feed._primary_backoff._cool_until.clear()
+        feed._primary_backoff._cool_until = 0.0
         with mock.patch.object(feed, '_fetch_quotes', return_value={'sz000001': self.quote(12, 'baseline_display')}), mock.patch.object(feed, '_backup_quotes') as backup:
             result = feed.get_quotes(['sz000001'])
         backup.assert_not_called()

@@ -1,10 +1,10 @@
-"""engine/swr 内核：三分支、防踩踏、退避策略矩阵、行为开关。"""
+"""engine/swr 内核：三分支、防踩踏、退避、行为开关。"""
 import threading
 import time
 import unittest
 from unittest import mock
 
-from chanapp.engine import cache_store, swr
+from chanapp.engine import swr
 
 
 def _key(name="k1"):
@@ -13,45 +13,19 @@ def _key(name="k1"):
 
 class TestBackoffPolicy(unittest.TestCase):
     def test_single_failure_no_cooldown(self):
-        p = swr.BackoffPolicy(2, 300, scope=swr.Scope.PER_KEY, count_source=swr.CountSource.UNIFIED)
-        p.record_failure(_key(), RuntimeError("x"))
-        self.assertFalse(p.blocked(_key()))
-        self.assertEqual(p.failure_count(_key()), 1)
+        p = swr.BackoffPolicy(2, 300)
+        p.record_failure()
+        self.assertFalse(p.blocked())
+        self.assertEqual(p.failure_count(), 1)
 
     def test_consecutive_failures_cooldown_and_success_reset(self):
-        p = swr.BackoffPolicy(2, 300, scope=swr.Scope.PER_KEY, count_source=swr.CountSource.UNIFIED)
+        p = swr.BackoffPolicy(2, 300)
         for _ in range(2):
-            p.record_failure(_key(), RuntimeError("x"))
-        self.assertTrue(p.blocked(_key()))
-        p.record_success(_key())
-        self.assertFalse(p.blocked(_key()))
-        self.assertEqual(p.failure_count(_key()), 0)
-
-    def test_global_scope_ignores_key(self):
-        p = swr.BackoffPolicy(2, 30, scope=swr.Scope.GLOBAL, count_source=swr.CountSource.EMBEDDED)
-        p.record_failure(None, RuntimeError("x"))
-        self.assertEqual(p.failure_count(), 1)
-        self.assertEqual(p.failure_count(_key("other")), 1)
-
-    def test_per_key_failures_do_not_evict_other_keys(self):
-        """按 key 计数：一个 key 的失败不清掉另一个 key 的连败与冷却。"""
-        p = swr.BackoffPolicy(2, 300, scope=swr.Scope.PER_KEY, count_source=swr.CountSource.UNIFIED)
-        for _ in range(2):
-            p.record_failure(_key("a"), RuntimeError("x"))
-        p.record_failure(_key("b"), RuntimeError("x"))
-        self.assertTrue(p.blocked(_key("a")))
-        self.assertEqual(p.failure_count(_key("b")), 1)
-
-    def test_table_bounded(self):
-        p = swr.BackoffPolicy(2, 300, scope=swr.Scope.PER_KEY, count_source=swr.CountSource.UNIFIED)
-        for n in range(600):
-            p.record_failure(_key(f"k{n}"), RuntimeError("x"))
-        self.assertLessEqual(len(p._failures), 512)
-
-    def test_never_count_exception(self):
-        p = swr.BackoffPolicy(2, 300, scope=swr.Scope.PER_KEY, count_source=swr.CountSource.UNIFIED)
-        p.record_failure(_key(), cache_store.ObsoletePublication("old"))
-        self.assertEqual(p.failure_count(_key()), 0)
+            p.record_failure()
+        self.assertTrue(p.blocked())
+        p.record_success()
+        self.assertFalse(p.blocked())
+        self.assertEqual(p.failure_count(), 0)
 
 
 class TestServe(unittest.TestCase):
@@ -141,58 +115,10 @@ class TestServe(unittest.TestCase):
                       hit_when=lambda p, ts: False)
         self.assertEqual((r.cache, r.stale), ("stale", False))  # 年龄新鲜 → stale=False
 
-    def test_obsolete_reraised_even_with_stale_fallback(self):
-        """spec §3：ObsoletePublication 冷路径原样抛，不被 serve_stale_on_cold_failure 兜底。"""
-        io, _ = self._io(payload={"data": "old"}, ts=time.time(),
-                         fetch=lambda: (_ for _ in ()).throw(cache_store.ObsoletePublication("old")))
-        with self.assertRaises(cache_store.ObsoletePublication):
-            swr.serve(_key(), 60, io, serve_stale_on_cold_failure=True,
-                      hit_when=lambda p, ts: False)
-
     def test_cold_failure_propagates_without_fallback(self):
         io, _ = self._io(payload=None, fetch=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
         with self.assertRaises(RuntimeError):
             swr.serve(_key(), 60, io)
-
-    def test_raise_when_blocked_not_counted(self):
-        p = swr.BackoffPolicy(2, 300, scope=swr.Scope.PER_KEY, count_source=swr.CountSource.UNIFIED)
-        for _ in range(2):
-            p.record_failure(_key(), RuntimeError("x"))
-        io, _ = self._io(payload=None)
-        with self.assertRaises(swr.RefreshBlocked):
-            swr.serve(_key(), 60, io, policy=p, raise_when_blocked=True)
-        self.assertEqual(p.failure_count(_key()), 2)  # 退避中不计数
-
-    def test_unified_counts_cold_failure_background_only_does_not(self):
-        io, _ = self._io(payload=None, fetch=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-        pu = swr.BackoffPolicy(2, 300, scope=swr.Scope.PER_KEY, count_source=swr.CountSource.UNIFIED)
-        with self.assertRaises(RuntimeError):
-            swr.serve(_key("u"), 60, io, policy=pu)
-        self.assertEqual(pu.failure_count(_key("u")), 1)
-        pb = swr.BackoffPolicy(2, 300, scope=swr.Scope.PER_KEY, count_source=swr.CountSource.BACKGROUND_ONLY)
-        with self.assertRaises(RuntimeError):
-            swr.serve(_key("b"), 60, io, policy=pb)
-        self.assertEqual(pb.failure_count(_key("b")), 0)
-
-    def test_background_failure_counted_and_obsolete_silent(self):
-        p = swr.BackoffPolicy(2, 300, scope=swr.Scope.PER_KEY, count_source=swr.CountSource.BACKGROUND_ONLY)
-        io, _ = self._io(payload={"data": "old"}, ts=time.time() - 120,
-                         fetch=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-        swr.serve(_key(), 60, io, policy=p, domain="k1")
-        swr._inflight[_key()].join(5)
-        self.assertEqual(p.failure_count(_key()), 1)
-        io2, _ = self._io(payload={"data": "old"}, ts=time.time() - 120,
-                          fetch=lambda: (_ for _ in ()).throw(cache_store.ObsoletePublication("old")))
-        swr.serve(_key("obs"), 60, io2, policy=p, domain="obs")
-        swr._inflight[_key("obs")].join(5)
-        self.assertEqual(p.failure_count(_key("obs")), 0)
-
-    def test_on_refreshed_called_with_reread_payload(self):
-        seen = []
-        io, _ = self._io(payload={"data": "old"}, ts=time.time() - 120)
-        swr.serve(_key(), 60, io, on_refreshed=lambda key, payload: seen.append(payload), domain="k1")
-        swr._inflight[_key()].join(5)
-        self.assertEqual(seen, [{"data": "fresh"}])
 
     def test_trigger_suppressed_by_should_trigger(self):
         io, _ = self._io(payload={"data": "old"}, ts=time.time() - 120)
@@ -212,13 +138,6 @@ class TestLocks(unittest.TestCase):
         gc.collect()
         self.assertIs(swr._lock_for(_key("held")), held)
         self.assertNotIn(_key("f10_0"), swr._locks)
-
-
-class TestImportGuard(unittest.TestCase):
-    def test_obsolete_binds_real_cache_store(self):
-        """完整树（cache_store 存在）：_Obsolete 必须绑定真实异常，守卫不降级。"""
-        self.assertIs(swr._Obsolete, cache_store.ObsoletePublication)
-        self.assertIsNotNone(swr.cache_store)
 
 
 if __name__ == "__main__":

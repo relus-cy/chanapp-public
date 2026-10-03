@@ -1,4 +1,4 @@
-"""Private batch quote fallback. Prices/amounts retain each market's currency.
+"""Backup batch quote source. Prices/amounts retain each market's currency.
 
 Recorded 2026-09-09: mainland amount[37] is ten-thousand currency units;
 HK amount[37] is currency units. Market caps[44:46] use 100 million units.
@@ -12,7 +12,7 @@ import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from ..kline import http
+from .throttle import throttle
 
 SOURCE = 'baseline_backup'
 _CODE = re.compile(r'(?:sh|sz)\d{6}|hk\d{5}')
@@ -81,7 +81,7 @@ def parse_quotes(text, codes):
 
 def _fetch_text(codes):
     # Source retry/backoff belongs to the display coordinator, once per source.
-    http.throttle(0.4)
+    throttle(0.4)
     request = urllib.request.Request('https://qt.gtimg.cn/q=' + ','.join(codes),
                                      headers={'User-Agent': 'Mozilla/5.0'})
     with urllib.request.urlopen(request, timeout=10) as response:
