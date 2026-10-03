@@ -657,7 +657,7 @@ class RefetchContractTests(Base):
         c = self.make()
         now = self.set_time(at("2026-09-28", 18))
         c.ensure_window(X, "m60", bars=40)
-        c.finalize([X], "2026-09-28", now)
+        c.finalize_due([X], "2026-09-28", now, calendar_known=True)
         self.provider.calls.clear()
         self.assertEqual(c.refetch_window(X, "m60", bars=40)["status"], "ok")
         self.assertTrue([call for call in self.calls(X, "day") if call[3] == "2026-09-28"], self.calls(X))
@@ -744,7 +744,7 @@ class RefetchTruthTests(Base):
         c = self.make()
         now = self.set_time(at("2026-09-28", 18))
         c.ensure_window(X, "m60", bars=40)
-        c.finalize([X], "2026-09-28", now)
+        c.finalize_due([X], "2026-09-28", now, calendar_known=True)
         self.provider.empty_on = "2026-09-28"
         res = c.refetch_window(X, "m60", bars=40)
         self.assertNotEqual(res["today"], "ok", res)

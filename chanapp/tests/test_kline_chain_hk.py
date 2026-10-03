@@ -57,7 +57,7 @@ class HKChainTests(unittest.TestCase):
             c.backfill_day(CODE)
             c.plan_minute_backfill(CODE)
             cls.drain = c.drain_gaps(max_requests=100)
-            cls.finalize = c.finalize([CODE], "2026-05-22", NOW)
+            cls.finalize = c.finalize_due([CODE], "2026-05-22", NOW, calendar_known=True)
             cls.vendor = c.refresh_vendor_qfq(CODE, NOW, closed_through="2026-05-22")
         cls.conn = facts.open_facts(Path(cls.tmp.name) / facts.DB_NAME)
 

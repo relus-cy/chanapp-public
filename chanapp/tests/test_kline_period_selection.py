@@ -44,13 +44,13 @@ class MinutePreferenceTests(Base):
         c = self.make()
         with c.writer() as conn:
             facts.record_gap(conn, A, FACT, "2026-09-24 09:30", "2026-09-24 15:00", "backfill")
-        c.plan_history(A)
+        c._plan_history(A)
         c.drain_gaps(1, code=A)
         self.assertNotIn("minute", self.planned(A))
         self.assertFalse(self.calls(A, FACT))
         self.assertTrue(facts.open_gaps(self.conn, A, FACT))
         self.enabled = True
-        c.plan_history(A)
+        c._plan_history(A)
         c.drain_gaps(1, code=A)
         self.assertIn("minute", self.planned(A))
         self.assertTrue(self.calls(A, FACT))
@@ -72,7 +72,7 @@ class MinutePreferenceTests(Base):
         self.assertNotIn("minute", self.planned(A))
         self.enabled = True
         self.provider.hook = None
-        c.plan_history(A)
+        c._plan_history(A)
         self.assertIn("minute", self.planned(A))
         self.assertTrue(facts.open_gaps(self.conn, A, FACT))
 

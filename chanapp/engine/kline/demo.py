@@ -47,7 +47,7 @@ def status(conn, codes):
         for dataset in filter(None, ("day", freq)):
             datasets.append({"code": code, "dataset": dataset,
                              "last_commit_at": facts.last_commit_at(conn, code, dataset),
-                             "stale": False, "stale_age_s": None,
+                             "stale": False, "stale_age_s": None, "stale_judged": False,
                              "open_gaps": sum(g["reason"] != "known_gap" for g in facts.open_gaps(conn, code, dataset)),
                              "known_gaps": sum(g["reason"] == "known_gap" for g in facts.open_gaps(conn, code, dataset)),
                              "pending_review": conn.execute(

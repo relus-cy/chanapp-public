@@ -140,7 +140,7 @@ echo "previous files kept in $ASIDE"
 | 缺口 | `open_gaps` 逐步下降 | 刚加入自选或刚改粒度时变多属正常；`known_gaps` 是重试 5 次后不再自动补取的缺口，需要人工处理 |
 | 待核验 | `pending_review` 为 0 | 已收盘的值前后不一致，裁决前继续服务原值，当日不算完成 |
 
-判断 stale 时注意时段：会话刚开始的几分钟里第一轮盘中数据可能还没落库；会话内的日线数据集、交易日开盘后到定稿截止之间的会话外时段本来就不判 stale。真实模式的采集器每天把交易日历导出到 `<缓存根>/selfcheck_calendar.json`（`/api/status` 的 `calendar_export` 给出路径），外部监控可以据此判断当前是否在交易时段。服务启停一律用服务管理器，不要用按命令行匹配的 `pkill`。
+判断 stale 时注意时段：会话刚开始的几分钟里第一轮盘中数据可能还没落库；会话内的日线数据集、交易日开盘后到定稿截止之间的会话外时段本来就不判 stale，`stale_judged` 为 `false` 时 `stale` 恒为 `false`（不是新鲜的结论）。真实模式的采集器每天把交易日历导出到 `<缓存根>/selfcheck_calendar.json`（`/api/status` 的 `calendar_export` 给出路径），外部监控可以据此判断当前是否在交易时段。服务启停一律用服务管理器，不要用按命令行匹配的 `pkill`。
 
 ## 凭据更新
 

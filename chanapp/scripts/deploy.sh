@@ -34,8 +34,7 @@ BACKUP_KEEP="${DEPLOY_BACKUP_KEEP:-5}"
   || { echo 'Invalid DEPLOY_BACKUP_KEEP (integer >= 1)' >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # The package directory is synced as the app dir; requirements.txt sits beside it in the repo root.
-REQUIREMENTS="$ROOT/requirements.txt"
-[[ -f "$REQUIREMENTS" ]] || REQUIREMENTS="$(dirname "$ROOT")/requirements.txt"
+REQUIREMENTS="$(dirname "$ROOT")/requirements.txt"
 [[ -f "$REQUIREMENTS" ]] || { echo 'requirements.txt not found' >&2; exit 2; }
 run() {
   if ((DRY_RUN)); then printf '%q ' "$@"; printf '\n'; else "$@"; fi

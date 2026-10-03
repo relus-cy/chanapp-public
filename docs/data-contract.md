@@ -113,7 +113,7 @@
   8. 之后才计算结构并调用模型；结构计算失败或模型报错返回 502，模型报错的结果缓存 600 秒。
 
   以上 409 都不调用模型。
-- `GET /api/status`：`{mode, enabled, checked_at, datasets, probes, budget, calendar_export}`。`mode` 为 `demo` 或 `real`；`enabled` 为真表示采集器在运行；`datasets` 逐项给出 `last_commit_at`、`stale`、`open_gaps`、`known_gaps`（重试 5 次后不再自动补取的缺口）、`pending_review`。
+- `GET /api/status`：`{mode, enabled, checked_at, datasets, probes, budget, calendar_export}`。`mode` 为 `demo` 或 `real`；`enabled` 为真表示采集器在运行；`datasets` 逐项给出 `last_commit_at`、`stale`、`stale_judged`（为 false 时表示当前时段采集器不判 stale，`stale` 恒为 false）、`open_gaps`、`known_gaps`（重试 5 次后不再自动补取的缺口）、`pending_review`。
 - `GET/PUT /api/periods`：展示周期勾选，见 [展示周期与分析](periods-and-analysis.md)。
 
 ## CSV 导入

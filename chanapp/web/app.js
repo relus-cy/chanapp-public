@@ -3,35 +3,44 @@
 (function () {
   'use strict';
 
-  // ---------- 主题调色板（图表内无法走 CSS 变量，双份维护，数值同 index.html tokens） ----------
+  // ---------- 主题调色板（图表内无法走 CSS 变量，共享色读 index.html tokens） ----------
 
   var PAL = {
     light: {
-      bg: '#ffffff', text: '#565c66', grid: 'rgba(0,0,12,.05)', border: 'rgba(0,0,12,.14)',
-      up: '#d63f33', down: '#2e8ca3', upA: 'rgba(214,63,51,.45)', downA: 'rgba(46,140,163,.45)',
+      bg: '#ffffff', grid: 'rgba(0,0,12,.05)', border: 'rgba(0,0,12,.14)',
       upD: '#b23228', downD: '#226b78',
-      gold: '#7d5f0c', goldA: 'rgba(125,95,12,.55)',
-      zsFill: 'rgba(125,95,12,.07)', zsLine: 'rgba(125,95,12,.45)',
       bi: 'rgba(90,98,110,.6)', biForming: 'rgba(90,98,110,.45)',
-      ma5: '#6a7079', ma13: '#7d5f0c', ma20: '#2e8ca3', ma60: '#d63f33', ma144: '#8a72b8', ma250: '#4f7fb8'
+      zsFillA: .07, zsLineA: .45
     },
     dark: {
-      bg: '#0b0c0e', text: '#959aa1', grid: 'rgba(255,255,255,.04)', border: 'rgba(255,255,255,.1)',
-      up: '#df4b3e', down: '#3aa6b9', upA: 'rgba(223,75,62,.45)', downA: 'rgba(58,166,185,.45)',
+      bg: '#0b0c0e', grid: 'rgba(255,255,255,.04)', border: 'rgba(255,255,255,.1)',
       upD: '#b23c33', downD: '#2e8494',
-      gold: '#c9a24d', goldA: 'rgba(201,162,77,.55)',
-      zsFill: 'rgba(201,162,77,.09)', zsLine: 'rgba(201,162,77,.5)',
       bi: 'rgba(150,158,170,.7)', biForming: 'rgba(150,158,170,.5)',
-      ma5: '#9aa2ad', ma13: '#c9a24d', ma20: '#3aa6b9', ma60: '#df4b3e', ma144: '#a58fd6', ma250: '#6f9fd8'
+      zsFillA: .09, zsLineA: .5
     }
   };
-  var theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
-  var P = PAL[theme];
 
   function hexA(hex, a) {  // '#rrggbb' → 'rgba(r,g,b,a)'
     return 'rgba(' + parseInt(hex.slice(1, 3), 16) + ',' + parseInt(hex.slice(3, 5), 16) +
       ',' + parseInt(hex.slice(5, 7), 16) + ',' + a + ')';
   }
+
+  function palette(mode) {
+    var css = getComputedStyle(document.documentElement);
+    function v(name) { return css.getPropertyValue(name).trim(); }
+    var chart = PAL[mode], p = {};
+    for (var k in chart) p[k] = chart[k];
+    var up = v('--up'), down = v('--down'), gold = v('--gold');
+    p.text = v('--dim');
+    p.up = up; p.down = down; p.gold = gold;
+    p.upA = hexA(up, .45); p.downA = hexA(down, .45); p.goldA = hexA(gold, .55);
+    p.zsFill = hexA(gold, chart.zsFillA); p.zsLine = hexA(gold, chart.zsLineA);
+    [5, 13, 20, 60, 144, 250].forEach(function (n) { p['ma' + n] = v('--ma' + n); });
+    return p;
+  }
+
+  var theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+  var P = palette(theme);
 
   var DISPLAY_BARS = 120;  // 14-16 寸屏：约 9-12px/根，密度适中；日线约半年，够看中枢/线段结构
 
@@ -1136,8 +1145,9 @@
   // ---------- 日间/夜间主题 ----------
 
   function applyTheme(mode) {
-    theme = mode; P = PAL[mode];
+    theme = mode;
     document.documentElement.dataset.theme = mode;
+    P = palette(mode);
     localStorage.setItem('chanapp-theme', mode);
     if (!charts) return;
     charts.main.applyOptions(chartOpts());
@@ -1224,44 +1234,6 @@
     return { color: color, lineWidth: w || 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
   }
 
-  function rsiArr(n) {
-    var closes = klineData.map(function (b) { return b.close; });
-    var out = closes.map(function () { return null; }), ag = 0, al = 0;
-    for (var i = 1; i < closes.length; i++) {
-      var ch = closes[i] - closes[i - 1], g = Math.max(ch, 0), l = Math.max(-ch, 0);
-      if (i <= n) { ag += g / n; al += l / n; }
-      else { ag = (ag * (n - 1) + g) / n; al = (al * (n - 1) + l) / n; out[i] = al ? 100 - 100 / (1 + ag / al) : 100; }
-    }
-    return out;
-  }
-
-  function kdjArr() {
-    var K = [], D = [], J = [], k = 50, d = 50;
-    for (var i = 0; i < klineData.length; i++) {
-      var s = Math.max(0, i - 8), hh = -1e18, ll = 1e18;
-      for (var j = s; j <= i; j++) { hh = Math.max(hh, klineData[j].high); ll = Math.min(ll, klineData[j].low); }
-      var rsv = hh === ll ? 50 : (klineData[i].close - ll) / (hh - ll) * 100;
-      k = 2 / 3 * k + 1 / 3 * rsv; d = 2 / 3 * d + 1 / 3 * k;
-      K.push(k); D.push(d); J.push(3 * k - 2 * d);
-    }
-    return { k: K, d: D, j: J };
-  }
-
-  function bollArr(n, k) {
-    var closes = klineData.map(function (b) { return b.close; });
-    var mid = [], up = [], lo = [];
-    for (var i = 0; i < closes.length; i++) {
-      if (i < n - 1) { mid.push(null); up.push(null); lo.push(null); continue; }
-      var s = 0;
-      for (var j = i - n + 1; j <= i; j++) s += closes[j];
-      var m = s / n, v = 0;
-      for (j = i - n + 1; j <= i; j++) v += (closes[j] - m) * (closes[j] - m);
-      var sd = Math.sqrt(v / n);
-      mid.push(m); up.push(m + k * sd); lo.push(m - k * sd);
-    }
-    return { mid: mid, up: up, lo: lo };
-  }
-
   function lastVal(arr) { for (var i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i]; }
 
   // i 为 klineData 下标；null/越界表示「未悬停」，取最新一根。
@@ -1297,15 +1269,15 @@
       ];
     }
     if (name === 'kdj') {
-      var kdj = kdjArr();
+      var kdj = chanIndicators.kdj(klineData);
       return [
         { label: 'K', color: P.gold, values: kdj.k, digits: 2 },
         { label: 'D', color: P.bi, values: kdj.d, digits: 2 },
         { label: 'J', color: P.up, values: kdj.j, digits: 2 },
       ];
     }
-    if (name === 'rsi') return [{ label: 'RSI', color: P.gold, values: rsiArr(14), digits: 2 }];
-    var boll = bollArr(20, 2);
+    if (name === 'rsi') return [{ label: 'RSI', color: P.gold, values: chanIndicators.rsi(col('close'), 14), digits: 2 }];
+    var boll = chanIndicators.boll(col('close'), 20, 2);
     return [
       { label: 'MID', color: P.gold, values: boll.mid, digits: 2 },
       { label: 'UP', color: P.bi, values: boll.up, digits: 2 },

@@ -298,7 +298,7 @@ class CollectorTests(unittest.TestCase):
         self.clock.t = datetime(2026, 9, 19, 20, 0).timestamp()
         c.tick(datetime(2026, 9, 19, 20, 0))
         c.history_tick(datetime(2026, 9, 19, 20, 0))          # 周六：首次规划并补齐（历史追赶线程）
-        c.finalize(["sh000001", "sh600036"], "2026-09-21", datetime(2026, 9, 21, 17, 30))
+        c.finalize_due(["sh000001", "sh600036"], "2026-09-21", datetime(2026, 9, 21, 17, 30), calendar_known=True)
         restarted = self.make(provider)
         self.clock.t = datetime(2026, 9, 23, 20, 0).timestamp()
         restarted.tick(datetime(2026, 9, 23, 20, 0))          # 调度：周三定稿
@@ -322,7 +322,7 @@ class CollectorTests(unittest.TestCase):
                 return []
 
         c = self.make(NoMinutes())
-        result = c.finalize(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30))
+        result = c.finalize_due(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30), calendar_known=True)
         self.assertEqual((result["done"], result["failed"]), ([], ["sh600036"]))
         conn = facts.open_facts(self.dir / facts.DB_NAME)
         self.addCleanup(conn.close)
@@ -339,7 +339,7 @@ class CollectorTests(unittest.TestCase):
             def minute_history(self, code, fact_freq, start, end, *, now):
                 return super().minute_history(code, fact_freq, start, end, now=now)[-1:]
 
-        result = self.make(OneSlot()).finalize(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30))
+        result = self.make(OneSlot()).finalize_due(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30), calendar_known=True)
         self.assertEqual((result["done"], result["failed"]), ([], ["sh600036"]))
         self.assertEqual(self.finalize_gaps(), {("day", "finalize"), (FACT, "finalize")})
 
@@ -349,8 +349,8 @@ class CollectorTests(unittest.TestCase):
             def day_history(self, code, start, end):
                 return [RawDayRow(code, end, 10, 11, 10, 10, DAY_VOL, "lot", 1, "CNY", 10, 0, "final", new_batch_id())]
 
-        result = self.make(Mismatch()).finalize(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30))
-        self.assertEqual(result["failed"], ["sh600036"])
+        result = self.make(Mismatch()).finalize_due(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30), calendar_known=True)
+        self.assertEqual(result["review"], ["sh600036"])
         self.assertEqual(self.finalize_gaps(), {("day", "finalize"), (FACT, "finalize")})
         conn = facts.open_facts(self.dir / facts.DB_NAME)
         self.addCleanup(conn.close)
@@ -364,8 +364,8 @@ class CollectorTests(unittest.TestCase):
                             "traded", new_batch_id()) for t in sessions.slots("CN", FACT)[:2]]
         facts.commit_minute_rows(conn, old, market="CN", kind="stock", item="minute_history", fact_freq=FACT,
                                  source="mairui", binding_gen=1, today="2026-09-28")
-        result = self.make(FullFake()).finalize(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30))
-        self.assertEqual(result["failed"], ["sh600036"])
+        result = self.make(FullFake()).finalize_due(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30), calendar_known=True)
+        self.assertEqual(result["review"], ["sh600036"])
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM pending_review").fetchone()[0], 2)
         self.assertEqual(self.finalize_gaps(), {("day", "finalize"), (FACT, "finalize")})
 
@@ -375,7 +375,7 @@ class CollectorTests(unittest.TestCase):
                 return [RawDayRow(code, end, 10, 9, 11, 10, 1, "lot", 1, "CNY", 10, 0, "final", new_batch_id())]
 
         c = self.make(BadDay())
-        result = c.finalize(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30))
+        result = c.finalize_due(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30), calendar_known=True)
         self.assertEqual(result["failed"], ["sh600036"])
 
     def test_finalize_suspended_day_needs_no_minutes(self):
@@ -387,7 +387,7 @@ class CollectorTests(unittest.TestCase):
                 return []
 
         c = self.make(Suspended())
-        self.assertEqual(c.finalize(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30))["done"], ["sh600036"])
+        self.assertEqual(c.finalize_due(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30), calendar_known=True)["done"], ["sh600036"])
 
     def test_finalize_write_failure_registers_gaps_and_continues(self):
         c = self.make(FullFake())
@@ -399,7 +399,7 @@ class CollectorTests(unittest.TestCase):
             return real(conn, rows, **kw)
 
         with unittest.mock.patch.object(facts, "commit_minute_rows", flaky):
-            result = c.finalize(["sh600036", "sz000001"], "2026-09-28", datetime(2026, 9, 28, 17, 30))
+            result = c.finalize_due(["sh600036", "sz000001"], "2026-09-28", datetime(2026, 9, 28, 17, 30), calendar_known=True)
         self.assertEqual((result["failed"], result["done"]), (["sh600036"], ["sz000001"]))
         conn = facts.open_facts(self.dir / facts.DB_NAME)
         self.addCleanup(conn.close)
@@ -791,7 +791,7 @@ class CollectorTests(unittest.TestCase):
         # 后台规划只对自选（第二阶段评审修复：规划前复核资格）
         c = collector.Collector(self.dir, providers={"mairui": provider}, clock=self.clock,
                                 watchlist_fn=lambda: ["sh600036", "sz000001"])
-        background = threading.Thread(target=c.plan_history, args=("sz000001",))
+        background = threading.Thread(target=c.history_tick, args=(datetime.fromtimestamp(self.clock.t),))
         background.start()
         self.assertTrue(entered.wait(5))
         opener = threading.Thread(target=c.ensure_window, args=("sz000001", "day"))
@@ -949,7 +949,7 @@ class CollectorTests(unittest.TestCase):
 
         c = self.make(Fin())
         c.intraday_tick(["sh600036"], datetime(2026, 9, 28, 14, 58))
-        c.finalize(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30))
+        c.finalize_due(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30), calendar_known=True)
         conn = facts.open_facts(self.dir / facts.DB_NAME)
         self.addCleanup(conn.close)
         states = [r["state"] for r in facts.read_minute_rows(conn, "sh600036", FACT)]
@@ -958,7 +958,7 @@ class CollectorTests(unittest.TestCase):
 
     def test_finalize_failure_registers_gap(self):
         c = self.make(FakeProvider(fail=True))
-        c.finalize(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30))
+        c.finalize_due(["sh600036"], "2026-09-28", datetime(2026, 9, 28, 17, 30), calendar_known=True)
         conn = facts.open_facts(self.dir / facts.DB_NAME)
         self.addCleanup(conn.close)
         gaps = facts.open_gaps(conn, "sh600036")
@@ -1009,14 +1009,14 @@ class CollectorTests(unittest.TestCase):
 
     def test_single_finalized_row_does_not_truncate_minute_plan(self):
         c = self.make(FakeProvider())
-        c.finalize(["sh600036"], "2026-09-25", datetime(2026, 9, 25, 17, 30))
+        c.finalize_due(["sh600036"], "2026-09-25", datetime(2026, 9, 25, 17, 30), calendar_known=True)
         self.assertGreaterEqual(c.plan_minute_backfill("sh600036"), 36)
 
     def test_backfill_mode_plans_watchlist_history_once(self):
         # 自选股与上证指数由历史追赶（原 BACKFILL）补齐历史，不依赖首次打开；已规划过的不再整段重取
         provider = FakeProvider()
         c = self.make(provider)
-        c.finalize(["sh600036"], "2026-09-25", datetime(2026, 9, 25, 17, 30))
+        c.finalize_due(["sh600036"], "2026-09-25", datetime(2026, 9, 25, 17, 30), calendar_known=True)
         c.history_tick(datetime(2026, 9, 26, 20, 0))               # 周六
         full = [(code, start) for kind, code, start, _ in provider.calls if kind == "day" and start < "2017"]
         self.assertEqual(sorted(code for code, _ in full), ["sh000001", "sh600036"])
@@ -1032,7 +1032,7 @@ class CollectorTests(unittest.TestCase):
         # 交历史线程（仍不因为已有定稿行而跳过）
         provider = FakeProvider()
         c = self.make(provider)
-        c.finalize(["sh600036"], "2026-09-25", datetime(2026, 9, 25, 17, 30))
+        c.finalize_due(["sh600036"], "2026-09-25", datetime(2026, 9, 25, 17, 30), calendar_known=True)
         c.ensure_window("sh600036", "day")
         c.history_tick(datetime.fromtimestamp(self.clock.t))
         self.assertTrue([call for call in provider.calls
@@ -1100,6 +1100,19 @@ class CollectorTests(unittest.TestCase):
         self.assertIsNotNone(day["last_commit_at"])
         self.assertEqual(status["budget"]["mairui"]["used"], 1)
         self.assertIn("probes", status)
+
+    def test_status_marks_whether_stale_is_judged(self):
+        # stale_judged 为 False 的时段采集器不判 stale（stale 恒 False）：盘中日线、开盘后到定稿截止之间
+        c = self.make(FakeProvider())
+        for now, expected in (
+                (datetime(2026, 9, 28, 10, 30), {"day": False, FACT: True}),    # 盘中：只判分钟
+                (datetime(2026, 9, 28, 16, 0), {"day": False, FACT: False}),    # 收盘后、定稿截止前：不判
+                (datetime(2026, 9, 28, 19, 0), {"day": True, FACT: True}),      # 截止后：判当日未定稿
+                (datetime(2026, 9, 26, 20, 0), {"day": True, FACT: True})):     # 非交易日：判上一交易日
+            with self.subTest(now=now):
+                rows = {d["dataset"]: d["stale_judged"]
+                        for d in c.status(["sh600036"], now=now)["datasets"]}
+                self.assertEqual(rows, expected)
 
 
 class HKVendorFake:
@@ -1203,23 +1216,25 @@ class HKVendorCollectorTests(unittest.TestCase):
     def test_hk_finalize_publishes_vendor_cache(self):
         from chanapp.engine.kline import hk_vendor_qfq as vq
         c = self.make(HKVendorFake())
-        c.finalize(["hk00700"], "2026-09-25", self.NOW)
+        c.finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
         conn = facts.open_facts(self.dir / facts.DB_NAME)
         self.addCleanup(conn.close)
         self.assertEqual([m[:2] for m in vq.cache_version(conn, "hk00700")], [["day", 1], ["m30", 1]])
 
     def test_vendor_refetch_failure_keeps_version_and_marks_stale(self):
         from chanapp.engine.kline import hk_vendor_qfq as vq
-        self.make(HKVendorFake()).finalize(["hk00700"], "2026-09-25", self.NOW)
-        self.make(HKVendorFake(fail_qfq=True)).finalize(["hk00700"], "2026-09-25", self.NOW)
+        self.make(HKVendorFake()).finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
+        self.make(HKVendorFake(fail_qfq=True)).refresh_vendor_qfq("hk00700", self.NOW,
+                                                                  closed_through="2026-09-25", today_ok=True)
         conn = facts.open_facts(self.dir / facts.DB_NAME)
         self.addCleanup(conn.close)
         self.assertEqual(vq.cache_version(conn, "hk00700"), [["day", 1, 0, 1], ["m30", 1, 0, 1]])
 
     def test_vendor_restatement_republishes(self):
         from chanapp.engine.kline import hk_vendor_qfq as vq
-        self.make(HKVendorFake()).finalize(["hk00700"], "2026-09-25", self.NOW)
-        self.make(HKVendorFake(qfq_close=49.0)).finalize(["hk00700"], "2026-09-25", self.NOW)
+        self.make(HKVendorFake()).finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
+        self.make(HKVendorFake(qfq_close=49.0)).refresh_vendor_qfq("hk00700", self.NOW,
+                                                                   closed_through="2026-09-25", today_ok=True)
         conn = facts.open_facts(self.dir / facts.DB_NAME)
         self.addCleanup(conn.close)
         self.assertEqual(vq.read(conn, "hk00700", "day")[0][0]["close"], 49.0)
@@ -1227,7 +1242,7 @@ class HKVendorCollectorTests(unittest.TestCase):
     def test_unfreeze_refetches_every_freq_in_full(self):
         from chanapp.engine.kline import bindings, hk_vendor_qfq as vq
         from chanapp.engine.kline.rows import FetchItem
-        self.make(HKVendorFake()).finalize(["hk00700"], "2026-09-25", self.NOW)
+        self.make(HKVendorFake()).finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
         conn = facts.open_facts(self.dir / facts.DB_NAME)
         self.addCleanup(conn.close)
         bindings.switch(conn, "HK", "stock", FetchItem.DAY_HISTORY, "yahoo", reason="test")
@@ -1310,7 +1325,7 @@ class HKVendorCollectorTests(unittest.TestCase):
         fake = HKFullFake()
         c = self.make(fake)
         c.ensure_window("hk00700", "day")
-        c.finalize(["hk00700"], "2026-09-25", self.NOW)
+        c.finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
         self.assertEqual(self.cache_ends(), {"day": "2026-09-25", "m30": "2026-09-25"})
         fake.calls.clear()
         c.ensure_window("hk00700", "m60")
@@ -1326,7 +1341,7 @@ class HKVendorCollectorTests(unittest.TestCase):
         fake = HKFullFake()
         c = self.make(fake)
         c.ensure_window("hk00700", "day")
-        c.finalize(["hk00700"], "2026-09-25", self.NOW)
+        c.finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
         conn = self.db()
         self.raw_m30(conn, "2026-06-01", "2026-06-05")
         fake.calls.clear()
@@ -1360,7 +1375,7 @@ class HKVendorCollectorTests(unittest.TestCase):
         fake = HKFullFake()
         c = self.make(fake)
         c.ensure_window("hk00700", "day")
-        c.finalize(["hk00700"], "2026-09-25", self.NOW)
+        c.finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
         conn = self.db()
         self.raw_m30(conn, "2026-06-01", "2026-06-05")
         fake.fail_qfq = True
@@ -1373,7 +1388,7 @@ class HKVendorCollectorTests(unittest.TestCase):
         from chanapp.engine.kline import hk_vendor_qfq as vq
         c = self.make(HKFullFake())
         c.ensure_window("hk00700", "day")
-        c.finalize(["hk00700"], "2026-09-25", self.NOW)
+        c.finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
         conn = self.db()
         with c.writer() as wconn:
             degrade(wconn)
@@ -1407,7 +1422,7 @@ class HKVendorCollectorTests(unittest.TestCase):
         fake.armed = False
         c = self.make(fake)
         c.ensure_window("hk00700", "day")
-        c.finalize(["hk00700"], "2026-09-25", self.NOW)
+        c.finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
         fake.calls.clear()
         fake.armed, fake.qfq_close = True, 45.0                 # 供应商重述历史价
         c.refresh_vendor_qfq("hk00700", self.NOW)
@@ -1429,7 +1444,7 @@ class HKVendorCollectorTests(unittest.TestCase):
         fake.armed = False
         c = self.make(fake)
         c.ensure_window("hk00700", "day")
-        c.finalize(["hk00700"], "2026-09-25", self.NOW)
+        c.finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
         fake.armed, fake.qfq_close = True, 45.0
         refresh(c)
         self.assertEqual({f: vq.read(self.db(), "hk00700", f)[1]["stale"] for f in vq.FREQS},
@@ -1457,7 +1472,7 @@ class HKVendorCollectorTests(unittest.TestCase):
         fake = OnlyTodayThenM30Fails()
         fake.armed = False
         c = self.make(fake)
-        c.finalize(["hk00700"], "2026-09-25", self.NOW)
+        c.finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
         self.assertEqual(vq.read(self.db(), "hk00700", "day")[0][0]["trade_date"], "2026-09-25")
         fake.armed = True
         refresh(c)
@@ -1477,7 +1492,7 @@ class HKVendorCollectorTests(unittest.TestCase):
         fake = HKFullFake()
         c = self.make(fake)
         c.ensure_window("hk00700", "day")
-        c.finalize(["hk00700"], "2026-09-25", self.NOW)
+        c.finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
         fake.qfq_close = 45.0
         tripped = []
         real = fake.qfq_series
@@ -1496,7 +1511,7 @@ class HKVendorCollectorTests(unittest.TestCase):
         fake = HKFullFake()
         c = self.make(fake)
         c.ensure_window("hk00700", "day")
-        c.finalize(["hk00700"], "2026-09-25", self.NOW)
+        c.finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
         fake.qfq_close = 45.0
         real = fake.qfq_series
 
@@ -1784,7 +1799,7 @@ class HKVendorCollectorTests(unittest.TestCase):
     def test_cold_binding_freezes_cache_without_calling_vendor(self):
         from chanapp.engine.kline import bindings, hk_vendor_qfq as vq
         from chanapp.engine.kline.rows import FetchItem
-        self.make(HKVendorFake()).finalize(["hk00700"], "2026-09-25", self.NOW)
+        self.make(HKVendorFake()).finalize_due(["hk00700"], "2026-09-25", self.NOW, calendar_known=True)
         conn = facts.open_facts(self.dir / facts.DB_NAME)
         self.addCleanup(conn.close)
         bindings.switch(conn, "HK", "stock", FetchItem.DAY_HISTORY, "yahoo", reason="test")

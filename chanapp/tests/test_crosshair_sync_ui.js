@@ -7,6 +7,7 @@
    回声必须被忽略，否则两图互相设置无限往返（浏览器实测踩过）。 */
 const assert = require('node:assert/strict');
 const { mkEl, runSlices } = require('./support/dom.js');
+const chanIndicators = require('../web/indicators.js');
 
 const echoes = [];  // 待回发的程序化事件；drain() 模拟库在下一帧回发
 function drain() {
@@ -62,6 +63,7 @@ function env() {
     document: { querySelectorAll: () => [] },
     makeZsOverlay: () => ({ setBoxes() {} }),
     P: new Proxy({}, { get: (_, k) => String(k) }),
+    chanIndicators,
     axisTick() {}, axisLabel() {}, updateAxisAnchor() {},
     renderLegend(bar, prev, i) { legends.push(i); },
     legendLatest() { legends.push('latest'); },

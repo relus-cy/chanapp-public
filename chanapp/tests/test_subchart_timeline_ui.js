@@ -6,6 +6,7 @@
 const assert = require('node:assert/strict');
 const { runSlices } = require('./support/dom.js');
 const { appContext, chartStub } = require('./support/app.js');
+const chanIndicators = require('../web/indicators.js');
 
 // 2026-07-01 起连续 50 天：前 20 根是历史页，后 30 根是首屏窗口
 const TIMES = Array.from({ length: 50 }, (_, i) => new Date(Date.UTC(2026, 6, 1 + i)).toISOString().slice(0, 10));
@@ -24,6 +25,7 @@ function harness(ind) {
     historyState: { loading: true, hasMore: true, reqId: 1 },
     lastChartData: { kline: WINDOW, signals: [], meta: { token: 'T1', has_more: true } },
     P: new Proxy({}, { get: () => '#000' }),
+    chanIndicators,
     LightweightCharts: { HistogramSeries: 'h', LineSeries: 'l', LineStyle: { Dashed: 1 } },
     computeMAs() {}, refreshMaSeries() {}, buildMarkers: () => [],
   });

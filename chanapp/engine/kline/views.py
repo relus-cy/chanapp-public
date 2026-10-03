@@ -282,7 +282,9 @@ def _finalized(conn, code, dataset, day) -> bool:
 
 
 def dataset_stale(conn, code, dataset, now) -> tuple:
-    """stale 新定义（spec §6.5）：按距最近一次成功提交的时刻与会话阶段判定，返回 (stale, 秒)。
+    """stale 新定义（spec §6.5）：按距最近一次成功提交的时刻与会话阶段判定，返回 (stale, 秒, judged)。
+
+    judged 表示当前时段是否判定 stale：为 False 时 stale 恒为 False，不是「数据新鲜」的结论。
 
     - 交易时段：分钟数据集距最近提交超过 STALE_IN_SESSION_S；日线数据集盘中不判（当日 bar 来自分钟）；
     - 交易日该市场的 FINALIZE_DEADLINE 之后：当日未定稿（日线无 final 行 / 分钟仍有 forming）；
@@ -290,7 +292,7 @@ def dataset_stale(conn, code, dataset, now) -> tuple:
     - 非交易日与交易日开盘前：最近一个过去交易日未定稿。
     """
     if instance.is_demo() or dataset is None:
-        return False, None
+        return False, None, False
     market = market_of(code)
     last = facts.last_commit_at(conn, code, dataset)
     age = int((now - _to_local(last)).total_seconds()) if last else None
@@ -299,15 +301,19 @@ def dataset_stale(conn, code, dataset, now) -> tuple:
     windows = sessions.SESSIONS[market]
     if trading and any(start <= hhmm <= end for start, end in windows):
         stale = dataset != "day" and (age is None or age > config.STALE_IN_SESSION_S)
+        judged = dataset != "day"
     elif trading and hhmm >= config.FINALIZE_DEADLINE[market]:
         stale = not _finalized(conn, code, dataset, today)
+        judged = True
     elif trading and hhmm >= windows[0][0]:
         stale = False
+        judged = False
     else:
         prev = conn.execute("SELECT MAX(date) AS d FROM calendar WHERE market=? AND is_open=1 AND date<?",
                             (market, today)).fetchone()["d"]
         stale = prev is not None and not _finalized(conn, code, dataset, prev)
-    return stale, (age if stale else None)
+        judged = True
+    return stale, (age if stale else None), judged
 
 
 def _local_minute(ts: str | None) -> str | None:
@@ -481,7 +487,7 @@ def _read(conn, code, freq, adjust, before, limit, now, ctx=None) -> View | None
     incomplete = (week_incomplete if freq == "week"
                   else _incomplete_days(ctx, bars) if freq in MINUTE_PERIODS and bars else [])
     dataset = _stale_dataset(ctx, freq)
-    stale, stale_age = dataset_stale(conn, code, dataset, ctx.now)
+    stale, stale_age, _ = dataset_stale(conn, code, dataset, ctx.now)
     if not instance.is_demo() and vendor_meta and (vendor_meta["frozen"] or vendor_meta["stale"] or vendor_meta["lagging"]):
         stale = True                                     # 冻结、重取失败或未追上收盘：缓存停在旧版本
     served = {s for b in bars for s in (b.get("sources") or [])}
@@ -572,7 +578,7 @@ def quote(conn, code, *, now=None) -> dict | None:
                        and r["close"] is not None and r["trade_date"] < today]
         if not minutes and not closed_days:
             return None
-        stale, _ = dataset_stale(conn, code, fact or "day", now)
+        stale, _, _ = dataset_stale(conn, code, fact or "day", now)
         prev_close = _reference_close(conn, market, day_rows, closed_days, today)
     if not minutes:
         last = closed_days[-1]

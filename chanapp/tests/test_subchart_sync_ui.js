@@ -4,6 +4,7 @@
    subRebuild 抑制，且重建后恢复原可视区间。假 chart 按实测行为建模这两个瞬变。 */
 const assert = require('node:assert/strict');
 const { runSlices } = require('./support/dom.js');
+const chanIndicators = require('../web/indicators.js');
 
 function mkEl() {
   return {
@@ -67,6 +68,7 @@ const context = {
   ResizeObserver: function () { this.observe = () => {}; },
   requestAnimationFrame: fn => fn(),
   P: new Proxy({}, { get: () => '#000' }),
+  chanIndicators,
   axisTick: () => '', axisLabel: () => '', updateAxisAnchor() {},
   klineData: [
     { time: '2026-09-01', open: 1, high: 1, low: 1, close: 1, volume: 1 },

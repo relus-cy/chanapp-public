@@ -587,10 +587,6 @@ class Collector:
         finally:
             lock.release()
 
-    def plan_history(self, code) -> None:
-        with self._single_flight(code):
-            self._plan_history(code)
-
     def _plan_history(self, code) -> None:
         """历史规划：首次做日线整段回填（失败则登记缺口）与分钟按月缺口登记；之后每轮发现新缺的交易日；
         港股另建供应商前复权缓存。planned 标记只表示首次整段规划已登记，不阻止之后的发现。
@@ -1765,24 +1761,6 @@ class Collector:
         return res is not None and res.inserted + res.revised + res.skipped > 0
 
     # ---- 当日定稿（计划 2026-09-29 D1–D3）：按（代码，交易日）调度，完成与否以事实库为准 ----
-    def finalize(self, codes, trade_date, now) -> dict:
-        """收盘定稿，逐代码立即尝试一次（不看重试节流；调度线程走 finalize_due）。
-
-        完成判据见 _final_status 与 _settle：当日 final 日线可读，分钟按槽位覆盖（停牌日不要求分钟），该日没有
-        未裁决的待核验，且分钟与日线核对一致。库内已完整的部分不再取数（日线与分钟各自判断）。
-        未完成（含取数失败、准入全拒、写失败）登记当日缺口并写 last_error；港股个股 raw 完成后刷新供应商缓存，
-        缓存没追上也算未完成，但只重试缓存、不登记 raw 缺口。暂缓（退避、冷却、额度、写者锁被占、绑定切换）
-        记在 failed 里（未完成）。用一次性记录，不计也不重置自动次数。"""
-        done, failed = [], []
-        for code in codes:
-            rec = self._final_record(code, trade_date, manual=True)    # 显式操作：一次性记录，不占自动次数
-            try:
-                outcome = self._finalize_code(code, trade_date, now, rec, fetch=True, vendor_always=True)
-            except CollectorLocked:
-                outcome = self._defer(rec, code, trade_date, "writer_locked")
-            (done if outcome == "done" else failed).append(code)
-        return {"done": done, "failed": failed}
-
     def finalize_due(self, codes, trade_date, now, *, calendar_known, eligible=None, day_only=False) -> dict:
         """调度线程的定稿：交易日首个定稿时点起，活跃且当日未完成的代码都有资格（不再按市场锁存）。
 
@@ -1951,7 +1929,7 @@ class Collector:
                 log.warning("定稿预占了结失败 code=%s day=%s", code, day, exc_info=True)
             raise
 
-    def _finalize_attempt(self, code, day, now, rec, *, fetch, wait=None, vendor_always=False, force=False,
+    def _finalize_attempt(self, code, day, now, rec, *, fetch, wait=None, force=False,
                           eligible=None, day_only=False) -> str:
         """一个代码一次定稿：done / failed / review / deferred。目标日 day 与准入的 today 都取自任务开始时，
         跨过午夜才返回也提交给原日期。上游请求在写者锁外，锁内只做提交、核对与缺口。
@@ -2045,7 +2023,7 @@ class Collector:
                 # 同一写者锁内计次（台账写入不另开锁窗口）
                 return self._fail(rec, code, day, now, failure, terminal=failure in {f"check:{r}" for r in _REVIEW})
         if (market == "HK" and kind == "stock" and not day_only
-                and (vendor_always or not self._vendor_caught_up(code, day))):
+                and not self._vendor_caught_up(code, day)):
             if eligible is not None and not eligible(code):     # 分钟请求期间被移出：raw 已提交，不再开始缓存请求
                 return self._defer(rec, code, day, "untracked")
             if not self._reserve(rec, code, day):
@@ -2900,11 +2878,11 @@ class Collector:
         for code in codes:
             fact = self._fact_freq(code)
             for dataset in (d for d in ("day", fact) if d is not None):
-                stale, age = views.dataset_stale(conn, code, dataset, now)
+                stale, age, judged = views.dataset_stale(conn, code, dataset, now)
                 datasets.append({
                     "code": code, "dataset": dataset,
                     "last_commit_at": facts.last_commit_at(conn, code, dataset),
-                    "stale": stale, "stale_age_s": age,
+                    "stale": stale, "stale_age_s": age, "stale_judged": judged,
                     "open_gaps": sum(g["reason"] != "known_gap" for g in facts.open_gaps(conn, code, dataset)),
                     "known_gaps": conn.execute("SELECT COUNT(*) FROM coverage_gaps WHERE code=? AND dataset=?"
                                                " AND reason='known_gap' AND resolved_at IS NULL",

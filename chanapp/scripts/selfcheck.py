@@ -28,10 +28,6 @@ BINDING_FILE = 'binding_gen.json'
 # Minute datasets are judged stale by the collector as soon as a session opens
 # (the last commit is from the previous session); give the first poll time to land.
 OPENING_GRACE_S = 300
-# Mirrors engine/kline/config.py FINALIZE_DEADLINE (per market): between the first open
-# and this time, outside sessions, the collector reports stale=false without judging.
-# Kept local so this timer process imports nothing from the engine.
-FINALIZE_DEADLINE = {'cn': '21:00', 'hk': '18:30'}
 REQUEST_TIMEOUT_S = 10
 CODE_RE = re.compile(r'(sh|sz|hk)\d{5,6}')
 # Issue keys '<prefix>:<detail>' that are not per-dataset keys.
@@ -98,25 +94,24 @@ def market_window(now, market, calendar):
             'opened_at': current[0] if current else None}
 
 
-def judgement(now, market, dataset, calendar):
+def judgement(now, market, dataset, calendar, stale_judged):
     """Whether the collector's stale flag for this dataset is meaningful right now.
 
-    'judged': trust stale either way. 'grace': a session just opened, the minute
-    dataset has not had its first poll. 'unjudged': the collector reports
-    stale=false without checking (see views.dataset_stale): the day dataset in
-    session, and any dataset on a trading day between the first open and
-    FINALIZE_DEADLINE outside sessions."""
+    'unjudged': the collector reports stale_judged=false — stale=false then means
+    "not checked", not "fresh" (the day dataset in session, and any dataset on a
+    trading day between the first open and the finalize deadline outside
+    sessions; see views.dataset_stale). 'unknown': stale_judged is true but the
+    calendar is unavailable, so the grace window cannot be timed. 'grace': a
+    session just opened, the minute dataset has not had its first poll.
+    'judged': trust stale either way."""
+    if not stale_judged:
+        return 'unjudged'
+    if calendar is None:
+        return 'unknown'
     window = market_window(now, market, calendar)
-    if window['status'] == 'open':
-        if dataset == 'day':
-            return 'unjudged'  # today's day bar comes from minutes; not checked in session
-        if (now - window['opened_at']).total_seconds() <= OPENING_GRACE_S:
-            return 'grace'
-        return 'judged'
-    if window['trading_day']:
-        hhmm = now.astimezone(ZONE).strftime('%H:%M')
-        if window['sessions'][0][0] <= now and hhmm < FINALIZE_DEADLINE[market]:
-            return 'unjudged'
+    if (window['status'] == 'open' and dataset != 'day'
+            and (now - window['opened_at']).total_seconds() <= OPENING_GRACE_S):
+        return 'grace'
     return 'judged'
 
 
@@ -177,13 +172,13 @@ def assess_dataset(row, now, calendar):
     code, dataset = row['code'], row['dataset']
     market = 'hk' if code.startswith('hk') else 'cn'
     out = {'code': code, 'dataset': dataset, 'market': market, 'issues': [],
-           **{k: row.get(k) for k in ('stale', 'stale_age_s', 'last_commit_at',
+           **{k: row.get(k) for k in ('stale', 'stale_age_s', 'stale_judged', 'last_commit_at',
                                       'open_gaps', 'known_gaps', 'pending_review')}}
-    if type(row.get('stale')) is not bool:
+    if type(row.get('stale')) is not bool or type(row.get('stale_judged')) is not bool:
         out['judgement'] = 'invalid'
         out['issues'].append('status_invalid')
         return out
-    out['judgement'] = 'unknown' if calendar is None else judgement(now, market, dataset, calendar)
+    out['judgement'] = judgement(now, market, dataset, calendar, row['stale_judged'])
     # Freshness is the collector's commit-based stale (spec 6.5): a suspended
     # stock whose polls still commit is not stale, whatever its last bar date.
     if row['stale'] and out['judgement'] == 'judged':

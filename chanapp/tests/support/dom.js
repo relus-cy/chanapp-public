@@ -93,7 +93,6 @@ const slices = {
   timers:      ['  // ---------- 交易时段自动刷新', '  // ---------- 侧边栏'],
   sidebar:     ['  // ---------- 侧边栏', '  // ---------- 初始化'],
   indicators:  ['  function computeMAs()', '  function wireMaSeg()'],
-  subInd:      ['  function rsiArr(', '  function lastVal('],
   subChart:    ['  // ---------- 副图指标', '  // ---------- 多级别共振角标'],
   chartSetup:  ['  function chartOpts()', '  // ---------- 日间/夜间主题'],
   ruleControl: ['  function syncRuleControl()', '  // 依据卡浮层左右切换'],

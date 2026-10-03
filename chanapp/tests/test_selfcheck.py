@@ -35,10 +35,10 @@ def clock(moment):
     return Fixed
 
 
-def dataset(code='sh600000', name='m5', stale=False, **extra):
+def dataset(code='sh600000', name='m5', stale=False, stale_judged=True, **extra):
     return {'code': code, 'dataset': name, 'last_commit_at': '2026-09-14T10:29:30+08:00',
-            'stale': stale, 'stale_age_s': 400 if stale else None, 'open_gaps': 0,
-            'known_gaps': 0, 'pending_review': 0, **extra}
+            'stale': stale, 'stale_age_s': 400 if stale else None, 'stale_judged': stale_judged,
+            'open_gaps': 0, 'known_gaps': 0, 'pending_review': 0, **extra}
 
 
 def probe(gen=1, keepalive=None, market='CN', kind='stock', item='day'):
@@ -98,30 +98,32 @@ class SelfcheckTests(unittest.TestCase):
         # A suspended stock keeps committing (suspended rows), so the collector
         # reports stale=false even though no new traded bar exists.
         row = dataset(stale=False, last_commit_at='2026-09-14T10:29:50+08:00')
-        result = self.run_collect(status([row, dataset(name='day')]))
+        result = self.run_collect(status([row, dataset(name='day', stale_judged=False)]))
         self.assertEqual(result['issues'], [])
         self.assertNotIn('sh600000/m5', result['deferred'])  # judged, and healthy
 
     def test_stale_in_session_is_reported_per_dataset(self):
-        result = self.run_collect(status([dataset(stale=True), dataset(name='day')]))
+        result = self.run_collect(status([dataset(stale=True), dataset(name='day', stale_judged=False)]))
         self.assertEqual(result['issues'], ['sh600000/m5:stale'])
 
     def test_opening_grace_and_unjudged_windows_neither_alarm_nor_recover(self):
-        for moment in ('2026-09-14T09:32:00', '2026-09-14T13:03:00',   # grace after open
-                       '2026-09-14T12:00:00', '2026-09-14T16:00:00'):  # lunch, before deadline
+        # stale_judged=False 的行（采集器当前时段不判）与开盘宽限一样：不告警也不恢复
+        for moment, judged in (('2026-09-14T09:32:00', True), ('2026-09-14T13:03:00', True),   # grace after open
+                               ('2026-09-14T12:00:00', False), ('2026-09-14T16:00:00', False)):  # lunch, before deadline
             with self.subTest(moment=moment):
-                result = self.run_collect(status([dataset(stale=True)]), now=at(moment))
+                result = self.run_collect(status([dataset(stale=True, stale_judged=judged)]),
+                                          now=at(moment))
                 self.assertEqual(result['issues'], [])
                 self.assertEqual(result['deferred'], ['sh600000/m5'])
-        # After the finalize deadline and on closed days the collector's stale is judged.
-        # Intentionally rewritten (owner, 2026-09-30): the A-share deadline moved from 18:30 to 21:00.
+        # After the finalize deadline and on closed days the collector judges and reports stale_judged=true.
         for moment in ('2026-09-14T21:30:00', '2026-10-01T10:30:00'):
             result = self.run_collect(status([dataset(stale=True)]), now=at(moment))
             self.assertEqual(result['issues'], ['sh600000/m5:stale'], moment)
 
-    def test_finalize_deadline_is_per_market(self):
-        # A 股首个定稿时点 20:00（所有者 2026-09-30）→ 21:00 前收盘后不判；港股仍 16:30 定稿、18:30 起判
-        before = self.run_collect(status([dataset(stale=True)]), now=at('2026-09-14T20:59:00'))
+    def test_stale_judged_flag_drives_alarm(self):
+        # 定稿时点与截止之间：采集器报 stale_judged=false → 暂缓（不告警也不恢复）；判了才告警
+        before = self.run_collect(status([dataset(stale=True, stale_judged=False)]),
+                                  now=at('2026-09-14T20:59:00'))
         self.assertEqual((before['issues'], before['deferred']), ([], ['sh600000/m5']))
         after = self.run_collect(status([dataset(stale=True)]), now=at('2026-09-14T21:00:00'))
         self.assertEqual(after['issues'], ['sh600000/m5:stale'])
@@ -133,7 +135,8 @@ class SelfcheckTests(unittest.TestCase):
     def test_unjudged_window_keeps_previous_stale_alert(self):
         key = 'sh600000/m5:stale'
         old = {'checked_at': at('2026-09-14T11:59:00').isoformat(), 'active': [key], 'counts': {key: 2}}
-        lunch = self.run_collect(status([dataset(stale=False)]), now=at('2026-09-14T12:00:00'))
+        lunch = self.run_collect(status([dataset(stale=False, stale_judged=False)]),
+                                 now=at('2026-09-14T12:00:00'))
         state = selfcheck.update_state(old, lunch)
         self.assertEqual(state['active'], [key])
         self.assertEqual(state['events'], [])
@@ -141,7 +144,8 @@ class SelfcheckTests(unittest.TestCase):
         # in session the collector does not judge the day dataset.
         day_key = 'sh600000/day:stale'
         old = {'checked_at': at('2026-09-15T09:39:00').isoformat(), 'active': [day_key], 'counts': {day_key: 2}}
-        morning = self.run_collect(status([dataset(name='day', stale=False), dataset()]),
+        morning = self.run_collect(status([dataset(name='day', stale=False, stale_judged=False),
+                                           dataset()]),
                                    now=at('2026-09-15T09:40:00'))
         state = selfcheck.update_state(old, morning)
         self.assertEqual(state['active'], [day_key])
@@ -178,6 +182,10 @@ class SelfcheckTests(unittest.TestCase):
         state = selfcheck.update_state(old, result)
         self.assertIn(key, state['active'])
         self.assertEqual(state['events'], [])
+        row = dataset()
+        del row['stale_judged']
+        result = self.run_collect(status([row]), now=at('2026-09-14T10:31:00'))
+        self.assertEqual(result['issues'], ['sh600000/m5:status_invalid'])
 
     def test_valid_fresh_row_really_resolves_previous_stale_fault(self):
         key = 'sh600000/m5:stale'

@@ -72,6 +72,7 @@ class DailyOnlyTests(unittest.TestCase):
         self.assertTrue(self.worker.ensure_window("sh600036", "m30", bars=1))
         status = self.worker.status(["sh600036"], now=self.now)
         self.assertEqual([d["dataset"] for d in status["datasets"]], ["day"])
+        self.assertEqual(status["datasets"][0]["stale_judged"], False)     # 盘中日线不判 stale
 
     def test_disabling_then_restoring_minutes_advances_generation_once(self):
         code = "sh600036"
@@ -101,8 +102,9 @@ class DailyOnlyTests(unittest.TestCase):
 
     def test_daily_history_planning_and_finalize_never_create_minute_work(self):
         self.assertEqual(self.worker.plan_minute_backfill("sh600036"), 0)
-        self.worker.plan_history("sh600036")
-        result = self.worker.finalize(["sh600036"], "2026-09-25", datetime(2026, 9, 25, 21, 0))
-        self.assertEqual(result, {"done": ["sh600036"], "failed": []})
+        self.worker._plan_history("sh600036")
+        result = self.worker.finalize_due(["sh600036"], "2026-09-25", datetime(2026, 9, 25, 21, 0),
+                                          calendar_known=True)
+        self.assertEqual(result, {"done": ["sh600036"], "failed": [], "review": [], "deferred": []})
         self.assertEqual(self.provider.minute_requests, [])
         self.assertTrue(all(g["dataset"] == "day" for g in facts.open_gaps(self.worker.conn(), "sh600036")))
