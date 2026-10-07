@@ -1248,7 +1248,9 @@
     subRead.rows.forEach(function (row) {
       var v = i >= 0 ? row.values[i] : null;
       var color = typeof row.color === 'function' ? row.color(v) : row.color;
-      parts.push(row.label + ' <b style="color:' + color + '">' + (v == null ? miss : v.toFixed(row.digits)) + '</b>');
+      // 去掉运算末位的二进制噪声，再按显示精度舍入；如 884.9549999999999 应显示 884.96。
+      var text = v == null ? miss : Number(v.toPrecision(15)).toFixed(row.digits);
+      parts.push(row.label + ' <b style="color:' + color + '">' + text + '</b>');
     });
     parts.push(SUB_TAIL[subRead.name]);
     note.innerHTML = parts.join(' · ');

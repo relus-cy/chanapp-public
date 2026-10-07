@@ -17,12 +17,28 @@ const {spawn} = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const net = require('node:net');
 const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'period-selection-'));
 const pkgParent = path.resolve(__dirname, '../..');
-const port = 18947;
-const origin = `http://127.0.0.1:${port}`;
+let port, origin;
 let server, browser;
+let cleanupPromise;
+function cleanup() {
+  if (!cleanupPromise) cleanupPromise = (async () => {
+    try { if (browser) await browser.close(); }
+    finally {
+      await stop();
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  })();
+  return cleanupPromise;
+}
+// A signal can arrive while Python is starting, before Playwright installs its
+// own handlers. Close only this probe's resources in either startup phase.
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+  process.once(signal, () => { cleanup().finally(() => process.exit(code)); });
+}
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function start(dir, freq = 'm15') {
   server = spawn(process.env.PYTHON || 'python3', ['-m', 'chanapp.tests.period_selection_server', dir, String(port), freq],
@@ -73,9 +89,17 @@ async function analyzeUI(page, freqs, label) {
 }
 (async () => {
   try {
+    const listener = net.createServer();
+    await new Promise((resolve, reject) => {
+      listener.once('error', reject);
+      listener.listen(0, '127.0.0.1', resolve);
+    });
+    port = listener.address().port;
+    origin = `http://127.0.0.1:${port}`;
+    await new Promise(resolve => listener.close(resolve));
     const directory = path.join(root, 'new');
     await start(directory);
-    browser = await chromium.launch({headless: true, channel: 'chrome'});
+    browser = await chromium.launch({headless: true});
     const page = await browser.newPage();
     await page.clock.install();
     const chartRequests = [], mainChartRequests = [], periodReads = [];
@@ -279,8 +303,6 @@ async function analyzeUI(page, freqs, label) {
     console.log('PASS existing instance upgrades silently with four periods');
     console.log('PASS all period selection browser E2E scenarios');
   } finally {
-    if (browser) await browser.close();
-    await stop();
-    fs.rmSync(root, {recursive: true, force: true});
+    await cleanup();
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

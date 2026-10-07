@@ -1,0 +1,14 @@
+{
+  "name": "chanapp-browser-tests",
+  "private": true,
+  "scripts": {
+    "test:e2e": "bash chanapp/scripts/test_e2e.sh"
+  },
+  "engines": {
+    "node": ">=24.8.0"
+  },
+  "devDependencies": {
+    "@e2e-dev/web": "0.12.0",
+    "e2e": "0.17.0"
+  }
+}

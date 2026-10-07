@@ -32,7 +32,25 @@ bash chanapp/scripts/test_js.sh
 
 - 修缺陷时附一个在修复前失败、修复后通过的测试。
 - 测试不访问外网；provider 单测用 `chanapp/tests/fixtures/` 下的录制数据。
-- 改了 `chanapp/web/` 时，除 JS 测试外再跑一次真实浏览器验收：`bash chanapp/scripts/test_browser.sh`（需要 playwright-cli；脚本自己起离线 demo 服务、跑完清理，不访问外网；CI 也会跑），并在浏览器里手动走一遍受影响的页面。
+- 改了 `chanapp/web/` 时，除 JS 测试外再跑一次真实浏览器验收：`bash chanapp/scripts/test_browser.sh`（需要 playwright-cli；脚本自己起离线 demo 服务、跑完清理，不访问外网），并在浏览器里手动走一遍受影响的页面。CI 通过下述完整流程入口执行同一离线浏览器验收。
+
+### 用户流程验收
+
+完整用户流程使用 [tester-army/e2e](https://github.com/tester-army/e2e)。先完成 Python 环境安装，使用 Node.js 24.8 或更新版本，在仓库根运行：
+
+```bash
+npm ci
+npx --no-install e2e-web install chromium
+npm run test:e2e
+```
+
+依赖树由 `package-lock.json` 锁定；Chromium 通过测试引擎自己的安装入口获取，Linux 缺少系统库时在安装命令末尾加 `--with-deps`。安装依赖及首次下载 Chromium 需要网络；测试使用本地样本或外部边界 fixture，不需要模型 API key。运行器自动建立临时实例、选择空闲端口并清理服务。默认解释器为 `.venv/bin/python`，其他环境通过 `PYTHON` 指定。只验证一组流程时，把文件路径传给入口，例如：
+
+```bash
+npm run test:e2e -- chanapp/tests/e2e/watchlist.e2e.ts
+```
+
+报告、截图和 trace 保存在 `.e2e/`。覆盖清单、真实业务 API 与前端 mock 的区别见 [流程覆盖与验证边界](docs/testing.md)。Agent 可按 [verify-chanapp](.agents/skills/verify-chanapp/SKILL.md) 选择流程并保存证据。该入口补充上述既有本地检查；CI 的 browser job 使用 Node 24 执行完整流程，并在成功或失败后上传测试证据，保留 14 天。
 
 ## 约束
 

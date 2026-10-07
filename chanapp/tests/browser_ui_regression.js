@@ -356,15 +356,34 @@ async page => {
   check((await page.locator('#cardsCount').textContent()) === '3/3', 'evidence navigation must retain focus across card replacements');
 
   await page.evaluate(() => window.__chartTest.setRange({from:10.25,to:40.25}));
-  await page.waitForFunction(() => Math.abs(window.__chartTest.read().main.from - 10.25) < .01);
+  await page.waitForFunction(() => {
+    const range = window.__chartTest.read();
+    return Math.abs(range.main.from - 10.25) < .01 && Math.abs(range.sub.from - 10.25) < .01;
+  });
   pauseChart = true;
   await page.evaluate(() => window.__chartTest.refresh());
   const deadline = Date.now() + 5000;
   while (!releaseChart && Date.now() < deadline) await page.waitForTimeout(20);
   if (!releaseChart) throw new Error('refresh request did not reach the fixture');
-  await page.evaluate(() => window.__chartTest.setRange({from:20.25,to:50.25}));
-  await page.waitForFunction(() => Math.abs(window.__chartTest.read().main.from - 20.25) < .01);
+  // Drive the in-flight interaction with the pointer. A second main-only setRange
+  // can be overwritten by a pending subchart echo before the library's next frame;
+  // that test-only API sequence does not represent how a user pans the canvas.
+  const dragStart = await page.evaluate(() => window.__chartTest.read());
+  const dragBox = await page.locator('#chart').boundingBox();
+  await page.mouse.move(dragBox.x + dragBox.width * .6, dragBox.y + dragBox.height * .5);
+  await page.mouse.down();
+  await page.mouse.move(dragBox.x + dragBox.width * .3, dragBox.y + dragBox.height * .5, {steps: 12});
+  await page.mouse.up();
+  await page.waitForFunction(start => {
+    const range = window.__chartTest.read();
+    return range.main.from > start + 1 && Math.abs(range.main.from - range.sub.from) < .01;
+  }, dragStart.main.from);
   const before = await page.evaluate(() => window.__chartTest.read());
+  check(!before.ready && before.times.length === 80 && before.times[79] === '2026-03-21',
+    'chart must remain pannable while the refresh response is still held');
+  check(before.main.from > dragStart.main.from + 1 &&
+    Math.abs((before.main.to - before.main.from) - (dragStart.main.to - dragStart.main.from)) < .01,
+    'pointer drag must move the visible dates without zooming: ' + JSON.stringify({start: dragStart.main, dragged: before.main}));
   kline.shift();
   kline.push({...kline[kline.length-1],time:'2026-03-22'});
   pauseChart = false;
@@ -375,7 +394,7 @@ async page => {
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const after = await page.evaluate(() => window.__chartTest.read());
   check(after.times[0] === '2026-01-01' && after.times.length === 81, 'same-token refresh keeps loaded older bars: ' + JSON.stringify({first: after.times[0], n: after.times.length}));
-  check(Math.abs(after.main.from - 20.25) < .01 && Math.abs(after.main.to - 50.25) < .01, 'delayed refresh must preserve the latest viewport by date: ' + JSON.stringify({before:before.main,after:after.main}));
+  check(Math.abs(after.main.from - before.main.from) < .01 && Math.abs(after.main.to - before.main.to) < .01, 'delayed refresh must preserve the latest viewport by date: ' + JSON.stringify({before:before.main,after:after.main}));
   check(after.times[Math.floor(after.main.from)] === before.times[Math.floor(before.main.from)], 'rolling window must preserve the visible date: ' + JSON.stringify({before:before.main,after:after.main,beforeDate:before.times[Math.floor(before.main.from)],afterDate:after.times[Math.floor(after.main.from)]}));
   check(Math.abs(after.main.from - after.sub.from) < .01 && Math.abs(after.main.to - after.sub.to) < .01, 'refresh keeps both time scales synchronized');
   check((await page.locator('#cardsCount').textContent()) === '3/3', 'refresh must preserve the selected evidence');
@@ -464,7 +483,12 @@ async page => {
 
   for (const width of [1440, 1280, 1024, 768, 375]) {
     await page.setViewportSize({width, height: 900});
-    if (width <= 1100 && (await page.locator('body.sb-rail').count()) === 0) await page.keyboard.press('[');
+    if (width <= 1100) {
+      // Resize already collapses the drawer asynchronously. Escape is an idempotent
+      // user action; toggling with '[' can reopen it after that resize handler runs.
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.body.classList.contains('sb-rail'));
+    }
     await page.waitForTimeout(250);
     const sizes = await page.evaluate(() => {
       const ids = ['center', 'chartWrap', 'subBar', 'rail'];
@@ -497,12 +521,19 @@ async page => {
     check(Math.max(...heights) - Math.min(...heights) <= 1, 'indicator switch changes chart height at ' + width + 'px');
   }
   await page.setViewportSize({width: 1440, height: 900});
+  // The wide-screen pinned preference must finish restoring before unpinning.
+  // Writing storage during resize can be overwritten by the pending media event.
+  await page.waitForFunction(() => !document.body.classList.contains('sb-rail') &&
+    !document.body.classList.contains('sb-open'));
+  await page.locator('#sidebarPin').click();
+  await page.waitForFunction(() => document.body.classList.contains('sb-rail'));
 
   // reduced-motion 自动守卫：CSS 过渡全部归零，JS 文字编排类整体不挂（删动画而留类会红）
   await page.emulateMedia({reducedMotion: 'reduce'});
-  await page.evaluate(() => localStorage.setItem('chanapp-sidebar', 'rail'));
   await page.reload();
   await page.locator('#cardsCount').filter({hasText: '1/3'}).waitFor();
+  await page.hover('#chart');
+  await page.waitForFunction(() => document.body.classList.contains('sb-rail'));
   await page.hover('#sidebar .sb-top');
   await page.waitForFunction(() => document.body.classList.contains('sb-open'));
   const calm = await page.evaluate(() => ({
@@ -515,11 +546,12 @@ async page => {
     'reduced-motion must zero sidebar transitions: ' + JSON.stringify(calm));
   check(!calm.animIn, 'reduced-motion must skip the enter animation class');
   await page.emulateMedia({reducedMotion: null});
-  await page.evaluate(() => localStorage.setItem('chanapp-sidebar', 'rail'));
   await page.reload();
   await page.locator('#cardsCount').filter({hasText: '1/3'}).waitFor();
 
   await page.setViewportSize({width: 1440, height: 900});
+  await page.hover('#chart');
+  await page.waitForFunction(() => document.body.classList.contains('sb-rail'));
   await page.hover('#sidebar .sb-top');
   await page.waitForFunction(() => document.body.classList.contains('sb-open'));
   for (let remaining = 2; remaining > 0; remaining--) {
