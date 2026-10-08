@@ -1,6 +1,8 @@
-"""盘中增量节奏：个股与指数都是每 60 秒一轮（目标 2026-09-29 第三阶段统一 60 秒；此前个股 30 秒、指数 60 秒）。
+"""盘中增量节奏：A 股个股与指数都是每 30 秒一轮（2026-10-09 由 60 秒改回：A 股新槽源发布延迟实测最长约 51 秒，
+60 秒节奏叠加该延迟无法保证 95% 槽在槽起点后 90 秒内可读；港股保持 60 秒，见 due_modes 的港股分支与
+test_kline_collector 的 test_intraday_windows_and_interval）。
 
-失败模式：① 指数仍每轮都取；② 个股比 60 秒更密或更疏；③ 指数被一直跳过；④ 额度接近上限时间隔不随之加倍；
+失败模式：① 指数仍每轮都取；② 个股比 30 秒更密或更疏；③ 指数被一直跳过；④ 额度接近上限时间隔不随之加倍；
 ⑤ 收盘后 1 分钟的定格轮被节流跳过，指数右栏停在收盘集合竞价前的值直到定稿。
 跨交易日重置不单测：节奏状态挂在（市场，日期）的调度状态上，新的一天天然从空开始。"""
 import tempfile
@@ -47,18 +49,18 @@ class IntradayCadenceTests(unittest.TestCase):
             self.collector.tick(start + timedelta(seconds=5 * step))
         return Counter(code for kind, code in self.provider.calls if kind == "live")
 
-    def test_indexes_and_stocks_every_60s(self):
+    def test_indexes_and_stocks_every_30s(self):
         calls = self.run_minutes(10)
-        self.assertEqual(calls["sh600036"], 10)          # 10 分钟 10 轮
-        self.assertEqual(calls["sz000002"], 10)
-        self.assertEqual(calls["sh000001"], 10)          # 指数没有被饿死
-        self.assertEqual(calls["sz399006"], 10)
+        self.assertEqual(calls["sh600036"], 20)          # 10 分钟 20 轮
+        self.assertEqual(calls["sz000002"], 20)
+        self.assertEqual(calls["sh000001"], 20)          # 指数没有被饿死
+        self.assertEqual(calls["sz399006"], 20)
 
     def test_index_interval_doubles_with_quota_slowdown(self):
         with unittest.mock.patch.object(config, "QUOTA_SLOWDOWN_RATIO", -1.0):   # 用量比恒高于阈值
             calls = self.run_minutes(10)
-        self.assertEqual(calls["sh600036"], 5)           # 个股 120 秒
-        self.assertEqual(calls["sh000001"], 5)           # 指数 120 秒
+        self.assertEqual(calls["sh600036"], 10)          # 个股 60 秒（30 加倍）
+        self.assertEqual(calls["sh000001"], 10)          # 指数 60 秒（30 加倍）
 
     def test_close_minute_is_not_throttled(self):
         # 轮次相位让指数在 15:00:05 取过一次：收盘后 1 分钟内的下一轮（15:00:35）仍要取，拿到含收盘竞价的末根

@@ -1827,13 +1827,16 @@ class ScheduleTests(unittest.TestCase):
     def test_intraday_windows_and_interval(self):
         self.assertNotIn("INTRADAY", self.modes("11:31:30"))
         self.assertIn("INTRADAY", self.modes("15:00:30"))
-        # 有意改写（目标 2026-09-29 第三阶段）：正常盘中统一 60 秒一轮（原 30 秒），额度接近上限时加倍
+        # 有意改写（2026-10-09）：A 股盘中恢复 30 秒一轮（源发布延迟实测最长约 51 秒，60 秒节奏叠加后
+        # 达不到 95% 槽在槽起点后 90 秒可读；2026-09-29 第三阶段曾统一 60 秒），港股保持 60 秒；额度接近上限各自加倍
         last = datetime(2026, 9, 28, 10, 0, 0)
-        self.assertNotIn("INTRADAY", self.modes("10:00:31", last_intraday=last))
-        self.assertNotIn("INTRADAY", self.modes("10:00:59", last_intraday=last))
-        self.assertIn("INTRADAY", self.modes("10:01:00", last_intraday=last))
-        self.assertNotIn("INTRADAY", self.modes("10:01:30", last_intraday=last, quota_ratio=0.85))
-        self.assertIn("INTRADAY", self.modes("10:02:00", last_intraday=last, quota_ratio=0.85))
+        self.assertNotIn("INTRADAY", self.modes("10:00:29", last_intraday=last))
+        self.assertIn("INTRADAY", self.modes("10:00:30", last_intraday=last))
+        self.assertNotIn("INTRADAY", self.modes("10:00:59", last_intraday=last, quota_ratio=0.85))
+        self.assertIn("INTRADAY", self.modes("10:01:00", last_intraday=last, quota_ratio=0.85))
+        # 港股保持 60 秒：A 股的 30 秒修复不外溢到长桥（10:00 在港股盘中窗口内）
+        self.assertNotIn("INTRADAY", self.modes("10:00:30", market="HK", last_intraday=last))
+        self.assertIn("INTRADAY", self.modes("10:01:00", market="HK", last_intraday=last))
 
     def test_closing_round_after_each_session_end_is_not_throttled(self):
         # 收盘定格：刚结束的 bar 在槽边界后约 20–30 秒内还会被改；上一轮早于收盘后 30 秒时，定格窗口内再取一轮

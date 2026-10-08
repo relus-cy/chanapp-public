@@ -242,7 +242,7 @@ def _closing_window(now, market):
 
 
 def _closing_round(now, market, last) -> bool:
-    """收盘定格轮：上午、下午收盘后 _SETTLE_S 秒起，上一轮早于该时刻就再取一轮（不受 60 秒节流），免得节流让最后
+    """收盘定格轮：上午、下午收盘后 _SETTLE_S 秒起，上一轮早于该时刻就再取一轮（不受盘中节流），免得节流让最后
     一根停在收盘竞价前的形成值直到定稿。按「上一轮开始时刻」判，每个会话末尾只补这一轮；上一轮拖过定格分钟
     （慢请求、多代码串行）时在定格分钟之后、_CLOSING_CUTOFF_S 之前补上。当天还没有过盘中轮时不补。"""
     window = _closing_window(now, market)
@@ -272,7 +272,7 @@ def due_modes(now, *, market, is_trading_day, state) -> list:
         hms = now.strftime("%H:%M:%S")
         last = state.get("last_intraday")
         if any(start <= hms <= end for start, end in windows):
-            interval = config.INTRADAY_INTERVAL_S
+            interval = config.INTRADAY_INTERVAL_HK_S if market == "HK" else config.INTRADAY_INTERVAL_S
             if state.get("quota_ratio", 0.0) > config.QUOTA_SLOWDOWN_RATIO:
                 interval *= 2
             if last is None or (now - last).total_seconds() >= interval or _closing_round(now, market, last):

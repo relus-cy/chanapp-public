@@ -82,7 +82,7 @@ from .kline.instance import is_demo
 THROTTLE_INTERVAL = 0.5
 BACKOFF_SECONDS = 30          # 退避冷却（连续 BACKOFF_AFTER_FAILURES 次失败才触发）
 BACKOFF_AFTER_FAILURES = 2    # 单次抖动不退避
-QUOTE_TTL = 60                  # 与页面报价轮询、采集器盘中增量同为 60 秒
+QUOTE_TTL = 60                  # 与页面报价轮询同为 60 秒
 F10_TTL = 300
 
 _HEADERS = {"Accept": "*/*", "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}

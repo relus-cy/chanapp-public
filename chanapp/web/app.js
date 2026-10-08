@@ -2766,7 +2766,7 @@
     if (!periodSaving) loadPeriodPrefs({sync: true});
   });
 
-  // 自选股快照 60s 一轮（与图表、采集器盘中增量、显示层 QUOTE_TTL 同为 60s）。按自选各标的的市场判断：
+  // 自选股快照 60s 一轮（与图表轮询、显示层 QUOTE_TTL 同为 60s）。按自选各标的的市场判断：
   // 所选标的休市不停其他市场自选的报价，没有选中标的也照常。
   setInterval(function () {
     if (sessionDemo || document.hidden) return;

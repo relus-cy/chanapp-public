@@ -97,7 +97,7 @@ class TestDisplayFeedSWR(unittest.TestCase):
             self._join_refresh("quotes.json")
 
     def test_quotes_cached_45_seconds_ago_are_still_fresh(self):
-        """报价 TTL 与页面轮询、采集器盘中增量同为 60 秒：45 秒前的缓存直接服务，不降级、不刷新。"""
+        """报价 TTL 与页面轮询同为 60 秒：45 秒前的缓存直接服务，不降级、不刷新。"""
         (self._dir / "quotes.json").write_text(
             json.dumps({"ts": time.time() - 45, "data": OLD_QUOTES}, ensure_ascii=False), encoding="utf-8")
         with mock.patch.object(display_feed, "_fetch_json", return_value=NEW_ULIST_PAYLOAD) as m:
