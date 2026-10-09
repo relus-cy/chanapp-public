@@ -87,6 +87,8 @@ async page => {
     else if (url.pathname === '/api/chart') json = {
       code: url.searchParams.get('code'), freq: url.searchParams.get('freq'), adjust: url.searchParams.get('adjust'),
       schema_version: 'chanpy_v2', calculation_id: 'fixture-v1', data_version: 'fixture-v1',
+      // A 股应答内嵌同快照报价（488ca50）：价格卡与自选当前行由此驱动，不再请求 /api/quote；港股不含此键
+      ...(/^(sh|sz)/.test(url.searchParams.get('code') || '') ? {quote: {price: 9.87, pct: 0.5}} : {}),
       rule_profile: url.searchParams.get('rule_profile'), signal_scope: url.searchParams.get('signal_scope'),
       kline, macd: {rows: kline.map(b => ({time: b.time, dif: 1, dea: .5, hist: 1}))},
       structure: {bi: [], xd: [], zs: []}, channels: [], signals: [],
@@ -650,7 +652,7 @@ async page => {
   await page.waitForFunction(() => document.getElementById('quoteSec').style.display !== 'none'
     && document.getElementById('f10Px').textContent === '9.87');
   check(!!releaseF10 && await page.locator('#f10Sec').isHidden(), 'quote card renders while F10 is still pending');
-  check(quoteRequests.indexOf('sz000002') >= 0, 'non-watched code fetches its own quote');
+  check(quoteRequests.indexOf('sz000002') < 0, 'A 股代码不再请求单代码报价（内嵌于 chart 应答）: ' + JSON.stringify(quoteRequests));
   await waitForChart();
   check(await page.locator('#freqTabs [data-freq="m30"]').evaluate(b => b.classList.contains('active')), 'old m5 link lands on 30分');
   const newCharts = chartRequests.slice(charts1).filter(r => r.code === 'sz000002');
