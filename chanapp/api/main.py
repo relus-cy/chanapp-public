@@ -5,6 +5,8 @@ GET /api/chart?code=&freq=week|day|m60|m30&adjust=qfq|raw&rule_profile=&signal_s
 返回 {kline, macd{rows}, structure{bi,xd,zs,zs_xd,forming}, signals, rule_profile, calculation_id,
       evidence, channels, resonance, meta}；meta 为门面返回体（去掉 bars）加 data_version、bars 根数、
 first_dt、last_dt 与 analysis_tokens {day, m60, m30}（AI 请求令牌的唯一来源）。
+A 股（sh/sz）另含 "quote" 键：与 bars 同一次读事务的门面 quote 报价（无事实为 null）——价格卡与自选
+当前行以此与图中末根 bar 同快照；港股不含此键（报价在 PH3 前走显示层）。
 响应带弱 ETag（整包哈希，剔除按秒变化的 stale_age_s）与 Cache-Control: no-cache；If-None-Match 命中回 304 空体。
 带 before 为历史分页：只支持 day/week/m60/m30；必须回传 meta.token，不符或缺失返回
 409 {"detail": "数据已更新", "token": 当前令牌}（扁平响应体），客户端整窗重载。
@@ -34,8 +36,9 @@ demo 模式为 disabled，照常读取）。同一标的重拉在途时读取只
 
 联想搜索：GET /api/search?q=（外部联想接口，返回 [{code,name,type}]，仅 sh/sz/hk）。
 
-行情显示层：GET /api/quotes（自选股快照）、GET /api/quote?code=（单代码报价：搜索查看的非自选代码；A 股同自选行
-取事实派生价格，港股走显示层单代码缓存、不覆盖自选缓存）、GET /api/f10?code=（F10+资金流+板块涨幅）。/api/quotes 的 A 股行只取门面 quote（K 线事实派生）的 price、pct、limit_up、
+行情显示层：GET /api/quotes（自选股快照）、GET /api/quote?code=（单代码报价，页面只用于港股：搜索查看的非自选
+港股代码；A 股当前代码的价格卡由 /api/chart 内嵌 quote 驱动。A 股口径同自选行取事实派生价格，港股走显示层
+单代码缓存、不覆盖自选缓存）、GET /api/f10?code=（F10+资金流+板块涨幅）。/api/quotes 的 A 股行只取门面 quote（K 线事实派生）的 price、pct、limit_up、
 price_time、price_label（最新/昨收），事实缺失时价格为空并标 price_unavailable；港股行保持显示层值。缓存过期先回旧数据并后台异步刷新，仅首冷同步抓取；
 degraded=True 一律表示「本次回的是过期旧缓存」，此时 fetch_time 为旧缓存时间（数据年龄）。
 
@@ -226,8 +229,8 @@ def api_chart(request: Request,
             status = "failed"
         extra["X-Refetch-Status"] = status
     try:
-        # 主图与共振、AI 令牌一次读取（spec §6.3）：不再先单读主图、后读共振
-        dataset, bundle = engine_chart_payload.read_chart_inputs(code, freq, adjust)
+        # 主图与共振、AI 令牌一次读取（spec §6.3）：不再先单读主图、后读共振；A 股同一次读事务内嵌报价
+        dataset, bundle, quote = engine_chart_payload.read_chart_inputs(code, freq, adjust)
     except Exception as e:  # 数据层错误统一成 502；同一代码重拉在途且没有可服务快照时 503（不等重拉的锁）
         if isinstance(e, engine_data.RefetchBusy):
             raise HTTPException(status_code=503, detail="正在更新这只标的，请稍后再试", headers=extra or None) from e
@@ -238,7 +241,7 @@ def api_chart(request: Request,
     try:
         payload = engine_chart_payload.build_chart_payload(code, freq, dataset, timings=timings,
                                                            rule_profile=rule_profile, signal_scope=signal_scope,
-                                                           adjust=adjust, bundle=bundle)
+                                                           adjust=adjust, bundle=bundle, quote=quote)
     except Exception as e:
         log.exception("chart calculation failed code=%s freq=%s profile=%s", code, freq, rule_profile)
         raise HTTPException(status_code=502, detail="结构计算暂不可用", headers=extra or None) from e

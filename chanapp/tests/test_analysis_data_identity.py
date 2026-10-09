@@ -103,19 +103,19 @@ class TestChartSingleRead(unittest.TestCase):
         TestAnalysisDataIdentity.setUp(self)
         cache_support.set_env(self, 'COLLECTOR_ENABLED', '0')
 
-    def chart(self, freq, datasets=None):
+    def chart(self, freq, datasets=None, code='sh000001'):
         from fastapi.testclient import TestClient
         from chanapp.api.main import app
         datasets = datasets or {}
         calls = []
 
-        def bundle(code, freqs, *, adjust='qfq', primary=None):
+        def bundle(code, freqs, *, adjust='qfq', primary=None, with_quote=False):
             calls.append((tuple(freqs), primary))
             return {f: copy.deepcopy(datasets.get(f) or {'bars': load_bars(), 'token': f't-{f}'}) for f in freqs}
 
         with mock.patch.object(chart_payload.engine_data, 'get_bars_bundle', side_effect=bundle, create=True), \
              mock.patch.object(chart_payload.engine_data, 'get_bars', side_effect=AssertionError('第二次读取')):
-            response = TestClient(app).get(f'/api/chart?code=sh000001&freq={freq}')
+            response = TestClient(app).get(f'/api/chart?code={code}&freq={freq}')
         return response, calls
 
     def test_chart_reads_main_and_resonance_in_one_bundle(self):
@@ -128,6 +128,17 @@ class TestChartSingleRead(unittest.TestCase):
                 meta = response.json()['meta']
                 self.assertEqual(meta['token'], f't-{freq}')
                 self.assertEqual(meta['analysis_tokens'], {'day': 't-day', 'm60': 't-m60', 'm30': 't-m30'})
+
+    def test_chart_embeds_quote_for_cn_and_omits_for_hk(self):
+        """A 股应答含 "quote" 键（价格卡/自选当前行与末根 bar 同快照；替身门面无事实时为 null）；
+        港股不含此键——其报价在 PH3 前走显示层，前端据键是否存在选通道。"""
+        response, _ = self.chart('day')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn('quote', response.json())
+        self.assertIsNone(response.json()['quote'])
+        hk, _ = self.chart('day', code='hk00700')
+        self.assertEqual(hk.status_code, 200, hk.text)
+        self.assertNotIn('quote', hk.json())
 
     def test_empty_main_view_is_502_unless_unsupported(self):
         # 主图用周线（共振以外的周期；原用 m5，已下线）

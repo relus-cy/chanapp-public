@@ -21,13 +21,15 @@ def fake_facade(fn=None, *, return_value=None, target="chanapp.engine.data"):
     with ExitStack() as stack:
         get_bars = stack.enter_context(mock.patch(f"{target}.get_bars", side_effect=call))
 
-        def bundle(code, freqs, *, adjust="qfq", primary=None):
+        def bundle(code, freqs, *, adjust="qfq", primary=None, with_quote=False):
             out = {}
             for freq in freqs:
                 try:
                     out[freq] = get_bars(code, freq, adjust=adjust)
                 except Exception:
                     out[freq] = None
+            if with_quote:
+                out["quote"] = None       # 替身无事实库：内嵌报价为空（与真实门面的「无事实 → None」同形）
             return out
 
         stack.enter_context(mock.patch(f"{target}.get_bars_bundle", side_effect=bundle, create=True))

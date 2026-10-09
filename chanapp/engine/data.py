@@ -8,9 +8,10 @@
   有事实（视图非空）但落后于目标日（过了定稿时点的今天未定稿，或昨天之前缺日）或还不可服务时经采集器限时追赶：
   同步等待不超过 config.CATCHUP_WAIT_S（含本次已花的时间），超时返回现有视图、后台继续提交；采集器禁用或数据已是
   最新时不追赶；追赶后仍不可服务照常抛 DataUnavailable。
-- get_bars_bundle(code, freqs, *, adjust, primary=None)：一次读事务服务多周期（主图、共振与 AI 共用），
-  补取规则同上；给 primary（主图周期）时只有它的首取失败上抛，辅助周期首取失败只记日志；
-  {freq: 返回体或 None}：视图存在而无 bar 时仍给返回体（空 bars、当前令牌），标的没有任何事实时为 None。
+- get_bars_bundle(code, freqs, *, adjust, primary=None, with_quote=False)：一次读事务服务多周期（主图、共振与
+  AI 共用），补取规则同上；给 primary（主图周期）时只有它的首取失败上抛，辅助周期首取失败只记日志；
+  {freq: 返回体或 None}：视图存在而无 bar 时仍给返回体（空 bars、当前令牌），标的没有任何事实时为 None；
+  with_quote 时附加 "quote" 键——同一次读事务的 quote() 报价（A 股图表应答内嵌，价格卡/自选当前行用）。
 - get_bars_history(code, freq, before, limit, *, adjust, token)：先比令牌，不符抛 TokenMismatch(当前令牌)；
   标的没有任何事实返回 None。
 - refetch_window(code, freq="day")：手动重拉主图周期与共振依赖的分析窗口（不改变关注状态），回报 ok/partial/failed/busy 等。
@@ -209,9 +210,19 @@ def get_bars(code: str, freq: str = "day", *, adjust: str = "qfq") -> dict:
     return _payload(view, from_cache=from_cache)
 
 
-def get_bars_bundle(code: str, freqs, *, adjust: str = "qfq", primary: str | None = None) -> dict:
+def _read_bundle(code: str, freqs, adjust: str, *, with_quote: bool) -> tuple[dict, dict | None]:
+    if with_quote:
+        return views.read_bundle_with_quote(_reader(), code, freqs, adjust=adjust)
+    return views.read_bundle(_reader(), code, freqs, adjust=adjust), None
+
+
+def get_bars_bundle(code: str, freqs, *, adjust: str = "qfq", primary: str | None = None,
+                    with_quote: bool = False) -> dict:
     """{freq: 返回体或 None}：全部周期出自同一次读事务；空或短的周期先同步补取再整体重读。
 
+    with_quote 时附加 "quote" 键：与全部周期同一次读事务的 quote() 口径报价（A 股价格卡与自选当前行用它，
+    与末根 bar 严格同快照）；demo 为样本事实报价（样本静态、无并发写者，独立一次读取）。
+    quote 不在各周期键里，不参与 _to_fetch 巡检。
     热路径一次读取，补取路径补取后整体重读一次（每次读取按周期各建一次视图）。
     primary 给定时（主图）只有该周期的首取失败上抛，其余周期首取失败记日志，按重读结果返回
     （仍空则为 None 或空 bars 的返回体）；不给时任一周期首取失败都上抛（AI 经 read_bundle 转成全 None）。
@@ -220,15 +231,21 @@ def get_bars_bundle(code: str, freqs, *, adjust: str = "qfq", primary: str | Non
     for freq in freqs:
         _check(freq, adjust)
     t0 = time.monotonic()
-    bundle = views.read_bundle(_reader(), code, freqs, adjust=adjust)
+    bundle, qt = _read_bundle(code, freqs, adjust, with_quote=with_quote)
     if is_demo():
-        return {f: (_payload(v, from_cache=True) if v is not None else None) for f, v in bundle.items()}
+        out = {f: (_payload(v, from_cache=True) if v is not None else None) for f, v in bundle.items()}
+        if with_quote:
+            out["quote"] = demo.quote(_reader(), code)
+        return out
     if refetching(code):
         _collector().touch_viewing(code)
         needed = [bundle.get(primary)] if primary else list(bundle.values())
         if not all(_servable(v) for v in needed):
             raise RefetchBusy(f"{code} 正在重拉")
-        return {f: (_payload(v, from_cache=True) if v is not None else None) for f, v in bundle.items()}
+        out = {f: (_payload(v, from_cache=True) if v is not None else None) for f, v in bundle.items()}
+        if with_quote:
+            out["quote"] = qt
+        return out
     missing, short = _to_fetch(code, bundle)
     from_cache = not missing
     if missing or short:
@@ -236,11 +253,14 @@ def get_bars_bundle(code: str, freqs, *, adjust: str = "qfq", primary: str | Non
         _ensure(code, required, required=True)
         _ensure(code, [f for f in missing if f not in required], required=False)
         _ensure(code, short, required=False)
-        bundle = views.read_bundle(_reader(), code, freqs, adjust=adjust)
+        bundle, qt = _read_bundle(code, freqs, adjust, with_quote=with_quote)
     if any(v is not None for v in bundle.values()) and _catch_up(code, t0):     # 有事实即可，同 get_bars
-        bundle = views.read_bundle(_reader(), code, freqs, adjust=adjust)
+        bundle, qt = _read_bundle(code, freqs, adjust, with_quote=with_quote)
     _collector().touch_viewing(code)
-    return {f: (_payload(v, from_cache=from_cache) if v is not None else None) for f, v in bundle.items()}
+    out = {f: (_payload(v, from_cache=from_cache) if v is not None else None) for f, v in bundle.items()}
+    if with_quote:
+        out["quote"] = qt
+    return out
 
 
 def get_bars_history(code: str, freq: str, before: str, limit: int = N_BARS, *,
@@ -267,7 +287,8 @@ def refetch_window(code: str, freq: str = "day") -> dict:
 
 def quote(code: str) -> dict | None:
     """右栏与自选行情：{price, price_time, price_label(最新/昨收), pc, pct, limit_up, trade_date, stale}；
-    标的没有任何事实返回 None。"""
+    标的没有任何事实返回 None。A 股当前代码的卡头与自选行改由 get_bars_bundle(with_quote=True) 内嵌的
+    同快照报价驱动（不经此入口）。"""
     return demo.quote(_reader(), code) if is_demo() else views.quote(_reader(), code)
 
 

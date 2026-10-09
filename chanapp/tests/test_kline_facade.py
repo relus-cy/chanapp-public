@@ -436,7 +436,9 @@ class FacadeApiTests(FacadeBase):
             return wrapped
 
         with mock.patch.object(engine_data.views, "read_view", then_commit(views.read_view)), \
-             mock.patch.object(engine_data.views, "read_bundle", then_commit(views.read_bundle)):
+             mock.patch.object(engine_data.views, "read_bundle", then_commit(views.read_bundle)), \
+             mock.patch.object(engine_data.views, "read_bundle_with_quote",
+                               then_commit(views.read_bundle_with_quote)):
             chart = self.client.get(f"/api/chart?code={CODE}&freq=day")
         self.assertEqual(chart.status_code, 200, chart.text)
         meta = chart.json()["meta"]
@@ -476,6 +478,64 @@ class FacadeApiTests(FacadeBase):
                          {"checked_at", "mode", "enabled", "datasets", "probes", "budget", "calendar_export"})
         self.assertEqual(response.json()["mode"], "unconfigured")  # 直接库级测试没有进入应用 lifespan
         self.assertFalse(response.json()["enabled"])
+
+
+class ChartEmbeddedQuoteTests(FacadeBase):
+    """A 股图表应答内嵌报价（2026-10-09 起）：价格卡与自选当前行用它，与图中末根 bar 同一次读事务，
+    不再经独立报价轮询链（两条 60 秒链各读各的时刻，盘中曾差一次采集）。
+
+    失败方式：quote 与末根 bar 分属两次读取（价格对不上）；缺省调用也附 quote 键（契约只增）；
+    无事实标的编造价格而不是 null；有 pc 时涨跌幅不以 pc 为基准。
+    """
+
+    def setUp(self):
+        super().setUp()
+        from chanapp.api.main import app
+        self.client = TestClient(app)
+
+    def test_bundle_with_quote_matches_last_bar_from_same_minutes(self):
+        self.commit_days(self.days)
+        self.commit_minutes(self.today, state="forming")
+        out = engine_data.get_bars_bundle(CODE, ("day", "m60", "m30"), adjust="raw", primary="day",
+                                          with_quote=True)
+        q = out["quote"]
+        self.assertIsNotNone(q)
+        self.assertEqual((q["price_label"], q["trade_date"]), ("最新", self.today))
+        self.assertEqual(q["price"], out["day"]["bars"][-1]["close"])   # 同一批分钟事实：报价即末根 bar 收盘
+        self.assertEqual(out["day"]["bars"][-1]["dt"], self.today)
+        self.assertIsNone(q["pc"])          # 当日日线行未确认（无盘前参考价）：涨跌为空，不用昨收代替
+        self.assertIsNone(q["pct"])
+        plain = engine_data.get_bars_bundle(CODE, ("day",), adjust="raw")
+        self.assertNotIn("quote", plain)    # 缺省不内嵌
+
+    def test_embedded_quote_pct_uses_today_pc(self):
+        self.commit_days(self.days)
+        self.commit_minutes(self.today, state="forming")
+        slots = sessions.slots("CN", FACT)
+        last_close = 10.0 + ((len(slots) - 1) % 5) * 0.03               # 与 commit_minutes 的末槽同值
+        with self.writer() as conn:                                     # 当日 live 日线行（盘前参考价已确认）
+            facts.commit_day_rows(conn, [RawDayRow(CODE, self.today, 10.0, last_close, 9.9, last_close,
+                                                   1000.0, "lot", 1.0, "CNY", 9.5, 0, "live",
+                                                   new_batch_id())],
+                                  item="preopen_ref", today=self.today, **KW)
+        out = engine_data.get_bars_bundle(CODE, ("day",), adjust="raw", primary="day", with_quote=True)
+        q = out["quote"]
+        self.assertEqual((q["price"], q["pc"]), (last_close, 9.5))
+        self.assertEqual(q["pct"], round((last_close / 9.5 - 1) * 100, 2))
+        self.assertEqual(out["day"]["bars"][-1]["close"], last_close)   # 当日 bar 与报价同值
+
+    def test_chart_response_quote_matches_last_kline_bar(self):
+        self.commit_days(self.days)
+        self.commit_minutes(self.today, state="forming")
+        body = self.client.get(f"/api/chart?code={CODE}&freq=day&adjust=raw").json()
+        self.assertIn("quote", body)
+        self.assertEqual(body["quote"]["price"], body["kline"][-1]["close"])
+        self.assertEqual(body["quote"]["price_label"], "最新")
+
+    def test_no_facts_embeds_null_quote_not_invented(self):
+        out = engine_data.get_bars_bundle(CODE, ("day",), adjust="raw", with_quote=True)
+        self.assertIsNone(out["quote"])                  # 标的没有任何事实：null，前端显示暂无可信价格
+        self.assertIsNone(out["day"])
 
 
 if __name__ == "__main__":

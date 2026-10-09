@@ -517,15 +517,26 @@ def read_view(conn, code, freq, *, adjust="qfq", before=None, limit=config.DEFAU
         return _read(conn, code, freq, adjust, before, limit, now)
 
 
-def read_bundle(conn, code, freqs, *, adjust="qfq", now=None) -> dict:
+def _bundle(conn, code, freqs, adjust, now) -> dict:
     """各周期共用一个读取上下文（日线、日历、因子链与本次读取内的分钟行只取一次）；上下文随本次调用结束。"""
+    out, ctx = {}, None
+    for f in freqs:
+        if ctx is None and f in PERIODS:
+            ctx = _Ctx(conn, code, adjust, now)
+        out[f] = _read(conn, code, f, adjust, None, config.DEFAULT_WINDOW, now, ctx)
+    return out
+
+
+def read_bundle(conn, code, freqs, *, adjust="qfq", now=None) -> dict:
     with facts.read_txn(conn):
-        out, ctx = {}, None
-        for f in freqs:
-            if ctx is None and f in PERIODS:
-                ctx = _Ctx(conn, code, adjust, now)
-            out[f] = _read(conn, code, f, adjust, None, config.DEFAULT_WINDOW, now, ctx)
-        return out
+        return _bundle(conn, code, freqs, adjust, now)
+
+
+def read_bundle_with_quote(conn, code, freqs, *, adjust="qfq", now=None) -> tuple[dict, dict | None]:
+    """read_bundle 同一次读事务里加算 quote()：A 股价格卡与自选当前行由此与任一周期末根 bar 严格同快照
+    （两条独立轮询链各读各的时刻，盘中会差一次采集）。"""
+    with facts.read_txn(conn):
+        return _bundle(conn, code, freqs, adjust, now), quote(conn, code, now=now)
 
 
 

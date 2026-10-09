@@ -111,7 +111,8 @@ class RefetchParamTests(unittest.TestCase):
     def _served(self, refetch):
         """读取成功（桩）时的重拉响应：图表照常返回，重拉结果在 X-Refetch-Status。"""
         with mock.patch("chanapp.api.main.engine_data.refetch_window", refetch, create=True), \
-                mock.patch("chanapp.api.main.engine_chart_payload.read_chart_inputs", return_value=({}, {})), \
+                mock.patch("chanapp.api.main.engine_chart_payload.read_chart_inputs",
+                           return_value=({}, {}, None)), \
                 mock.patch("chanapp.api.main.engine_chart_payload.build_chart_payload",
                            side_effect=lambda *a, timings, **k: timings.update(compute_ms=0, resonance_ms=0)
                            or {"kline": []}):
@@ -125,7 +126,8 @@ class RefetchParamTests(unittest.TestCase):
         self.assertEqual(seen, ["week"] * 3)                          # 主图周期交给门面，重拉覆盖它的窗口
         r = self._served(mock.Mock(side_effect=RuntimeError("boom")))
         self.assertEqual((r.status_code, r.headers.get("X-Refetch-Status")), (200, "failed"))
-        with mock.patch("chanapp.api.main.engine_chart_payload.read_chart_inputs", return_value=({}, {})), \
+        with mock.patch("chanapp.api.main.engine_chart_payload.read_chart_inputs",
+                        return_value=({}, {}, None)), \
                 mock.patch("chanapp.api.main.engine_chart_payload.build_chart_payload",
                            side_effect=lambda *a, timings, **k: timings.update(compute_ms=0, resonance_ms=0)
                            or {"kline": []}):
