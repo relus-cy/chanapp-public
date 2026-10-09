@@ -1948,7 +1948,7 @@ class ScheduleTests(unittest.TestCase):
     def test_intraday_windows_and_interval(self):
         self.assertNotIn("INTRADAY", self.modes("11:31:30"))
         self.assertIn("INTRADAY", self.modes("15:00:30"))
-        # 有意改写（2026-10-09）：A 股盘中恢复 30 秒一轮（源发布延迟实测最长约 51 秒，60 秒节奏叠加后
+        # 有意改写（2026-10-09）：A 股盘中恢复 30 秒一轮（源发布有槽起点后约 50 秒仍未发布的实测下界，60 秒节奏叠加后
         # 达不到 95% 槽在槽起点后 90 秒可读；2026-09-29 第三阶段曾统一 60 秒），港股保持 60 秒；额度接近上限各自加倍
         last = datetime(2026, 9, 28, 10, 0, 0)
         self.assertNotIn("INTRADAY", self.modes("10:00:29", last_intraday=last))
