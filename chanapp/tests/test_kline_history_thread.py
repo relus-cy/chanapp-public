@@ -132,7 +132,9 @@ class DecisiveTwoCodeTests(Base):
         live_b = [t for code, t in provider.live if code == B]
         self.assertEqual(live_b, ["10:00:01", "10:01:02", "10:02:03"])
         forming = facts.read_minute_rows(self.conn, B, FACT, f"{DAY} 00:00", f"{DAY} 23:59")
-        self.assertEqual([(r["state"], r["close"]) for r in forming], [("forming", provider.last_close[B])])
+        # 首轮盘中增量前的今天段补取（2026-10-09 起）：09:45 槽以 closed 入库，上游越界多返的今天槽被准入截断
+        self.assertEqual([(r["state"], r["close"]) for r in forming],
+                         [("closed", 10.0), ("forming", provider.last_close[B])])
         self.assertTrue(worker.is_alive())                            # A 仍卡在阻塞点
         provider.gate.set()
         worker.join(10)
@@ -142,9 +144,11 @@ class DecisiveTwoCodeTests(Base):
         for d in ("2026-09-23", "2026-09-24", "2026-09-25"):
             self.assertEqual(self.closed_slots(A, d), len(SLOTS), d)
         self.assertEqual(self.open_gaps(A), [])
-        for code in (A, B, INDEX):                                    # 决定 8：今天没有历史 closed 行
-            self.assertEqual(self.closed_slots(code, DAY), 0, code)
-            self.assertNotIn(DAY, self.finals(code), code)
+        for code in (A, B):                                        # 决定 8 修订（2026-10-09）：当日 closed 只来自
+            self.assertEqual(self.closed_slots(code, DAY), 1, code)   # 首轮盘中增量前的今天段补取（09:45 一根）；
+            self.assertNotIn(DAY, self.finals(code), code)             # 上游越界多返的今天槽被准入截断；final 仍只来自定稿
+        self.assertEqual(self.closed_slots(INDEX, DAY), 0)         # 不在自选的上证指数不进盘中增量，无今天段
+        self.assertNotIn(DAY, self.finals(INDEX))
 
 
 class HistoryCoverageTests(Base):

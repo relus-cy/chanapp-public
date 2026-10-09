@@ -144,7 +144,10 @@ class LaggingTodayTests(CatchUpBase):
         self.provider.fail_today = True
         out = engine_data.get_bars(CODE, "day", adjust="raw")
         self.assertEqual(out["bars"][-1]["dt"][:10], "2026-09-25")
-        self.assertEqual(len(self.today_calls()), 1)
+        # 当天日线定稿请求失败恰好 1 次；窗口追赶另补今天已收盘的分钟槽（20:00 全天已收盘，分钟历史可得）
+        self.assertEqual([c for c in self.today_calls() if c[0] == "day"], [("day", CODE, DAY, DAY)])
+        self.assertEqual([(c[2], c[3]) for c in self.today_calls() if c[0] == FACT],
+                         [("2026-09-28 09:30", "2026-09-28 15:00")])
         with mock.patch.object(self.c, "catch_up", side_effect=RuntimeError("boom")):
             self.set_now(at(20, 10))
             self.assertTrue(engine_data.get_bars(CODE, "day", adjust="raw")["bars"])
@@ -197,24 +200,32 @@ class BoundedWaitTests(CatchUpBase):
 
 
 class LaggingHistoryTests(CatchUpBase):
-    def test_reopen_during_session_fills_missing_days_up_to_yesterday(self):
-        # 几天前打开过的代码再次打开（盘中）：补上中间缺的交易日，只到昨天，不产生今天的请求与 closed 行
+    def test_reopen_during_session_fills_missing_days_and_today_slots(self):
+        # 几天前打开过的代码再次打开（盘中）：补上中间缺的交易日（到昨天），另用分钟历史补今天已收盘的槽——
+        # 盘中增量只从打开时刻往后追加，此前已收盘的槽没有别的来源（2026-10-09 沃尔德事件）；当天日线仍只来自定稿
         self.history("2026-09-22")
         self.set_now(at(10, 0))
         engine_data.get_bars(CODE, "day", adjust="raw")
         for day in ("2026-09-23", "2026-09-24", "2026-09-25"):
             self.assertTrue(self.final(day), day)
-        self.assertEqual(self.today_calls(), [])
+        self.assertEqual([c for c in self.today_calls() if c[0] == "day"], [])
+        # 10:00 整越过 60 秒稳定余量的只有 09:45 槽（10:00 槽刚过边界、接口仍会改）
+        self.assertEqual([(c[2], c[3]) for c in self.today_calls() if c[0] == FACT],
+                         [("2026-09-28 09:30", "2026-09-28 09:45")])
         today = facts.read_minute_rows(self.conn, CODE, FACT, f"{DAY} 00:00", f"{DAY} 23:59")
-        self.assertEqual([r for r in today if r["state"] == "closed"], [])
+        self.assertEqual(sorted(r["slot_end"] for r in today if r["state"] == "closed"),
+                         ["2026-09-28 09:45"])
 
-    def test_before_first_slot_catches_up_history_but_not_today(self):
-        # F10 请求路径：15:00–17:30 之间只补到上一交易日，不取今天的日线
+    def test_after_close_catches_up_history_and_today_minutes(self):
+        # F10 请求路径：收盘后（15:00–17:30）重开仍不取当天日线（当天日线只来自定稿），
+        # 但分钟已全天收盘（m15 实测 15:07 起全槽可取），窗口追赶把今天槽位一并补齐
         self.history("2026-09-24")
         self.set_now(at(16, 0))
         engine_data.get_bars(CODE, "day", adjust="raw")
         self.assertTrue(self.final("2026-09-25"))
-        self.assertEqual(self.today_calls(), [])
+        self.assertEqual([c for c in self.today_calls() if c[0] == "day"], [])
+        self.assertEqual([(c[2], c[3]) for c in self.today_calls() if c[0] == FACT],
+                         [("2026-09-28 09:30", "2026-09-28 15:00")])
 
     def test_catch_up_is_throttled_per_code(self):
         self.history("2026-09-22")

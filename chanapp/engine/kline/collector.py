@@ -9,7 +9,9 @@
   其余 ProviderError（5xx、越界、4xx 等）只退避该标的；ProviderUnsupported 只跳过并退还额度；
   历史来源的请求（历史追赶、请求路径追赶的续传）按 code#history 单独退避，不跳过同一代码的盘前、盘中与定稿；
   永不调用冷备（D1：冷备只能手动切换绑定）；
-- 分钟历史分片的结束点截到昨天收盘槽：今天的分钟只来自盘中增量（forming）与收盘定稿（closed）；
+- 分钟历史分片的结束点截到昨天收盘槽；今天的分钟来自盘中增量（forming）、收盘定稿（closed），以及
+  盘中首开/重拉/窗口追赶和盘中增量首轮前的补取（_fetch_today_closed：今天已知开市、有收盘超过
+  _TODAY_SLOT_SETTLE_S 的槽且库内未覆盖时才发，至多一个请求）；
 - 覆盖按槽位判定：缺口只有在提交后该区间实际可读覆盖达标（日线逐交易日有 final 行，分钟逐日覆盖会话槽位，
   隔离槽与停牌日除外）时才关闭；取回为空、全部被拒或槽位不全都计一次尝试；
 - 同一缺口因标的级失败或覆盖不达标尝试 5 次后记 known_gap，不再自动重试，由 status 暴露；
@@ -65,7 +67,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from chanapp.engine.kline import bindings, calendar, config, facts, hk_vendor_qfq, sessions, views
+from chanapp.engine.kline import admission, bindings, calendar, config, facts, hk_vendor_qfq, sessions, views
 from chanapp.engine.kline.providers.raw import (ProviderConnectionError, ProviderError,  # noqa: F401
                                                 ProviderRangeError, ProviderServerError, ProviderUnsupported)
 from chanapp.engine.kline.rows import FetchItem, InstrumentRow, kind_of, market_of
@@ -228,6 +230,7 @@ _SESSION_END_GRACE = {"CN": (("11:30:00", "11:31:00"), ("15:00:00", "15:01:00"))
 
 
 _SETTLE_S = 30        # 槽边界后这么久内接口还会改刚结束的 bar（指数实测约 20–30 秒）
+_TODAY_SLOT_SETTLE_S = 60   # 盘中首开补取今天已收盘槽时，只取收盘超过这么久的槽（大于上面的边界修改窗口）
 _CLOSING_CUTOFF_S = 240   # 定格轮最晚到收盘后这么久（早于 A 股 15:05、港股 16:15 的收盘后续传时段）
 
 
@@ -303,6 +306,7 @@ class Collector:
         self._local = threading.local()
         self._rlock = threading.RLock()
         self._viewing: dict = {}
+        self._today_prefilled: dict = {}   # {交易日: {code}}：盘中增量首轮前已补过（或无需补）今天已收盘槽
         self._flights: dict = {}
         self._vendor_extended: dict = {}   # 港股供应商缓存：已为之触发过扩展的 raw m30 起点
         self._vendor_stale_pending: dict = {}   # 已证实重述、标 stale 时写者锁被占的代码 → 取数时的版本（锁释放后补落盘）
@@ -1251,6 +1255,7 @@ class Collector:
                     break
                 self._reconcile(wconn, code, [r.trade_date for r in rows])
             have = self._readable_minutes(code, fact)
+        self._fetch_today_closed(code, self.now())     # 分钟窗口截到昨天：盘中首开顺手补今天已收盘槽
         if not self.is_tracked(code):
             return self._ensure_view_window(code, freq, bars)
         self.plan_minute_backfill(code)
@@ -1471,6 +1476,83 @@ class Collector:
         got = {r.slot_end for r in rows}
         return all(self._required_slots(market, dataset, d) <= got for d in days if d not in suspended)
 
+    def _today_closed_gap(self, code, fact, now):
+        """今天已收盘、越过槽值稳定余量、但库里还没有可读 closed 行的分钟槽位补取区间 (lo_slot, hi_slot)；
+        盘前、休市、日历未知或已覆盖（含隔离键豁免）时 None，调用方据此零请求。分钟历史一律截到昨天
+        （_window_jobs）、盘中增量只从当下往后追加，盘中首开或新加自选时今天已收盘的槽没有别的来源，
+        最晚要等当晚定稿——首开、重拉、窗口追赶与盘中增量首轮在取数后顺手补上（2026-10-09 沃尔德盘中加入自选后早盘
+        4 根 m15 缺失、当天 m30 缺两根，重拉也补不上）。返回 (lo_slot, hi_slot)；已覆盖（含隔离键豁免）时
+        "covered"；休市、日历未知、盘前或无越过稳定余量的槽时 None（本时刻无可补，下轮重判）。"""
+        market = market_of(code)
+        today = now.date().isoformat()
+        if calendar.is_trading_day(self.conn(), market, today) is not True:
+            return None
+        stable_at = now - timedelta(seconds=_TODAY_SLOT_SETTLE_S)
+        if stable_at.date() != now.date():      # 午夜后第一分钟：余量跨回昨天，今天还没有任何槽收盘
+            return None
+        stable = stable_at.strftime("%H:%M")
+        slots = sorted(s for s in self._required_slots(market, fact, today) if s[11:] <= stable)
+        if not slots:
+            return None
+        conn = self.conn()
+        hidden = facts.quarantined_keys(conn, code, fact)
+        have = {r["slot_end"] for r in conn.execute(
+            "SELECT slot_end FROM current_minute_bars WHERE code=? AND fact_freq=? AND state='closed'"
+            " AND trade_date=?", (code, fact, today))}
+        if set(slots) - hidden <= have:
+            return "covered"
+        return f"{today} 09:30", slots[-1]
+
+    def _fetch_today_closed(self, code, now) -> str | None:
+        """窗口取数或盘中增量首轮前补一次今天已收盘槽（分钟历史，至多一个请求）。
+
+        返回 "ok"（取回行并提交）、"empty"（空返回：停牌日或上游盘中尚无当天，本交易日读取侧不再自动
+        重试）、"covered"（已覆盖零请求）、"failed"（取数或写入失败，可下轮再试）、None（条件不满足：
+        盘前、休市、日历未知、分钟停用）。失败只记日志不改窗口结果：自选由当晚定稿兜底、非自选下次
+        打开按覆盖重判；写失败与盘中增量同款登记当日缺口。"""
+        fact = self._fact_freq(code)
+        if not fact:
+            return None
+        span = self._today_closed_gap(code, fact, now)
+        if span is None:
+            return None
+        if span == "covered":
+            return "covered"
+        lo_slot, hi_slot = span
+        market, kind = market_of(code), kind_of(code)
+        source, gen = bindings.active(self.conn(), market, kind, FetchItem.MINUTE_HISTORY)
+        try:
+            rows = self._call(code, source, lambda p: p.minute_history(code, fact, lo_slot, hi_slot,
+                                                                       now=now), minute=True)
+        except (_Skipped, _BudgetExhausted, ProviderError):
+            return "failed"
+        with self.writer() as conn:
+            try:
+                self._commit_minutes(conn, code, rows, item=FetchItem.MINUTE_HISTORY.value, fact=fact,
+                                     source=source, gen=gen, start=lo_slot, end=hi_slot, now=now)
+            except facts.StaleBinding:
+                return "failed"
+            except facts.FactsWriteError:
+                log.warning("当日已收盘槽补取写入失败 code=%s %s..%s", code, lo_slot, hi_slot, exc_info=True)
+                self._record_gap_safely(conn, code, fact, lo_slot,
+                                        f"{now.date().isoformat()} {_CLOSE_SLOT[market]}", "write_failed")
+                return "failed"
+            self._reconcile(conn, code, [r.trade_date for r in rows])
+        return "ok" if rows else "empty"
+
+    def _prefill_today(self, code, now) -> None:
+        """盘中增量首轮前补今天已收盘槽：盘中加入自选或进入查看租期的代码，minute_live（最近两槽）覆盖不到
+        此前已收盘的槽（2026-10-09 沃尔德 10:48 盘中加入自选后早盘 4 根 m15 缺失到当晚定稿）。每（代码，
+        交易日）至多一次取数机会：补到、空返回或已覆盖都记 done；失败不记，下轮受退避与额度约束重试。"""
+        today = now.date().isoformat()
+        for stale in [d for d in self._today_prefilled if d != today]:
+            del self._today_prefilled[stale]
+        done = self._today_prefilled.setdefault(today, set())
+        if code in done:
+            return
+        if self._fetch_today_closed(code, now) in ("ok", "empty", "covered"):
+            done.add(code)
+
     def _sync_window(self, code, freqs, bars, *, force=False, max_requests=None) -> dict:
         """执行 _window_jobs：先日线、后分钟（分钟下限随补齐的日线重算）。上游或写入失败即停（不删旧数据、不登记缺口）；
         max_requests 用完也停。日线提交后推日历，写入后核对分钟与日线。
@@ -1526,6 +1608,8 @@ class Collector:
             if out["stopped"]:
                 break
         out["complete"] = not self._window_jobs(code, freqs, bars)
+        # 今天已收盘槽不在窗口内（截到昨天）：盘中首开/重拉/追赶顺手补；结果单列，不进 complete/stopped
+        out["today_slots"] = self._fetch_today_closed(code, self.now())
         return out
 
     def refetching(self, code) -> bool:
@@ -1581,6 +1665,10 @@ class Collector:
         with stack:
             out = self._sync_window(code, freqs, bars, force=True)
             out["today"] = self._refetch_today(code, now)
+            if out.get("today_slots") == "failed" and out["today"] != "failed":
+                # 今天已收盘槽的补取失败不能让重拉报 ok：盘中它补早盘（minute_live 只回最近两槽），
+                # 收盘后到定稿前它是当天分钟的唯一来源（_refetch_today 此时不取）
+                out["today"] = "failed"
             out["vendor"] = None
             if market_of(code) == "HK" and kind_of(code) == "stock":
                 res = self.refresh_vendor_qfq(code, now, force=True)
@@ -1621,9 +1709,14 @@ class Collector:
                 return "failed"
             return "ok"
         if self._fact_freq(code) and self._trading(market, now) and self._in_session(now):
-            # 按本次实际可读接纳判断：全拒、部分拒、待核验、落在隔离键上（计入 _written 却不可读）都不算成功
+            # 按本次实际可读接纳判断：全拒、部分拒、待核验、落在隔离键上（计入 _written 却不可读）都不算成功；
+            # forming 让位给已收盘槽（forming_over_closed：今天段或定格轮已写入 closed）是优先级保护而非拒收，
+            # 全部因此被挡下时也视为可读接纳（该槽已有更权威的已收盘值）
             res, rows = self._intraday_one(code, now)
-            if not self._written(res) or res.rejected or res.pending_review:
+            if res is None:
+                return "failed"
+            hard = [r for r in res.rejected if r[1] != admission.FORMING_OVER_CLOSED]
+            if hard or res.pending_review or (not self._written(res) and not res.rejected):
                 return "failed"
             conn, fact, today = self.conn(), self._fact_freq(code), now.date().isoformat()
             slots = {r.slot_end for r in rows if r.trade_date == today}
@@ -1719,11 +1812,13 @@ class Collector:
 
     def intraday_tick(self, codes, now, *, active=None) -> int:
         """盘中增量：逐代码取一次。active 给定时每个请求前复核（调度线程按当前时钟复核查看租期与自选，
-        不按轮首快照）。"""
+        不按轮首快照）。取增量前先补今天已收盘槽（_prefill_today，每代码每日至多一次）：盘中新进入
+        跟踪或查看租期的代码，minute_live 的最近两槽覆盖不到进入之前已收盘的部分。"""
         written = 0
         for code in codes:
             if active is not None and not active(code):
                 continue
+            self._prefill_today(code, now)
             written += self._written(self._intraday_one(code, now)[0])
         return written
 

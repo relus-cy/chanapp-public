@@ -81,6 +81,15 @@ def _list_since(directory, codes, list_date):
     conn.close()
 
 
+def _mark_open(directory, market, day):
+    """直接登记一天已知开市的日历行（空 sessions 取完整会话网格），代替采集器每日的日历刷新。"""
+    conn = facts.open_facts(Path(directory) / facts.DB_NAME)
+    with facts.write_txn(conn):
+        conn.execute("INSERT OR REPLACE INTO calendar(market, date, is_open, sessions, source, fetched_at)"
+                     " VALUES (?,?,?,?,?,?)", (market, day, 1, "[]", "test", facts.now_iso()))
+    conn.close()
+
+
 def _revised_minutes(directory, code, days, *, quarantine_day):
     """每个交易日先写 forming 再定稿成 closed（每槽两个 revision），并隔离 quarantine_day 的日线：
     minute_bars 累计行数是当前可读已收盘分钟的数倍。"""
@@ -672,6 +681,83 @@ class CollectorTests(unittest.TestCase):
         self.assertTrue([c for c in provider.calls if c[0] == FACT and c[1] == "sz000001"])
         self.assertGreaterEqual(_readable_closed(conn, "sz000001", FACT), need)
 
+    def test_intraday_prefill_covers_slots_before_first_live_round(self):
+        # 盘中新进入跟踪/查看租期的代码：首轮盘中增量前先补今天已收盘槽（minute_live 只回最近两槽，
+        # 覆盖不到进入之前的槽；2026-10-09 沃尔德 10:48 盘中加入自选，早盘 4 根 m15 缺失到当晚定稿）
+        class Live(FullFake):
+            def minute_live(self, code, fact_freq, *, now):
+                return [RawMinuteRow(code, "2026-09-28", "2026-09-28 10:45", 10, 10, 10, 10, 1, "lot", 1,
+                                     "forming", "traded", new_batch_id())]
+
+        _mark_open(self.dir, "CN", "2026-09-28")
+        provider = Live()
+        c = self.make(provider)
+        c.intraday_tick(["sz000001"], datetime(2026, 9, 28, 10, 48))
+        hist = [(call[2], call[3]) for call in provider.calls if call[0] == FACT and call[1] == "sz000001"]
+        self.assertEqual(hist, [("2026-09-28 09:30", "2026-09-28 10:45")])
+        conn = facts.open_facts(self.dir / facts.DB_NAME)
+        self.addCleanup(conn.close)
+        today = facts.read_minute_rows(conn, "sz000001", FACT, "2026-09-28 00:00", "2026-09-28 23:59")
+        closed = sorted(r["slot_end"] for r in today if r["state"] == "closed")
+        self.assertEqual(closed, [f"2026-09-28 {t}" for t in ("09:45", "10:00", "10:15", "10:30", "10:45")])
+        # 已补过的代码本轮不再发历史请求，只走盘中增量
+        provider.calls.clear()
+        c.intraday_tick(["sz000001"], datetime(2026, 9, 28, 10, 48, 30))
+        self.assertEqual([call for call in provider.calls if call[0] == FACT], [])
+
+    def test_intraday_prefill_failure_retried_next_round(self):
+        # 补取失败不消耗本交易日的机会：下一轮重试（受退避约束）；成功后才不再发
+        class FlakyLive(FullFake):
+            def __init__(self):
+                super().__init__()
+                self.broken = True
+
+            def minute_history(self, code, fact_freq, start, end, *, now):
+                if self.broken and end >= "2026-09-28":
+                    self.calls.append((fact_freq, code, start, end))
+                    raise ProviderError("down")
+                return super().minute_history(code, fact_freq, start, end, now=now)
+
+            def minute_live(self, code, fact_freq, *, now):
+                return []
+
+        _mark_open(self.dir, "CN", "2026-09-28")
+        provider = FlakyLive()
+        c = self.make(provider)
+        c.intraday_tick(["sz000001"], datetime(2026, 9, 28, 10, 48))
+        provider.broken = False
+        c.intraday_tick(["sz000001"], datetime(2026, 9, 28, 10, 48, 30))
+        hist = [(call[2], call[3]) for call in provider.calls if call[0] == FACT and call[1] == "sz000001"]
+        self.assertEqual(hist, [("2026-09-28 09:30", "2026-09-28 10:45")] * 2)
+
+    def test_intraday_prefill_empty_marks_done_for_the_day(self):
+        # 空返回（停牌日或上游盘中尚无当天）本交易日不再自动重试，免得对停牌股每轮空转
+        class Quiet(FullFake):
+            def minute_history(self, code, fact_freq, start, end, *, now):
+                self.calls.append((fact_freq, code, start, end))
+                return []
+
+            def minute_live(self, code, fact_freq, *, now):
+                return []
+
+        _mark_open(self.dir, "CN", "2026-09-28")
+        provider = Quiet()
+        c = self.make(provider)
+        for ss in (0, 30):
+            c.intraday_tick(["sz000001"], datetime(2026, 9, 28, 10, 48, ss))
+        hist = [call for call in provider.calls if call[0] == FACT]
+        self.assertEqual(len(hist), 1)
+
+    def test_today_gap_not_fetched_in_first_minute_after_midnight(self):
+        # 午夜后第一分钟：稳定余量跨回昨天，今天还没有任何槽收盘，不得把全天槽判为已稳定
+        self.clock.t = datetime(2026, 9, 28, 0, 0, 30).timestamp()
+        _list_since(self.dir, ["sz000001", "sh000001"], "2026-09-01")
+        _mark_open(self.dir, "CN", "2026-09-28")
+        provider = FullFake()
+        c = self.make(provider)
+        c.ensure_window("sz000001", "m30")
+        self.assertEqual([call for call in provider.calls if call[0] == FACT and call[3] >= "2026-09-28"], [])
+
     def test_intraday_write_failure_registers_gap_for_today(self):
         class Live(FullFake):
             def minute_live(self, code, fact_freq, *, now):
@@ -730,20 +816,55 @@ class CollectorTests(unittest.TestCase):
         c.backfill_day("sh600036")
         self.assertEqual(seen, [False])
 
-    def test_ensure_window_in_session_excludes_today(self):
-        # 盘中首次打开非自选：历史接口不取今天，今日不出现 closed 分钟行（closed 只来自定稿）
+    def test_ensure_window_in_session_fetches_today_closed_slots(self):
+        # 盘中首开：历史窗口仍截到昨天，但今天已收盘（且越过槽值稳定余量）的槽位用分钟历史一次补齐——
+        # 盘中增量只从当下往后追加，首开时刻之前的当日槽位没有别的来源（2026-10-09 沃尔德盘中加入自选后
+        # 早盘 4 根 m15 缺失、两根 m30 空白，只能等当晚定稿）
         self.clock.t = datetime(2026, 9, 28, 10, 30).timestamp()
-        provider = FakeProvider()
+        _list_since(self.dir, ["sz000001", "sh000001"], "2026-09-01")
+        _mark_open(self.dir, "CN", "2026-09-28")
+        provider = FullFake()
         c = self.make(provider)
-        with unittest.mock.patch.dict("os.environ", {"COLLECTOR_ENABLED": "1"}):
-            c.ensure_window("sz000001", "m30")
-        ends = [call[3][:10] for call in provider.calls if call[0] == FACT]
-        self.assertTrue(ends)
-        self.assertTrue(all(end < "2026-09-28" for end in ends), ends)
+        c.ensure_window("sz000001", "m30")
+        today_calls = [(call[2], call[3]) for call in provider.calls
+                       if call[0] == FACT and call[1] == "sz000001" and call[3] >= "2026-09-28"]
+        self.assertEqual(today_calls, [("2026-09-28 09:30", "2026-09-28 10:15")])
         conn = facts.open_facts(self.dir / facts.DB_NAME)
         self.addCleanup(conn.close)
         today = facts.read_minute_rows(conn, "sz000001", FACT, "2026-09-28 00:00", "2026-09-28 23:59")
-        self.assertEqual([r for r in today if r["state"] == "closed"], [])
+        self.assertEqual(sorted(r["slot_end"] for r in today if r["state"] == "closed"),
+                         ["2026-09-28 09:45", "2026-09-28 10:00", "2026-09-28 10:15"])
+
+    def test_ensure_window_preopen_does_not_fetch_today(self):
+        # 盘前首开：今天还没有越过稳定余量的已收盘槽，分钟历史不取今天（沿用截到昨天的语义）
+        self.clock.t = datetime(2026, 9, 28, 9, 0).timestamp()
+        _list_since(self.dir, ["sz000001", "sh000001"], "2026-09-01")
+        _mark_open(self.dir, "CN", "2026-09-28")
+        provider = FullFake()
+        c = self.make(provider)
+        c.ensure_window("sz000001", "m30")
+        ends = [call[3] for call in provider.calls if call[0] == FACT and call[1] == "sz000001"]
+        self.assertTrue(ends)
+        self.assertTrue(all(end < "2026-09-28" for end in ends), ends)
+
+    def test_ensure_window_in_session_skips_covered_today(self):
+        # 今天已收盘槽已全部以 closed 在库（今天段已补过、或定稿已写）：盘中首开今天段零请求。
+        # 注意盘中增量写的是 forming、不算覆盖——它一直在跑也不挡今天段补 closed（closed 覆盖 forming 是正常流程）
+        self.clock.t = datetime(2026, 9, 28, 10, 30).timestamp()
+        _list_since(self.dir, ["sz000001", "sh000001"], "2026-09-01")
+        _mark_open(self.dir, "CN", "2026-09-28")
+        conn0 = facts.open_facts(self.dir / facts.DB_NAME)
+        rows = [RawMinuteRow("sz000001", "2026-09-28", f"2026-09-28 {t}", 10, 10, 10, 10, 1, "lot", 1,
+                             "closed", "traded", new_batch_id()) for t in ("09:45", "10:00", "10:15")]
+        facts.commit_minute_rows(conn0, rows, market="CN", kind="stock", item="minute_live", fact_freq=FACT,
+                                 source="mairui", binding_gen=1, today="2026-09-28")
+        conn0.close()
+        provider = FullFake()
+        c = self.make(provider)
+        c.ensure_window("sz000001", "m30")
+        today_calls = [call for call in provider.calls
+                       if call[0] == FACT and call[1] == "sz000001" and call[3] >= "2026-09-28"]
+        self.assertEqual(today_calls, [])
 
     def test_concurrent_first_fetch_requests_upstream_once(self):
         # spec D7 防重复请求：同一代码的并发首取只有一个在途，其余等它完成后直接读结果

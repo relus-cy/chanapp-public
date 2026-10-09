@@ -65,7 +65,7 @@ from chanapp.engine.kline import collector, config, facts, hk_vendor_qfq, sessio
 from chanapp.engine.kline.providers.raw import ProviderError
 from chanapp.engine.kline.rows import RawDayRow, RawMinuteRow, new_batch_id
 from chanapp.tests.test_kline_collector import (DAY_VOL, FACT, Clock, FullFake, HKFullFake, _enable_collector, _list_since,
-                                                _pin_mechanism_schedule)
+                                                _mark_open, _pin_mechanism_schedule)
 
 PER_HOUR = 60 // sessions.FREQ_MINUTES[FACT]       # 每根 m60 所需的分钟事实行数
 from pathlib import Path
@@ -748,6 +748,41 @@ class RefetchTruthTests(Base):
         self.provider.empty_on = "2026-09-28"
         res = c.refetch_window(X, "m60", bars=40)
         self.assertNotEqual(res["today"], "ok", res)
+        self.assertEqual(res["status"], "partial", res)
+
+    def test_refetch_intraday_tolerates_forming_over_closed(self):
+        # V44：盘中重拉时今天段已把已收盘槽写成 closed，minute_live 返回的重叠 forming 被准入按优先级
+        # 拒收（forming_over_closed）——那是保护而非失败：该槽已有更权威的已收盘值，重拉仍应报 ok
+        _mark_open(self.dir, "CN", "2026-09-28")   # 日历推导只到 09-25，须显式让今天已知开市
+        c = self.make()
+        self.set_time(at("2026-09-28", 10, 20))
+        c.ensure_window(X, "m60", bars=40)          # 首开：今天段补 09:45/10:00/10:15 为 closed
+        self.assertTrue(any("2026-09-28" in str(call) for call in self.calls(X, FACT)),
+                        self.calls(X, FACT))        # 先证今天段真的取过（防空转绿）
+        res = c.refetch_window(X, "m60", bars=40)   # minute_live 恒回 10:15 forming，与库内 closed 同槽
+        self.assertEqual(res["today"], "ok", res)
+        self.assertEqual(res["status"], "ok", res)
+
+    def test_refetch_after_close_reports_today_slots_failure(self):
+        # V45：收盘后、定稿前重拉，当天分钟只能由窗口段的今天段补（_refetch_today 此时不取）；
+        # 今天段取数失败被吞掉而重拉报 ok 是误报（2026-10-09 评审发现）
+        _mark_open(self.dir, "CN", "2026-09-28")
+
+        class TodayDown(Recording):
+            def minute_history(self, code, fact_freq, start, end, *, now):
+                if end[:10] == "2026-09-28":
+                    self.calls.append((fact_freq, code, start, end))
+                    raise ProviderError("down")
+                return super().minute_history(code, fact_freq, start, end, now=now)
+
+        c = self.make()
+        c.ensure_window(X, "m60", bars=40)
+        self.provider = TodayDown()
+        c.providers["mairui"] = self.provider
+        self.set_time(at("2026-09-28", 15, 30))
+        res = c.refetch_window(X, "m60", bars=40)
+        self.assertTrue(self.calls(X, FACT), "今天段应实际发出过今天请求")   # 防空转绿
+        self.assertEqual(res["today"], "failed", res)
         self.assertEqual(res["status"], "partial", res)
 
 
