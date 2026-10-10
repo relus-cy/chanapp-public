@@ -8,7 +8,7 @@
 - collector、keepalive：事实层唯一写者（首取、盘前、盘中、定稿、回填、缺口补取）；冷备保活比对。
 - calendar：F5 交易日历（过去由指数日线推出，未来由供应商年表给出）。
 - qfq、periods、views：等比前复权因子链；周期与周线聚合；一致视图（令牌、新鲜度、提示、来源、行情）。
-- hk_vendor_qfq：港股过渡期供应商前复权缓存。
+- hk_vendor_qfq：港股供应商前复权缓存。
 - instance：JSON 实例覆盖与启动校验；providers/catalog：来源安装清单（工厂、能力、凭据名与默认绑定）。
 - ingest：一次性导入（CSV → 规范行 → 准入预检 → Collector.commit_import 单写者提交）。
 - config：取数与视图内部参数；实例额度在启动时覆盖。

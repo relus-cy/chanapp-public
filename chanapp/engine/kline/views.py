@@ -216,7 +216,7 @@ def _week_bars(ctx, before, limit) -> tuple:
 
 
 def _vendor_bars(ctx, freq, before, limit) -> tuple:
-    """港股过渡期前复权（spec §7 方案 (b)）：服务供应商缓存的已发布版本。
+    """港股前复权（spec §7 方案 (b)）：服务供应商缓存的已发布版本。
 
     只有缓存新鲜（未冻结、未标 stale、且覆盖到今日之前的全部 raw 收盘）时，才把今日盘中的 bar 以原始价接上；
     缓存落后于已收盘 raw、刷新失败或冻结时只服务到缓存末端并标 stale，避免跨越除净日混用复权基准。

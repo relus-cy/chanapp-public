@@ -2306,7 +2306,7 @@ class Collector:
 
     def refresh_vendor_qfq(self, code, now, *, closed_through=None, window=config.DEFAULT_WINDOW,
                            widen=False, force=False, eligible=None, today_ok=False, on_sent=None) -> dict:
-        """港股过渡期供应商前复权缓存（spec §7 方案 (b) 规则 2、6）。
+        """港股供应商前复权缓存（spec §7 方案 (b) 规则 2、6）。
 
         - 以下成套周期在只日线实例中仅为 day，停用的 m30 缓存保留但不参与请求、发布与完成判断；
         - 首建、定稿、缺口补齐与扩展的刷新都走同一代码的单飞锁，同时只有一个在途；

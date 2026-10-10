@@ -1,4 +1,4 @@
-"""港股过渡期供应商前复权缓存（spec §7 方案 (b) 落地规则 2、3、6）与视图接线。"""
+"""港股供应商前复权缓存（spec §7 方案 (b) 落地规则 2、3、6）与视图接线。"""
 import tempfile
 import unittest
 from datetime import datetime
