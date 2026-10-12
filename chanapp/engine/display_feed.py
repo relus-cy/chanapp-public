@@ -1,45 +1,13 @@
 """Display feeds with cache SWR and independently backed-off baseline sources.
 
-quotes.json retains its transferable data mapping. Refreshes publish only rows
-from the current fetch; source timestamps are independent of cache timestamps.
+f10_{code}.json 按代码缓存，刷新只发布本次抓取的字段；源时间戳独立于缓存时间戳。
 """
-
-_MARKET_PREFIX = {0: "sz", 1: "sh", 116: "hk"}
-
-
-def limit_ratio(code: str) -> float | None:
-    if code.startswith(("sh000", "sz399")):
-        return None
-    if code.startswith("hk"):  # 港股无涨跌停
-        return None
-    if code.startswith(("sh68", "sz30")):
-        return 0.20
-    return 0.10
-
 
 from .feeds import baseline_resilience as _resilience
 
 
 def _num(v):
     return _resilience.number(v)
-
-
-def parse_quotes(payload: dict) -> dict:
-    out = {}
-    for row in (payload.get("data") or {}).get("diff") or []:
-        f12, f13 = row.get("f12"), row.get("f13")
-        if not f12:
-            continue
-        code = f12 if str(f12).startswith("BK") else _MARKET_PREFIX.get(f13, "") + str(f12)
-        price, prev = _resilience.price(row.get("f2")), _resilience.price(row.get("f18"))
-        if price == 0:
-            price = None  # 上游异常行的字面 0 按缺失处理；pct=0 是平盘真值，不动
-        ratio = None if code.startswith("BK") else limit_ratio(code)
-        limit_up = bool(price is not None and prev and ratio and price >= round(prev * (1 + ratio), 2))
-        out[code] = {"price": price, "pct": _num(row.get("f3")), "prev_close": prev,
-                     "name": row.get("f14", ""), "limit_up": limit_up,
-                     "source": "baseline_display", "source_ts": _num(row.get("f124"))}
-    return out
 
 
 def parse_f10(data: dict) -> dict:
@@ -82,13 +50,11 @@ from .kline.instance import is_demo
 THROTTLE_INTERVAL = 0.5
 BACKOFF_SECONDS = 30          # 退避冷却（连续 BACKOFF_AFTER_FAILURES 次失败才触发）
 BACKOFF_AFTER_FAILURES = 2    # 单次抖动不退避
-QUOTE_TTL = 60                  # 与页面报价轮询同为 60 秒
 F10_TTL = 300
 
 _HEADERS = {"Accept": "*/*", "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 _ULIST_URL = "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids={secids}&fields={fields}"
 _STOCK_URL = "https://push2.eastmoney.com/api/qt/stock/get?fltt=2&secid={secid}&fields={fields}"
-_QUOTE_FIELDS = "f2,f3,f12,f13,f14,f18,f124"
 _F10_FIELDS = ("f124,f43,f48,f49,f50,f51,f52,f116,f117,f127,f129,f161,f164,f167,f168,f171,f198,"
                "f135,f136,f137,f138,f139,f140,f141,f142,f143,f144,f145,f146,f147,f148,f149")
 
@@ -169,7 +135,7 @@ def _get_session(refresh: bool = False):
 def _fetch_json(url: str) -> dict:
     """限速 + Accept 头（stock/get 缺 Accept 直接 TCP reset）。可被测试 mock。
 
-    失败计数/退避由调用方（get_quotes/get_f10 冷路径与后台刷新线程）统一记录，
+    失败计数/退避由调用方（get_f10 冷路径与后台刷新线程）统一记录，
     本层不置退避。
     """
     _check_blocked()
@@ -201,13 +167,6 @@ def _write_cache(name: str, data, requested_codes=None) -> str:
                                      "data_version": data_identity.version([], identity)})
 
 
-def _fetch_quotes(codes: list[str]) -> dict:
-    """同步抓取批量快照；源调用层统一记录失败与退避。"""
-    payload = _fetch_json(_ULIST_URL.format(secids=",".join(_secid(c) for c in codes),
-                                            fields=_QUOTE_FIELDS))
-    return parse_quotes(payload)
-
-
 def _fetch_f10(code: str) -> dict:
     """向上游同步抓取个股 F10+资金流+板块涨幅（冷路径与后台刷新共用）。"""
     data = (_fetch_json(_STOCK_URL.format(secid=_secid(code), fields=_F10_FIELDS)).get("data") or {})
@@ -224,11 +183,6 @@ def _fetch_f10(code: str) -> dict:
             log.warning("行业涨幅暂不可用")
     return {"f10": f10, "flow": parse_flow(data), "industry_pct": industry_pct,
             "source": "baseline_display", "source_ts": _num(data.get("f124"))}
-
-
-def _backup_quotes(codes):
-    from .feeds.baseline_backup import fetch_quotes
-    return fetch_quotes(codes)
 
 
 def _backup_f10(code):
@@ -261,25 +215,6 @@ def _call_source(fetch, *args, backup=False, usable=None):
     return result
 
 
-def _resilient_quotes(codes):
-    primary_error = None
-    try:
-        rows = _call_source(_fetch_quotes, codes, usable=lambda rows: bool(_resilience.quote_rows(rows, codes, "baseline_display")))
-    except Exception as exc:
-        rows, primary_error = {}, exc
-    rows = _resilience.quote_rows(rows, codes, "baseline_display")
-    missing = [code for code in codes if code not in rows]
-    if missing:
-        try:
-            backup = _call_source(_backup_quotes, missing, backup=True,
-                                  usable=lambda rows: bool(_resilience.quote_rows(rows, missing, "baseline_backup")))
-            rows.update(_resilience.quote_rows(backup, missing, "baseline_backup"))
-        except Exception:
-            if not rows:
-                raise (primary_error if isinstance(primary_error, Push2Blocked) else RuntimeError("显示快照无可用数据")) from primary_error
-    return rows
-
-
 def _usable_f10(result):
     merged = _resilience.merge_f10(result, {})
     return any(merged["f10"].get(key) is not None for key in _resilience.BASIC_FIELDS)
@@ -302,47 +237,6 @@ def _resilient_f10(code):
     if not any(result['f10'].get(key) is not None for key in _resilience.BASIC_FIELDS):
         raise RuntimeError("显示资料无可用数据")
     return result
-
-
-def _quotes_response(cached, codes, stale=False):
-    rows = {code: (_resilience.stamp(row, 'baseline_display') if 'source' in row else row)
-            for code, row in cached['data'].items() if code in codes}
-    missing = [code for code in codes if code not in rows or _resilience.price(rows[code].get('price')) is None]
-    return {'quotes': rows, 'missing_codes': missing,
-            'meta': _resilience.metadata(rows.values(), ['quotes'] if missing else []),
-            'degraded': stale, 'ts': cached['ts']}
-
-
-def _baseline_quotes(codes, require_fresh=False, cache_name="quotes.json"):
-    """cache_name：自选表用 quotes.json；单代码报价（get_quote）用各自的文件，不覆盖自选缓存。"""
-    codes = list(dict.fromkeys(codes))
-
-    def hit_when(payload, ts):
-        return ((time.time() - ts) <= QUOTE_TTL and
-                set(codes).issubset(payload.get('requested_codes', payload['data'])))
-
-    def read():
-        return _read_cache(cache_name)
-
-    def sync_fetch():
-        quotes = _resilient_quotes(codes) if codes else {}
-        status = _write_cache(cache_name, quotes, requested_codes=codes)
-        if status == "superseded":
-            newer = _read_cache(cache_name)
-            if newer is None:
-                raise cache_store.CachePublicationError("更新后的快照缓存不可用")
-            return newer[0]
-        return {"ts": time.time(), "data": quotes}
-
-    result = swr.serve(
-        swr.make_key(cache_name),
-        QUOTE_TTL, swr.SwrIO(read=read, sync_fetch=sync_fetch),
-        hit_when=hit_when, require_fresh=require_fresh,
-        serve_stale_on_cold_failure=True,
-        should_trigger=lambda key: not _sources_blocked(),
-        log_failure=lambda key, exc: log.warning("后台刷新失败 %s", cache_name, exc_info=True),
-        domain=cache_name)
-    return _quotes_response(result.payload, codes, stale=result.stale)
 
 
 def _baseline_f10(code, require_fresh=False):
@@ -372,27 +266,6 @@ def _baseline_f10(code, require_fresh=False):
             'degraded': result.stale, 'ts': cached['ts']}
 
 
-def get_quotes(codes: list[str], *, require_fresh=False) -> dict:
-    if is_demo():
-        return _demo_quotes(codes)
-    result = _baseline_quotes(codes, require_fresh)
-    result["data_version"] = data_identity.version([], {
-        "data": result["quotes"], "source": "baseline_display", "normalization": "display-v1",
-        "requested_codes": sorted(set(codes))})
-    return result
-
-
-def get_quote(code: str, *, require_fresh=False) -> dict:
-    """单代码报价（搜索查看的非自选代码）：与 get_quotes 同一口径与 TTL，缓存按代码单独存放，不覆盖自选报价缓存。"""
-    if is_demo():
-        return _demo_quotes([code])
-    result = _baseline_quotes([code], require_fresh, cache_name=f"quote_{code}.json")
-    result["data_version"] = data_identity.version([], {
-        "data": result["quotes"], "source": "baseline_display", "normalization": "display-v1",
-        "requested_codes": [code]})
-    return result
-
-
 def get_f10(code: str, *, require_fresh=False) -> dict:
     if is_demo():
         return {"f10": {}, "flow": {}, "industry_pct": None, "degraded": False,
@@ -402,10 +275,3 @@ def get_f10(code: str, *, require_fresh=False) -> dict:
     result["data_version"] = data_identity.version([], {
         "data": content, "source": "baseline_display", "normalization": "display-v1"})
     return result
-
-
-def _demo_quotes(codes):
-    from . import data
-    quotes = {code: q for code in codes if (q := data.quote(code)) is not None}
-    return {"quotes": quotes, "degraded": False, "ts": 0, "meta": {"mode": "demo"},
-            "missing_codes": [code for code in codes if code not in quotes], "invalid_codes": []}

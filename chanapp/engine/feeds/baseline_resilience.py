@@ -38,24 +38,6 @@ def stamp(row, source):
     return row
 
 
-def quote_rows(rows, codes, source):
-    result = {}
-    for code in codes:
-        row = rows.get(code)
-        if not isinstance(row, dict) or price(row.get('price')) is None:
-            continue
-        prev = price(row.get('prev_close'))
-        pct = number(row.get('pct'))
-        if prev is None or pct is None or abs((row['price'] / prev - 1) * 100 - pct) > 0.1:
-            continue
-        row = stamp(row, source)
-        row['price'] = price(row['price'])
-        row['prev_close'] = price(row.get('prev_close'))
-        row['pct'] = number(row.get('pct'))
-        result[code] = row
-    return result
-
-
 def metadata(rows, unavailable=()):
     rows = [stamp(row, 'baseline_display') for row in rows]
     times = [r.get('source_ts') for r in rows if number(r.get('source_ts')) is not None]

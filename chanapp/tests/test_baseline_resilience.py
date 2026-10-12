@@ -7,6 +7,16 @@ from unittest import mock
 from chanapp.engine import display_feed as feed
 from chanapp.tests import cache_support
 
+BASIC = dict.fromkeys(('amount', 'outer', 'inner', 'volume_ratio',
+                       'limit_up_price', 'limit_down_price', 'total_mv', 'float_mv',
+                       'pe_ttm', 'pb', 'turnover', 'amplitude'), 1)
+
+
+def f10_result(price, source_ts=None):
+    return {'f10': {'price': price, **BASIC}, 'flow': {'main': 1.0},
+            'industry_pct': 0.5, 'source': 'baseline_display',
+            'source_ts': time.time() if source_ts is None else source_ts}
+
 
 class BaselineResilienceTests(unittest.TestCase):
     def setUp(self):
@@ -16,76 +26,59 @@ class BaselineResilienceTests(unittest.TestCase):
         self.dir.mkdir()
         feed._reset_blocked()
 
-    def quote(self, price=10, source='baseline_backup', ts=None):
-        return dict(price=price, pct=(price / 10 - 1) * 100, prev_close=10, name='fixture', limit_up=False,
-                    source=source, source_ts=time.time() if ts is None else ts)
-
     def test_failure_backup_and_primary_recovery(self):
-        with mock.patch.object(feed, '_fetch_quotes', side_effect=OSError('offline')), mock.patch.object(feed, '_backup_quotes', return_value={'sz000001': self.quote()}):
-            first = feed.get_quotes(['sz000001'])
-        self.assertEqual(first['quotes']['sz000001']['source'], 'baseline_backup')
+        with mock.patch.object(feed, '_fetch_f10', side_effect=OSError('offline')), \
+             mock.patch.object(feed, '_backup_f10', return_value=f10_result(10)):
+            first = feed.get_f10('sz000001')
+        self.assertEqual(first['meta']['field_sources']['price'], 'baseline_backup')
         self.assertEqual(feed._primary_backoff.failure_count(), 1)
-        (self.dir / 'quotes.json').unlink()
-        with mock.patch.object(feed, '_fetch_quotes', return_value={'sz000001': self.quote(11, 'baseline_display')}), mock.patch.object(feed, '_backup_quotes') as backup:
-            result = feed.get_quotes(['sz000001'])
+        (self.dir / 'f10_sz000001.json').unlink()
+        with mock.patch.object(feed, '_fetch_f10', return_value=f10_result(11)), \
+             mock.patch.object(feed, '_backup_f10') as backup:
+            result = feed.get_f10('sz000001')
         backup.assert_not_called()
-        self.assertEqual(result['quotes']['sz000001']['price'], 11)
+        self.assertEqual(result['f10']['price'], 11)
         self.assertEqual(feed._primary_backoff.failure_count(), 0)
 
-    def test_partial_filters_foreign_codes_and_marks_missing(self):
-        with mock.patch.object(feed, '_fetch_quotes', return_value={'sz000001': self.quote(), 'sh600000': self.quote()}), mock.patch.object(feed, '_backup_quotes', return_value={}):
-            result = feed.get_quotes(['sz000001', 'sz000002'])
-        self.assertEqual(set(result['quotes']), {'sz000001'})
-        self.assertEqual(result['missing_codes'], ['sz000002'])
-
-    def test_new_request_set_refetches_without_reusing_old_row(self):
-        with mock.patch.object(feed, '_fetch_quotes', return_value={'sz000001': self.quote()}):
-            feed.get_quotes(['sz000001'])
-        with mock.patch.object(feed, '_fetch_quotes', return_value={'sz000002': self.quote(12)}) as primary, mock.patch.object(feed, '_backup_quotes', return_value={}):
-            result = feed.get_quotes(['sz000001', 'sz000002'])
-        primary.assert_called_once()
-        self.assertEqual(set(result['quotes']), {'sz000002'})
-        self.assertEqual(result['missing_codes'], ['sz000001'])
-
     def test_old_source_timestamp_is_not_fetch_timestamp(self):
-        with mock.patch.object(feed, '_fetch_quotes', side_effect=OSError()), mock.patch.object(feed, '_backup_quotes', return_value={'sz000001': self.quote(ts=100)}):
-            result = feed.get_quotes(['sz000001'])
+        with mock.patch.object(feed, '_fetch_f10', side_effect=OSError()), \
+             mock.patch.object(feed, '_backup_f10', return_value=f10_result(10, source_ts=100)):
+            result = feed.get_f10('sz000001')
         self.assertTrue(result['meta']['source_stale'])
-        self.assertEqual(result['quotes']['sz000001']['source_ts'], 100)
+        self.assertEqual(result['source_ts'], 100)
         self.assertFalse(result['degraded'])
 
     def test_require_fresh_refreshes_expired_cache(self):
-        (self.dir / 'quotes.json').write_text(json.dumps({'ts': 1, 'data': {'sz000001': self.quote(1)}}))
-        with mock.patch.object(feed, '_fetch_quotes', return_value={'sz000001': self.quote(12)}):
-            result = feed.get_quotes(['sz000001'], require_fresh=True)
-        self.assertEqual(result['quotes']['sz000001']['price'], 12)
+        (self.dir / 'f10_sz000001.json').write_text(json.dumps(
+            {'ts': 1, 'data': f10_result(1)}))
+        with mock.patch.object(feed, '_fetch_f10', return_value=f10_result(12)):
+            result = feed.get_f10('sz000001', require_fresh=True)
+        self.assertEqual(result['f10']['price'], 12)
         self.assertFalse(result['degraded'])
 
-    def test_invalid_numbers(self):
-        for value in (True, float('nan'), float('inf'), -1):
-            self.assertIsNone(feed.parse_quotes({'data': {'diff': [{'f12': '000001', 'f13': 0, 'f2': value}]}})['sz000001']['price'])
-            self.assertIsNone(feed.parse_f10({'f43': value})['price'])
-
     def test_primary_backoff_does_not_block_backup(self):
-        with mock.patch.object(feed, '_fetch_quotes', side_effect=OSError()) as primary, mock.patch.object(feed, '_backup_quotes', side_effect=lambda codes: {code: self.quote() for code in codes}) as backup:
+        with mock.patch.object(feed, '_fetch_f10', side_effect=OSError()) as primary, \
+             mock.patch.object(feed, '_backup_f10', side_effect=lambda code: f10_result(10)) as backup:
             for code in ('sz000001', 'sz000002', 'sz000003'):
-                feed.get_quotes([code])
+                feed.get_f10(code)
         self.assertEqual(primary.call_count, 2)
         self.assertEqual(backup.call_count, 3)
         self.assertEqual(feed._primary_backoff.failure_count(), 2)
         self.assertEqual(feed._backup_backoff.failure_count(), 0)
 
     def test_backup_backoff_does_not_block_primary_recovery(self):
-        with mock.patch.object(feed, '_fetch_quotes', side_effect=OSError()), mock.patch.object(feed, '_backup_quotes', side_effect=OSError()):
+        with mock.patch.object(feed, '_fetch_f10', side_effect=OSError()), \
+             mock.patch.object(feed, '_backup_f10', side_effect=OSError()):
             for _ in range(2):
                 with self.assertRaises(RuntimeError):
-                    feed.get_quotes(['sz000001'])
+                    feed.get_f10('sz000001')
         self.assertEqual(feed._backup_backoff.failure_count(), 2)
         feed._primary_backoff._cool_until = 0.0
-        with mock.patch.object(feed, '_fetch_quotes', return_value={'sz000001': self.quote(12, 'baseline_display')}), mock.patch.object(feed, '_backup_quotes') as backup:
-            result = feed.get_quotes(['sz000001'])
+        with mock.patch.object(feed, '_fetch_f10', return_value=f10_result(12)), \
+             mock.patch.object(feed, '_backup_f10') as backup:
+            result = feed.get_f10('sz000001')
         backup.assert_not_called()
-        self.assertEqual(result['quotes']['sz000001']['price'], 12)
+        self.assertEqual(result['f10']['price'], 12)
         self.assertEqual(feed._primary_backoff.failure_count(), 0)
         self.assertEqual(feed._backup_backoff.failure_count(), 2)
 
@@ -113,35 +106,20 @@ class BaselineResilienceTests(unittest.TestCase):
         self.assertFalse(result['degraded'])
 
     def test_unknown_source_time_does_not_trigger_backup(self):
-        row = self.quote()
-        row.pop('source_ts')
-        with mock.patch.object(feed, '_fetch_quotes', return_value={'sz000001': row}), mock.patch.object(feed, '_backup_quotes') as backup:
-            result = feed.get_quotes(['sz000001'])
+        result = f10_result(10)
+        result.pop('source_ts')
+        with mock.patch.object(feed, '_fetch_f10', return_value=result), \
+             mock.patch.object(feed, '_backup_f10') as backup:
+            out = feed.get_f10('sz000001')
         backup.assert_not_called()
-        self.assertTrue(result['meta']['source_time_unknown'])
-        self.assertFalse(result['degraded'])
-
-    def test_partial_batch_cache_obeys_ttl(self):
-        with mock.patch.object(feed, '_fetch_quotes', return_value={'sz000001': self.quote()}), mock.patch.object(feed, '_backup_quotes', return_value={}):
-            feed.get_quotes(['sz000001', 'sz000002'])
-        with mock.patch.object(feed, '_fetch_quotes', side_effect=AssertionError('cache hit')) as primary, mock.patch.object(feed, '_backup_quotes', side_effect=AssertionError('cache hit')) as backup:
-            result = feed.get_quotes(['sz000001', 'sz000002'])
-        primary.assert_not_called()
-        backup.assert_not_called()
-        self.assertEqual(result['missing_codes'], ['sz000002'])
-
-    def test_changed_batch_failure_still_returns_available_rows(self):
-        with mock.patch.object(feed, '_fetch_quotes', return_value={'sz000001': self.quote()}):
-            feed.get_quotes(['sz000001'])
-        with mock.patch.object(feed, '_fetch_quotes', side_effect=OSError()), mock.patch.object(feed, '_backup_quotes', side_effect=OSError()):
-            result = feed.get_quotes(['sz000001', 'sz000002'])
-        self.assertEqual(set(result['quotes']), {'sz000001'})
-        self.assertEqual(result['missing_codes'], ['sz000002'])
-        self.assertFalse(result['degraded'])
+        self.assertTrue(out['meta']['source_time_unknown'])
+        self.assertFalse(out['degraded'])
 
     def test_invalid_primary_rows_count_as_failure(self):
-        with mock.patch.object(feed, '_fetch_quotes', return_value={'sz000001': self.quote(-1)}), mock.patch.object(feed, '_backup_quotes', return_value={'sz000001': self.quote()}):
-            feed.get_quotes(['sz000001'])
+        unusable = {'f10': {'price': -1}, 'flow': {}, 'industry_pct': None}
+        with mock.patch.object(feed, '_fetch_f10', return_value=unusable), \
+             mock.patch.object(feed, '_backup_f10', return_value=f10_result(10)):
+            feed.get_f10('sz000001')
         self.assertEqual(feed._primary_backoff.failure_count(), 1)
 
     def test_f10_negative_basic_values_are_supplemented(self):

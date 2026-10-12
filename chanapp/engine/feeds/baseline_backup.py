@@ -1,4 +1,4 @@
-"""Backup batch quote source. Prices/amounts retain each market's currency.
+"""Backup F10 source. Prices/amounts retain each market's currency.
 
 Recorded 2026-09-09: mainland amount[37] is ten-thousand currency units;
 HK amount[37] is currency units. Market caps[44:46] use 100 million units.
@@ -72,13 +72,6 @@ def _quote(code, fields):
             'source': SOURCE, 'source_ts': stamp}
 
 
-def parse_quotes(text, codes):
-    """Return only requested, valid rows; absent/ambiguous rows stay absent."""
-    codes = [_validate(code) for code in codes]
-    return {code: quote for code, fields in _rows(text, codes).items()
-            if (quote := _quote(code, fields)) is not None}
-
-
 def _fetch_text(codes):
     # Source retry/backoff belongs to the display coordinator, once per source.
     throttle(0.4)
@@ -86,23 +79,9 @@ def _fetch_text(codes):
                                      headers={'User-Agent': 'Mozilla/5.0'})
     with urllib.request.urlopen(request, timeout=10) as response:
         text = response.read().decode('gb18030')
-    if not parse_quotes(text, codes):
+    if not _rows(text, codes):
         raise RuntimeError('备用显示批次无有效行情')
     return text
-
-
-def fetch_quotes(codes):
-    codes = list(dict.fromkeys(_validate(code) for code in codes))
-    out, error = {}, None
-    for start in range(0, len(codes), 80):
-        batch = codes[start:start + 80]
-        try:
-            out.update(parse_quotes(_fetch_text(batch), batch))
-        except Exception as exc:
-            error = exc
-    if not out and error is not None:
-        raise error
-    return out
 
 
 def fetch_f10(code):

@@ -40,8 +40,7 @@ class TestPush2Api(unittest.TestCase):
             [{"code": c, "name": n} for c, n in items], ensure_ascii=False), encoding="utf-8")
 
     def get_quotes(self, params=None):
-        with mock.patch.object(display_feed, "get_quotes", side_effect=AssertionError("报价不经显示层")):
-            r = self.client.get("/api/quotes", params=params)
+        r = self.client.get("/api/quotes", params=params)
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()
 
