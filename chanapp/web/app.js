@@ -102,34 +102,28 @@
 
   function el(id) { return document.getElementById(id); }
 
-  // 行情行的展示口径（自选行与右栏卡头共用，保证两处一致）：
-  // A 股当前代码优先取 /api/chart 应答内嵌的 quote（与图中末根 bar 同一次服务端读取，见 chartQuoteFor），
-  // 其余 A 股行取自 K 线事实（price_label 最新/昨收；事实缺失 price_unavailable），港股行为显示层快照。
-  // 昨收时涨跌为空；不回退 F10 价格。
-  // 港股报价只带源时间戳（秒）：按北京时间（A 股、港股同为 UTC+8，无夏令时）写成与 price_time 同样的格式
-  function sourceTime(sec) {
-    if (typeof sec !== 'number' || !isFinite(sec) || sec <= 0) return '';
-    return new Date((sec + 8 * 3600) * 1000).toISOString().slice(0, 16).replace('T', ' ');
-  }
-
+  // 行情行的展示口径（自选行与右栏卡头共用，保证两处一致）：两个市场都取自 K 线事实（price_label 最新/昨收；
+  // 事实缺失 price_unavailable），整表来自同一次服务端读取（见 applyQuotes）。昨收时涨跌为空；不回退 F10 价格。
   function quoteView(q) {
     q = q || {};
     var price = q.price == null ? null : q.price;
     var pct = price == null || q.price_label === '昨收' ? null : (q.pct == null ? null : q.pct);
     return { price: price, pct: pct, prevClose: price != null && q.price_label === '昨收',
              historical: price != null && q.price_label === '历史',
-             unavailable: q.price_unavailable === true, time: q.price_time || sourceTime(q.source_ts),
+             unavailable: q.price_unavailable === true, time: q.price_time || '',
              stale: price != null && q.stale === true };
   }
 
-  // 最近一次 200 的 /api/chart 应答内嵌的 A 股报价（304 保留）：价格卡与自选当前行以此与 K 线末根 bar
-  // 同快照，不再经独立报价轮询链（两条 60 秒链各读各的时刻，盘中会差一次采集）。quote 为 null 表示该标的
-  // 无任何事实（暂无可信价格）；港股应答不含此键，走原报价链。
-  var chartQuote = null;  // {code, quote}
-  function chartQuoteFor(code) {
-    if (!chartQuote || chartQuote.code !== code) return undefined;
-    var q = chartQuote.quote;
-    return q && q.price != null ? q : { price_unavailable: true };
+  // 报价表 state.quotes（自选各项与当前代码）：每次整表替换，来源是 /api/chart 应答内嵌的 quotes（与图中末根 bar
+  // 同一次服务端读取）或图表不刷新时的 /api/quotes；两者都是一次读事务，所以价格卡、自选各行与图例同快照。
+  // 序号在请求发出时取：发出较晚的响应先到时，较早发出的晚到不再覆盖它。
+  var quotesSeq = 0, quotesApplied = 0;
+  function applyQuotes(seq, quotes) {
+    if (seq < quotesApplied) return;
+    quotesApplied = seq;
+    state.quotes = quotes || {};
+    renderWatchlist();
+    if (state.code) renderF10Header();  // 价格卡独立于 F10：F10 未到时报价也要显示
   }
 
   var SVG_PLUS = '<svg class="ic-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
@@ -180,8 +174,7 @@
           };
         }
       } else {
-        var embedded = chartQuoteFor(w.code);   // 当前代码的 A 股行：与图同快照的内嵌报价优先于报价表
-        var q = embedded !== undefined ? embedded : (state.quotes || {})[w.code] || {};
+        var q = (state.quotes || {})[w.code] || {};
         var v = quoteView(q);  // 与右栏卡头同一口径；缺价格时价格与涨跌一并显空
         var pctCls = v.pct > 0 ? 'up' : (v.pct < 0 ? 'down' : 'flat');
         div.innerHTML = '<div class="row"><span>' + esc(w.name) +
@@ -451,34 +444,13 @@
     return notes.join(' · ');
   }
 
-  // 行情按自选代码成表，与当前 code/freq/adjust 无关；只接纳最新一次请求的响应（逆序返回时较早的晚到不覆盖）
-  var quotesSeq = 0;
+  // 报价表单独取（自选各项加当前代码）：图表不刷新时用（启动、自选增删、当前代码休市而其他市场自选在交易、
+  // 图表加载失败）；静默失败（价格只是增强，失败保留旧值）
   function loadQuotes() {
     var seq = ++quotesSeq;
-    fetch('/api/quotes')
+    fetch('/api/quotes' + (state.code ? '?code=' + encodeURIComponent(state.code) : ''))
       .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) {
-        if (!j || seq !== quotesSeq) return;
-        state.quotes = j.quotes || {};
-        renderWatchlist();
-        if (state.code) renderF10Header();  // 价格卡独立于 F10：F10 未到时报价也要显示
-      })
-      .catch(function () {});
-  }
-
-  // 正在看的非自选港股代码：单代码报价（自选由 loadQuotes 的整表覆盖，A 股由 /api/chart 内嵌报价覆盖）；
-  // 只接纳最新一次请求的响应（逆序返回时较早的请求晚到不覆盖），且代码仍是当前代码
-  var viewQuoteSeq = 0;
-  function loadViewQuote(code) {
-    if (!code || isWatched(code) || /^(sh|sz)/.test(code)) return;
-    var seq = ++viewQuoteSeq;
-    fetch('/api/quote?code=' + encodeURIComponent(code))
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) {
-        if (!j || seq !== viewQuoteSeq || code !== state.code) return;
-        state.viewQuote = { code: code, quote: j.quote || null };
-        renderF10Header();
-      })
+      .then(function (j) { if (j) applyQuotes(seq, j.quotes); })
       .catch(function () {});
   }
 
@@ -498,10 +470,7 @@
         if (selectFirst) state.code = items[0].code;
         if (form) form.reset();
         renderWatchlist();
-        // 报价通道切到报价表：上次成员期间残留的这一项不可信，作废并立即刷新；表到之前价格卡沿用单代码报价
-        if (state.quotes) delete state.quotes[code];
-        if (state.code) renderF10Header();
-        loadQuotes();
+        loadQuotes();  // 新成员的报价：报价表只含自选与当前代码，立即整表重取
         if (selectFirst) { load(); recordView(items[0].code, items[0].name); }  // 无当前代码时加入即打开：记一次查看
         setStatus('');
       });
@@ -518,11 +487,7 @@
         .then(function (items) {
           // 移出自选退回搜索查看：当前图表保持不动（数据与查看记录都保留），只停止后台持续跟踪
           state.watchlist = items;
-          renderWatchlist();
-          // 报价通道切到单代码报价：报价表里的这一项不再刷新，作废；立即重绘并取单代码报价
-          if (state.quotes) delete state.quotes[code];
-          if (state.code) renderF10Header();
-          if (state.code === code) loadViewQuote(code);
+          renderWatchlist();  // 当前代码移出后仍在报价表里（报价表恒含当前代码），价格卡不受影响
         });
     }).catch(function (e) { setStatus(e.message); });
   }
@@ -2073,16 +2038,10 @@
     el('flowNote').hidden = true;
   }
 
-  // 卡头：独立的价格卡，F10 慢或失败不挡。名称取自选股（查不到回落 code）；价/涨幅只取行情——A 股优先
-  // /api/chart 内嵌报价（与图同快照）；否则按当前是否自选选通道：自选取 state.quotes（报价表还没有时退回
-  // 单代码报价），非自选只取单代码报价 state.viewQuote（按代码核对；移出自选后报价表里的残留旧价不再刷新，
-  // 不能遮住它）——不回退 F10 价格
+  // 卡头：独立的价格卡，F10 慢或失败不挡。名称取自选股（查不到回落 code）；价/涨幅只取报价表（恒含当前代码，
+  // 与自选各行同一次读取）——不回退 F10 价格
   function renderF10Header() {
-    var embedded = chartQuoteFor(state.code);
-    var vq = state.viewQuote;
-    var view = vq && vq.code === state.code ? vq.quote : null;
-    var v = quoteView(embedded !== undefined ? embedded
-                      : isWatched(state.code) ? (state.quotes || {})[state.code] || view : view);
+    var v = quoteView((state.quotes || {})[state.code]);
     el('quoteSec').style.display = state.code ? '' : 'none';
     el('f10Name').textContent = watchName(state.code);
     el('f10Code').textContent = state.code;
@@ -2557,12 +2516,12 @@
     };
     var refreshTarget = options && options.refresh && sameTarget();
     renderF10Header();    // 价格卡先按已有行情显示（F10 慢或失败不挡价格）
-    if (!(options && options.refresh) && !busyRetry) loadViewQuote(state.code);  // 非自选港股：打开时取一次单代码报价，之后随报价轮询（A 股随 chart 内嵌报价）
     loadF10(state.code);  // F10/资金流与 /api/chart 并行，互不阻塞（内部有 300s TTL）
     syncManualAnalysis(); // 切换与行情自动刷新不请求 AI
     var timer = setTimeout(function () {
       ctl.abort(new Error(refetch ? '重拉超时（120s）' : '加载超时（25s）'));
     }, refetch ? REFETCH_TIMEOUT_MS : CHART_TIMEOUT_MS);
+    var quoteSeq = ++quotesSeq;  // 应答内嵌的报价表按发出时刻排序（见 applyQuotes）
     fetch('/api/chart?code=' + encodeURIComponent(request.code) + '&freq=' + request.freq +
           '&adjust=' + encodeURIComponent(request.adjust) +
           '&rule_profile=' + encodeURIComponent(profile) + '&signal_scope=' + encodeURIComponent(scope) +
@@ -2626,18 +2585,8 @@
         el('rail').classList.remove('ctx-old');
         renderEvidence(data.evidence, {preserve: !!plan});
         renderMeta(meta);
-        // A 股：应答内嵌报价与 bars 同一次服务端读取——价格卡与自选当前行跟进，报价轮询不再覆盖它们
-        if ('quote' in data) {
-          chartQuote = { code: request.code, quote: data.quote || null };
-          renderF10Header();
-          if (isWatched(request.code)) renderWatchlist();
-        }
-        // 首开非自选港股：单代码报价与首取并行，事实还没写入时报价为空；首取完成后补取一次（刷新与已有价格不补；
-        // A 股由内嵌报价覆盖，loadViewQuote 内部跳过）
-        var vq = state.viewQuote;
-        if (!(options && options.refresh) && !(vq && vq.code === request.code && vq.quote && vq.quote.price != null)) {
-          loadViewQuote(request.code);
-        }
+        // 内嵌报价表（自选各项与当前代码）与 bars 同一次服务端读取：价格卡、自选各行与图例同快照
+        if (data.quotes) applyQuotes(quoteSeq, data.quotes);
         activeChartVersion = {code: request.code, freq: request.freq, adjust: request.adjust, calculation_id: data.calculation_id, data_version: data.data_version || meta.data_version};
         updateAnalysisFreshness();
         if (notice) showNotice(notice); else setStatus('');
@@ -2666,8 +2615,10 @@
         el('center').classList.remove('chart-reloading');  // 失败也要解除遮罩，露出错误条
         setStatus('加载失败：' + e.message);
         showChartError(e.message);
+        loadQuotes();  // 报价表不随失败的图表停住：单独取一次
       })
       .finally(function () { clearTimeout(timer); progressDone(ctl); });
+    return true;  // 已发出图表请求（报价表随应答到达）；早退时为 undefined
   }
 
   var BUSY_RETRY_MS = 5000, BUSY_RETRY_MAX = 6;  // 503 自动重试：约 30 秒内至多 6 次
@@ -2759,25 +2710,33 @@
 
   var closeFollowed = null;  // 已做过收盘后跟进的（代码|周期|打开序号|交易日）：每次打开每个收盘日至多一次，补读失败也不重试
 
+  // 行情刷新 60s 一轮，一轮只读一次库：图表刷新时报价表随 /api/chart 内嵌（与 bars 同一次读事务），图表不刷新而
+  // 自选或当前代码有市场在交易时（当前代码休市、其他市场自选仍在交易；没有选中标的）单独取 /api/quotes。
   setInterval(function () {
     if (sessionDemo || document.hidden) return;  // demo 不轮询；后台标签不轮询：恢复前台单独同步偏好
     if (sessionReq || periodLoad || periodSaving) return; // 上一轮还没返回：由它收尾，不重复刷新图表
     refreshSession().then(function () { return loadPeriodPrefs({sync: true}); }).then(function (changed) {
-      if (changed !== false || !state.code) return; // 有变化时同步函数已处理图表；失败时也不借用旧偏好刷新
-      if (!isSessionOpen(marketOf(state.code))) {
-        // 收盘后有限跟进：快照还停在盘中（live）时补读一次收盘后的状态，之后（待定稿/已定稿）不再轮询；
-        // 次数独立计：补读失败时快照仍是 live，也不每分钟重试
-        var ds = lastMeta && lastMeta.coverage && lastMeta.coverage.data_status;
-        var key = [state.code, state.freq, state.openSeq, ds && ds.day].join('|');
-        if (ds && ds.phase === 'live' && closeFollowed !== key) {
-          closeFollowed = key;
-          load({refresh:true});
-        }
-        return;
-      }
-      load({refresh:true});
+      if (changed === true) return; // 有变化时同步函数已处理图表（报价表随应答）
+      // 失败（changed 非 false）时不借用旧偏好刷新图表，报价表照常
+      if (changed === false && refreshChart()) return;
+      var open = (state.watchlist || []).concat(state.code ? [{code: state.code}] : [])
+        .some(function (it) { return isSessionOpen(marketOf(it.code)); });
+      if (open) loadQuotes();
     });
   }, 60000);
+
+  // 本轮是否刷新图表：交易中刷新；收盘后有限跟进——快照还停在盘中（live）时补读一次收盘后的状态，之后（待定稿/
+  // 已定稿）不再轮询；次数独立计：补读失败时快照仍是 live，也不每分钟重试
+  function refreshChart() {
+    if (!state.code) return false;
+    if (!isSessionOpen(marketOf(state.code))) {
+      var ds = lastMeta && lastMeta.coverage && lastMeta.coverage.data_status;
+      var key = [state.code, state.freq, state.openSeq, ds && ds.day].join('|');
+      if (!(ds && ds.phase === 'live' && closeFollowed !== key)) return false;
+      closeFollowed = key;
+    }
+    return !!load({refresh:true});
+  }
 
   // 标签页恢复前台即核对一次；不新增定时器，休市也可看到其他页面的勾选与重启后的能力变化。
   // demo 页面没有轮询，期间服务若按真实模式重启，靠这里核对模式后恢复轮询。
@@ -2787,16 +2746,6 @@
     if (sessionDemo) refreshSession(true);
     if (!periodSaving) loadPeriodPrefs({sync: true});
   });
-
-  // 自选股快照 60s 一轮（与图表轮询、显示层 QUOTE_TTL 同为 60s）。按自选各标的的市场判断：
-  // 所选标的休市不停其他市场自选的报价，没有选中标的也照常。
-  setInterval(function () {
-    if (sessionDemo || document.hidden) return;
-    if (state.code && !isWatched(state.code) && isSessionOpen(marketOf(state.code))) loadViewQuote(state.code);
-    var open = (state.watchlist || []).some(function (it) { return isSessionOpen(marketOf(it.code)); });
-    if (!open) return;
-    loadQuotes();
-  }, 60000);
 
   // ---------- 侧边栏（Codex 客户端式：pinned 固定展开 / rail 窄栏；窄栏悬停或聚焦自动浮动展开，移开收回） ----------
 

@@ -51,7 +51,7 @@ async page => {
   await page.waitForFunction(() => document.body.innerText.includes('历史样本仅 243 根'));
   check((await page.locator('body').innerText()).includes('243'), 'short day history must disclose 243 bars');
   check((await page.locator('#f10Sec').innerText()).includes('样本未提供基本资料'), 'F10 must explain missing sample');
-  // The quote request is independent of the chart and may land after it; wait for it before reading.
+  // The quote table arrives embedded in the chart response; wait for the card before reading.
   await page.locator('#quoteSec').filter({hasText: '历史'}).waitFor({timeout: 5000}).catch(() => {});
   check((await page.locator('#quoteSec').innerText()).includes('历史'), 'quote must be marked historical');
   for (const freq of ['week', 'm30', 'm60', 'day']) {

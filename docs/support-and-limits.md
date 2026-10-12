@@ -36,7 +36,7 @@
 | A 股个股等比前复权 | 随包验证 | demo 样本含两次除权（2025-10-13、2026-04-30），按参考前收计算 |
 | 港股供应商前复权 | 在线实测 | 在线来源运行；CSV 导入无法提供 |
 | A 股盘前参考前收 | 在线实测 | 在线来源运行；CSV 导入无法提供 |
-| 快照报价、F10、资金流、板块、远程搜索 | 在线实测 | 真实模式经显示层在线取数（`chanapp/engine/display_feed.py`、`chanapp/engine/feeds/`、`chanapp/engine/search.py`），解析与容错由随包测试用录制输入覆盖；demo 下用本地数据或返回空 |
+| F10、资金流、板块、远程搜索 | 在线实测 | 真实模式经显示层在线取数（`chanapp/engine/display_feed.py`、`chanapp/engine/feeds/`、`chanapp/engine/search.py`），解析与容错由随包测试用录制输入覆盖；demo 下用本地数据或返回空 |
 | AI 分析 | 在线实测 | 对默认模型服务做过连通性冒烟；目前只支持一种模型服务 |
 
 ### 运行环境

@@ -75,7 +75,7 @@ demo 不调用在线来源，分钟粒度只按导入可用的粒度校验，不
 | 联网 | 不联网：不采集、不补历史、不追赶、不手动重拉，AI 不调用 | 采集器随应用启动（`COLLECTOR_ENABLED=0` 时不启动） |
 | 事实库 | 只读打开，不存在时用内存空库，不在磁盘新建 | 读写，采集器是唯一写者 |
 | 新鲜度 | 不判 stale，状态栏写「历史截止于某日」 | 按会话与定稿时点判定，见 [数据契约 · 新鲜度](data-contract.md#新鲜度与数据状态) |
-| 搜索、报价、F10 | 搜索只查本地事实；报价取本地最新已收盘值并标「历史」；F10 与资金流为空 | 远程搜索 `/api/search`、自选批量快照 `/api/quotes`、F10 `/api/f10` 与港股单代码报价经显示层在线取数（`chanapp/engine/display_feed.py`、`chanapp/engine/feeds/`、`chanapp/engine/search.py`），不需要凭据；A 股的报价价格由 K 线事实派生 |
+| 搜索、报价、F10 | 搜索只查本地事实；报价取本地最新已收盘值并标「历史」；F10 与资金流为空 | 远程搜索 `/api/search` 与 F10 `/api/f10` 经显示层在线取数（`chanapp/engine/display_feed.py`、`chanapp/engine/feeds/`、`chanapp/engine/search.py`），不需要凭据；两个市场的报价都由 K 线事实派生 |
 | AI 分析 | 返回 `disabled`，即使配置了模型 key | 配置了 `LLM_API_KEY` 时可手动触发 |
 
 只写 `{"mode": "real"}` 就会选用两个市场的默认来源；没有提供凭据时启动失败，报 `真实模式缺少环境变量: LONGBRIDGE_ACCESS_TOKEN, LONGBRIDGE_APP_KEY, LONGBRIDGE_APP_SECRET, MAIRUI_LICENCE`。即使只关心 A 股，港股也必须选一个能力完整的已注册来源并提供它的凭据。不开真实模式时，自己的历史数据可以经 CSV 导入后在 demo 模式下查看，见 [数据契约 · CSV 导入](data-contract.md#csv-导入)。
@@ -136,7 +136,7 @@ demo 不调用在线来源，分钟粒度只按导入可用的粒度校验，不
 | `longbridge` | `LONGBRIDGE_APP_KEY`、`LONGBRIDGE_APP_SECRET`、`LONGBRIDGE_ACCESS_TOKEN` |
 | `baostock`、`pytdx`、`yahoo` | 无 |
 
-真实模式启动时只检查两个市场所选来源（`markets.<市场>.source`）的凭据，缺失或为空时只报变量名并拒绝启动，`COLLECTOR_ENABLED=0` 时也检查。行情快照、F10 与远程搜索所用的显示层接口不需要凭据。AI 分析的 key 是上表之外的 `LLM_API_KEY`。
+真实模式启动时只检查两个市场所选来源（`markets.<市场>.source`）的凭据，缺失或为空时只报变量名并拒绝启动，`COLLECTOR_ENABLED=0` 时也检查。F10 与远程搜索所用的显示层接口不需要凭据。AI 分析的 key 是上表之外的 `LLM_API_KEY`。
 
 凭据只经环境变量传入：不要写进实例配置、代码、日志或文档。示例（占位符）：
 

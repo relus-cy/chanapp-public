@@ -48,12 +48,13 @@ const { appContext } = require('./support/app.js');
     renderF10() { context._harness.renders.push('f10'); },
     renderFlow() { context._harness.renders.push('flow'); },
   });
-  runSlices(context, ['quotesF10', 'f10']);
+  runSlices(context, ['quoteView', 'quotesF10', 'f10']);   // quoteView 含真实 applyQuotes
   const pending = context._harness.pending;
   const renders = context._harness.renders;
 
-  // 行情：切换代码/周期/复权期间到达的响应照常接纳（行情按自选代码成表，与当前视图无关）
+  // 行情：切换代码/周期/复权期间到达的响应照常接纳（报价表按请求发出顺序接纳，与当前视图无关）
   context.loadQuotes();
+  assert.equal(pending[0].url, '/api/quotes?code=a', '报价表带上当前代码');
   context.state.code = 'b'; context.state.freq = 'm30'; context.viewState.adjust = 'raw';
   pending[0].resolve({ok:true, json:async () => ({quotes:{a:{price:42}}})});
   await tick();
@@ -90,7 +91,7 @@ const { appContext } = require('./support/app.js');
   console.log('real quote and F10 loader acceptance checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
-// 右栏卡头与自选行价格口径：A 股价格只来自事实行情（/api/quotes），不回退 F10 价格；
+// 右栏卡头与自选行价格口径：价格只来自报价表（事实行情，两个市场同口径），不回退 F10 价格；
 // price_unavailable → 价格为空并标「暂无可信价格」；price_label=昨收 → 涨跌为空；两处取同一行情行
 {
   const nodes = {};
@@ -101,7 +102,7 @@ const { appContext } = require('./support/app.js');
   runSlices(context, ['quoteView', 'f10Header']);
   const header = (q, f) => {
     context.state.code = 'sh600926';
-    context.state.watchlist = [{ code: 'sh600926' }];   // 自选行口径（价格卡按是否自选选报价通道）
+    context.state.watchlist = [{ code: 'sh600926' }];
     context.state.quotes = q === undefined ? {} : { sh600926: q };
     context.renderF10Header(f || {});
     return { px: nodes.f10Px.textContent, chg: nodes.f10Chg.textContent, title: nodes.f10Px.title };
@@ -112,7 +113,7 @@ const { appContext } = require('./support/app.js');
   h = header({ price: null, pct: null, limit_up: false, price_label: null, price_unavailable: true }, { price: 99 });
   assert.deepEqual([h.px, h.chg], ['--', '暂无可信价格'], '事实缺失：不回退 F10 价格，标暂无可信价格');
   h = header(undefined, { price: 99 });
-  assert.deepEqual([h.px, h.chg], ['--', ''], '没有行情行（非自选或尚未加载）：不回退 F10 价格');
+  assert.deepEqual([h.px, h.chg], ['--', ''], '没有行情行（尚未加载）：不回退 F10 价格');
   h = header({ price: 20.0, pct: 0.5, price_label: '昨收', price_time: null });
   assert.deepEqual([h.px, h.chg], ['20.00', '昨收'], '盘前显示昨收，涨跌为空');
   assert.ok(!/(^| )(up|down)( |$)/.test(nodes.f10Px.className), '昨收不着涨跌色');
@@ -120,8 +121,8 @@ const { appContext } = require('./support/app.js');
   assert.deepEqual([h.px, h.chg], ['17.00', '+1.37%'], '过期行情照常显示数值');
   assert.match(h.title, /延迟/, '过期行情在价格提示里标延迟');
   assert.match(nodes.f10Px.className, /(^| )stale( |$)/, '过期行情价格弱化');
-  h = header({ price: 500.0, pct: -1.2, name: 'x', limit_up: false });
-  assert.deepEqual([h.px, h.chg], ['500.00', '-1.20%'], '港股显示层行照常显示');
+  h = header({ price: 500.0, pct: -1.2, name: 'x', limit_up: false, price_label: '最新' });
+  assert.deepEqual([h.px, h.chg], ['500.00', '-1.20%'], '行内其他字段不影响显示');
 }
 {
   const nodes = { wlItems: mkEl('div'), wlForm: mkEl('div') };

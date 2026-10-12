@@ -5,8 +5,8 @@ GET /api/chart?code=&freq=week|day|m60|m30&adjust=qfq|raw&rule_profile=&signal_s
 返回 {kline, macd{rows}, structure{bi,xd,zs,zs_xd,forming}, signals, rule_profile, calculation_id,
       evidence, channels, resonance, meta}；meta 为门面返回体（去掉 bars）加 data_version、bars 根数、
 first_dt、last_dt 与 analysis_tokens {day, m60, m30}（AI 请求令牌的唯一来源）。
-A 股（sh/sz）另含 "quote" 键：与 bars 同一次读事务的门面 quote 报价（无事实为 null）——价格卡与自选
-当前行以此与图中末根 bar 同快照；港股不含此键（报价在 PH3 前走显示层）。
+另含 "quotes" 键 {code: 报价行}（自选各项与当前代码，行结构同 /api/quotes）：与 bars 同一次读事务——价格卡、
+自选各行与图中末根 bar 同快照。
 响应带弱 ETag（整包哈希，剔除按秒变化的 stale_age_s）与 Cache-Control: no-cache；If-None-Match 命中回 304 空体。
 带 before 为历史分页：只支持 day/week/m60/m30；必须回传 meta.token，不符或缺失返回
 409 {"detail": "数据已更新", "token": 当前令牌}（扁平响应体），客户端整窗重载。
@@ -36,10 +36,12 @@ demo 模式为 disabled，照常读取）。同一标的重拉在途时读取只
 
 联想搜索：GET /api/search?q=（外部联想接口，返回 [{code,name,type}]，仅 sh/sz/hk）。
 
-行情显示层：GET /api/quotes（自选股快照）、GET /api/quote?code=（单代码报价，页面只用于港股：搜索查看的非自选
-港股代码；A 股当前代码的价格卡由 /api/chart 内嵌 quote 驱动。A 股口径同自选行取事实派生价格，港股走显示层
-单代码缓存、不覆盖自选缓存）、GET /api/f10?code=（F10+资金流+板块涨幅）。/api/quotes 的 A 股行只取门面 quote（K 线事实派生）的 price、pct、limit_up、
-price_time、price_label（最新/昨收），事实缺失时价格为空并标 price_unavailable；港股行保持显示层值。缓存过期先回旧数据并后台异步刷新，仅首冷同步抓取；
+报价：GET /api/quotes?code=（自选报价表，另含不在自选里的当前代码 code；全部代码同一次读事务）、
+GET /api/quote?code=（单代码，页面不再使用，保留兼容）。两个市场的报价行都只取门面 quote（K 线事实派生）的
+price、pct、limit_up、price_time、price_label（最新/昨收；demo 为历史）、stale，事实缺失时价格为空并标
+price_unavailable，不经显示层。
+
+显示层：GET /api/f10?code=（F10+资金流+板块涨幅）。缓存过期先回旧数据并后台异步刷新，仅首冷同步抓取；
 degraded=True 一律表示「本次回的是过期旧缓存」，此时 fetch_time 为旧缓存时间（数据年龄）。
 
 AI 完全分类：GET /api/analysis?code=&freq=&adjust=&tokens=（chanapp/api/analysis.py）。
@@ -229,8 +231,10 @@ def api_chart(request: Request,
             status = "failed"
         extra["X-Refetch-Status"] = status
     try:
-        # 主图与共振、AI 令牌一次读取（spec §6.3）：不再先单读主图、后读共振；A 股同一次读事务内嵌报价
-        dataset, bundle, quote = engine_chart_payload.read_chart_inputs(code, freq, adjust)
+        # 主图与共振、AI 令牌一次读取（spec §6.3）：不再先单读主图、后读共振；当前代码与自选的报价同一次读事务内嵌
+        quote_items = _quote_items(code)
+        dataset, bundle, raw_quotes = engine_chart_payload.read_chart_inputs(
+            code, freq, adjust, [it["code"] for it in quote_items])
     except Exception as e:  # 数据层错误统一成 502；同一代码重拉在途且没有可服务快照时 503（不等重拉的锁）
         if isinstance(e, engine_data.RefetchBusy):
             raise HTTPException(status_code=503, detail="正在更新这只标的，请稍后再试", headers=extra or None) from e
@@ -241,7 +245,8 @@ def api_chart(request: Request,
     try:
         payload = engine_chart_payload.build_chart_payload(code, freq, dataset, timings=timings,
                                                            rule_profile=rule_profile, signal_scope=signal_scope,
-                                                           adjust=adjust, bundle=bundle, quote=quote)
+                                                           adjust=adjust, bundle=bundle,
+                                                           quotes=_quote_rows(quote_items, raw_quotes))
     except Exception as e:
         log.exception("chart calculation failed code=%s freq=%s profile=%s", code, freq, rule_profile)
         raise HTTPException(status_code=502, detail="结构计算暂不可用", headers=extra or None) from e
@@ -489,63 +494,56 @@ def set_tags(code: str, body: WatchTags) -> list[dict]:
 # ---------- 行情显示层（快照 / F10） ----------
 
 
-_FACT_QUOTE_KEYS = ("price", "pct", "limit_up", "price_time", "price_label", "stale")
+_QUOTE_KEYS = ("price", "pct", "limit_up", "price_time", "price_label", "stale")
+_QUOTE_CODE = r"^(sh|sz)\d{6}$|^hk\d{5}$"
 
 
-def _fact_quote_row(item: dict, display_row: dict | None, quote_fn) -> dict:
-    """A 股行情只取门面 quote（K 线事实派生）的价格、涨跌与涨停；事实缺失或读取失败时价格为空并标
-    price_unavailable，不采用显示层价格。显示层行只保留名称。"""
-    code = item["code"]
-    try:
-        q = quote_fn(code)
-    except Exception:
-        log.warning("事实行情读取失败 code=%s", code, exc_info=True)
-        q = None
-    row = {"name": (display_row or {}).get("name") or item.get("name", "")}
-    row.update({k: (q or {}).get(k) for k in _FACT_QUOTE_KEYS})
-    row["limit_up"] = bool(row["limit_up"])
-    row["price_unavailable"] = q is None or q.get("price") is None
-    return row
+def _quote_items(code: str | None) -> list[dict]:
+    """报价范围：自选各项，另加不在自选里的当前代码（名称留空，页面按自选与最近查看取名）。"""
+    items = _read_watchlist_raw()
+    if code and not any(it["code"] == code for it in items):
+        items.append({"code": code, "name": ""})
+    return items
 
 
-def _with_fact_quotes(items: list[dict], display: dict) -> dict:
-    """港股在 PH3 通过前保持显示层行，A 股由事实派生。"""
-    quote_fn = engine_data.quote
-    out = dict(display)
+def _quote_rows(items: list[dict], raw: dict | None) -> dict | None:
+    """{code: 报价行}：价格、涨跌与涨停只取门面 quote（K 线事实派生，两个市场同一口径）；该代码无事实时价格为空
+    并标 price_unavailable。raw 为 None（门面不内嵌）时返回 None。"""
+    if raw is None:
+        return None
+    rows = {}
     for item in items:
-        if item["code"].startswith(("sh", "sz")):
-            out[item["code"]] = _fact_quote_row(item, display.get(item["code"]), quote_fn)
-    return out
+        q = raw.get(item["code"]) or {}
+        row = {"name": item.get("name", "")}
+        row.update({k: q.get(k) for k in _QUOTE_KEYS})
+        row["limit_up"] = bool(row["limit_up"])
+        row["price_unavailable"] = q.get("price") is None
+        rows[item["code"]] = row
+    return rows
 
 
 @app.get("/api/quotes")
-def api_quotes():
-    items = _read_watchlist_raw()
+def api_quotes(code: str | None = Query(None, pattern=_QUOTE_CODE)):
+    """自选报价表（另含不在自选里的当前代码 code）：全部代码同一次读事务。页面在图表不刷新的时段用它
+    （例如当前代码休市而其他市场的自选仍在交易），图表刷新时报价随 /api/chart 内嵌。"""
+    items = _quote_items(code)
     try:
-        codes = [it["code"] for it in items]
-        r = engine_data.sample_quotes(codes) if engine_data.is_demo() else engine_feed.get_quotes(codes)
+        quotes = _quote_rows(items, engine_data.quotes([it["code"] for it in items]))
     except Exception as e:  # 数据层错误统一成 502
-        raise HTTPException(status_code=502, detail="快照失败，暂不可用") from e
-    quotes = _with_fact_quotes(items, r["quotes"])
-    return {"missing_codes": r.get("missing_codes", []), "invalid_codes": r.get("invalid_codes", []),
-            "data_version": data_identity.version([], {"quotes": quotes, "display": r.get("data_version")}),
-            "meta": r.get("meta", {}), "quotes": quotes, "degraded": r["degraded"],
-            "fetch_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"])) if r["ts"] else None}
+        raise HTTPException(status_code=502, detail="报价暂不可用") from e
+    return {"data_version": data_identity.version([], {"quotes": quotes}), "quotes": quotes}
 
 
 @app.get("/api/quote")
-def api_quote(code: str = Query(..., pattern=r"^(sh|sz)\d{6}$|^hk\d{5}$")):
-    """单代码报价：搜索查看的非自选代码也有卡头价格（/api/quotes 只报自选）。A 股同自选行，只取门面 quote（K 线
-    事实派生），不经显示层；港股走显示层单代码报价，缓存与自选报价分开。"""
-    quote_fn = engine_data.quote
-    if code.startswith(("sh", "sz")) or engine_data.is_demo():
-        return {"code": code, "quote": _fact_quote_row({"code": code, "name": ""}, None, quote_fn),
-                "degraded": False}
+def api_quote(code: str = Query(..., pattern=_QUOTE_CODE)):
+    """单代码报价，口径同 /api/quotes 的一行；事实读取失败时价格为空并标 price_unavailable。页面不再使用（报价随
+    /api/chart 与 /api/quotes），保留兼容。"""
     try:
-        r = engine_feed.get_quote(code)
-    except Exception as e:  # 数据层错误统一成 502
-        raise HTTPException(status_code=502, detail="报价暂不可用") from e
-    return {"code": code, "quote": r["quotes"].get(code), "degraded": r["degraded"], "meta": r.get("meta", {})}
+        q = engine_data.quote(code)
+    except Exception:
+        log.warning("事实行情读取失败 code=%s", code, exc_info=True)
+        q = None
+    return {"code": code, "quote": _quote_rows([{"code": code, "name": ""}], {code: q})[code], "degraded": False}
 
 
 @app.get("/api/f10")

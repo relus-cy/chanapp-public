@@ -42,7 +42,8 @@ function appContext(extras) {
     setStatus(msg) { context.statusMsg = msg || null; statuses.push(msg); },
     renderStatus() { renders.push('status'); }, ensureCharts() { return context.charts; }, updateAiTitle() {},
     hideChartError() {}, showChartError(m) { throw new Error(m); },
-    loadF10() {}, loadViewQuote() {}, renderF10Header() {}, isWatched: () => false,
+    loadF10() {}, renderF10Header() {}, isWatched: () => false,
+    quotesSeq: 0, applyQuotes(seq, quotes) { renders.push('applyQuotes'); context._harness.appliedQuotes = { seq, quotes }; },
     syncManualAnalysis() {}, updateAnalysisFreshness() {},
     renderEvidence() {}, renderMeta() {},
     renderChart(data, opts) { renders.push('chart'); (context._harness.chartCalls || (context._harness.chartCalls = [])).push(opts); },
@@ -53,7 +54,7 @@ function appContext(extras) {
     esc: s => String(s), hhmmss: x => x, toTime: t => t,
     isSessionOpen: () => false, marketOf: () => 'cn',
     acceptsRule: () => true,
-    load() { renders.push('load'); }, loadQuotes() { renders.push('quotes'); },
+    load() { renders.push('load'); return true; }, loadQuotes() { renders.push('quotes'); },
     renderTabs() {},
   };
   runSlices(context, ['periods', 'analysisIdentity']);

@@ -3,7 +3,8 @@
 实现前列出的失败方式：
 - 非自选代码没有任何报价入口（/api/quotes 只报自选），卡头价格恒为空；
 - 单代码请求覆盖自选报价缓存（显示层报价缓存按请求代码集合判断命中，单代码请求会把自选缓存换成一只）；
-- A 股单代码报价改用显示层价格，与自选行（K 线事实派生）口径不一致；事实读取失败时编造价格。
+- 单代码报价改用显示层价格，与自选行（K 线事实派生）口径不一致；事实读取失败时编造价格。
+2026-10-12 起港股同样只取事实派生报价（与 A 股同一口径），页面不再调用本入口，保留兼容。
 """
 import json
 import time
@@ -41,6 +42,17 @@ class SingleQuoteApiTests(unittest.TestCase):
         self.assertEqual((body["quote"]["price"], body["quote"]["price_label"], body["quote"]["price_unavailable"]),
                          (7.12, "最新", False))
         q.assert_called_once_with("sz000002")
+        display.assert_not_called()
+
+    def test_hk_code_uses_fact_quote_not_display_layer(self):
+        fact = {"price": 512.5, "pct": -1.2, "limit_up": False, "price_time": "2026-09-30 10:30",
+                "price_label": "最新", "stale": False}
+        with mock.patch("chanapp.api.main.engine_data.quote", return_value=fact, create=True) as q, \
+             mock.patch("chanapp.api.main.engine_feed.get_quote") as display:
+            r = self.c.get("/api/quote?code=hk00700")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["quote"]["price"], r.json()["quote"]["price_time"]), (512.5, "2026-09-30 10:30"))
+        q.assert_called_once_with("hk00700")
         display.assert_not_called()
 
     def test_cn_fact_failure_is_unavailable_not_invented(self):

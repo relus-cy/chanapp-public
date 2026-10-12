@@ -18,9 +18,6 @@ log = logging.getLogger(__name__)
 
 RESONANCE_FREQS = ("day", "m60", "m30")
 
-QUOTE_NOT_EMBEDDED = object()  # build_chart_payload 的 quote 缺省值：应答不含 "quote" 键（非 A 股代码与 Pages 推送平面）
-
-
 def analysis_periods(code: str) -> tuple[str, ...]:
     """日线必需，分钟按偏好与市场能力参与；顺序也是共振与 AI 的输入顺序。"""
     prefs = period_preferences.current()
@@ -66,23 +63,20 @@ def is_structure_short(dataset: dict | None) -> bool:
     return any(n.get("code") == "structure_short" for n in (dataset or {}).get("notices") or [])
 
 
-def read_chart_inputs(code: str, freq: str, adjust: str = "qfq") -> tuple:
+def read_chart_inputs(code: str, freq: str, adjust: str = "qfq", quote_codes=()) -> tuple:
     """(主图数据集, 共振 bundle, 内嵌报价)：门面有 get_bars_bundle 时当前周期与可用共振输入一次读取
-    （spec §6.3），主图令牌与 analysis_tokens 因此同属一个版本。A 股（sh/sz）同一次读事务加算 quote() 报价
-    作第三返回值——价格卡与自选当前行由此与图中末根 bar 严格同快照（2026-10-09 修订：原「报价与 K 线分别
-    刷新」下两条 60 秒轮询链各读各的时刻，盘中会差一次采集）；非 A 股返回 QUOTE_NOT_EMBEDDED（港股报价
-    在 PH3 前走显示层）。当前周期在 bundle 里缺席（公开演示门面或替身）时回落 get_bars。只有当前周期的首取
-    失败上抛，共振周期首取失败时该周期缺省（primary=freq）。主图无数据且不是「该市场暂不提供」时抛
-    LookupError，异常由调用方转 502。"""
+    （spec §6.3），主图令牌与 analysis_tokens 因此同属一个版本。quote_codes（当前代码与自选）的 quote() 报价在
+    同一次读事务里算出，作第三返回值 {code: quote 或 None}——价格卡与自选各行由此与图中末根 bar 严格同快照
+    （各读各的时刻时，盘中会差一次采集）；不给 quote_codes 或门面没有 get_bars_bundle 时为 None。
+    当前周期在 bundle 里缺席（公开演示门面或替身）时回落 get_bars。只有当前周期的首取失败上抛，共振周期首取
+    失败时该周期缺省（primary=freq）。主图无数据且不是「该市场暂不提供」时抛 LookupError，异常由调用方转 502。"""
     bundle_fn = getattr(engine_data, "get_bars_bundle", None)
     analysis_freqs = analysis_periods(code)
     freqs = analysis_freqs + ((freq,) if freq not in analysis_freqs else ())
-    embed_quote = code.startswith(("sh", "sz"))
-    quote = QUOTE_NOT_EMBEDDED
+    quotes = None
     if bundle_fn is not None:
-        bundle = dict(bundle_fn(code, freqs, adjust=adjust, primary=freq, with_quote=embed_quote))
-        if embed_quote:
-            quote = bundle.pop("quote", None)
+        bundle = dict(bundle_fn(code, freqs, adjust=adjust, primary=freq, quote_codes=tuple(quote_codes)))
+        quotes = bundle.pop("quotes", None)
     else:
         bundle = read_bundle(code, adjust)
     dataset = bundle.get(freq)
@@ -92,7 +86,7 @@ def read_chart_inputs(code: str, freq: str, adjust: str = "qfq") -> tuple:
             bundle[freq] = dataset
     if not dataset.get("bars") and not _unsupported(dataset):
         raise LookupError(f"{code} {freq} 暂无可服务数据")
-    return dataset, {f: bundle.get(f) for f in analysis_freqs}, quote
+    return dataset, {f: bundle.get(f) for f in analysis_freqs}, quotes
 
 
 def _record(code: str, freq: str, bars: list, data_version: str, calculation_id: str, signals: list) -> None:
@@ -153,12 +147,12 @@ def _resonance(code: str, bundle: dict, rule_profile: str = "strict", signal_sco
 def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
                         get_bars_fn: Callable | None = None,
                         timings: dict | None = None, rule_profile: str = "strict", signal_scope: str = "expanded",
-                        *, adjust: str = "qfq", bundle: dict | None = None, quote=QUOTE_NOT_EMBEDDED) -> dict:
+                        *, adjust: str = "qfq", bundle: dict | None = None, quotes: dict | None = None) -> dict:
     """组装 chart 响应体（与 /api/chart 返回逐字段一致）。
 
     dataset 为 None 时调 get_bars_fn（未给则 engine.data.get_bars）现取；bundle 为 None 时经 read_bundle
-    读本次分析组合。quote 非 QUOTE_NOT_EMBEDDED 时（A 股）响应体含 "quote" 键（无事实为 null）——与 bars
-    同一次读事务的报价，价格卡与自选当前行用；缺省不含该键。异常不捕获，由调用方处理。
+    读本次分析组合。quotes 给出时响应体含 "quotes" 键（{code: 报价行}，与 bars 同一次读事务，价格卡与自选
+    各行用）；缺省不含该键（Pages 推送平面）。异常不捕获，由调用方处理。
     timings 给 dict 时回填 compute_ms/resonance_ms。
     """
     identity = profile_identity(rule_profile, signal_scope)
@@ -239,6 +233,6 @@ def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
         "resonance": resonance,
         "meta": meta,
     }
-    if quote is not QUOTE_NOT_EMBEDDED:
-        payload["quote"] = quote
+    if quotes is not None:
+        payload["quotes"] = quotes
     return payload

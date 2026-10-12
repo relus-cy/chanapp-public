@@ -1,8 +1,9 @@
 'use strict';
-/* 定时轮询行为断言：真实执行 60s 图表/60s 快照的 setInterval 回调（timers 切片），
+/* 定时轮询行为断言：真实执行 60s 行情刷新的 setInterval 回调（timers 切片），
    覆盖 document.hidden、交易时段、无选中标的三条分流。开市与否只取后端 /api/session
    （交易日历 + engine/session.py 时段），前端不再按浏览器时钟推算：
-   60s 图表回调先取 /api/session 与 /api/periods 再决定是否刷新图表；报价回调用最近一次结果，按自选各标的的市场判断；
+   回调先取 /api/session 与 /api/periods，再决定本轮读一次库的方式——刷新图表（报价表随应答内嵌），
+   或图表不刷新而自选/当前代码有市场在交易时单独取报价表；一轮不同时发两种请求。
    取数失败保留上次结果，从未取到时按未开市处理。 */
 const assert = require('node:assert/strict');
 const { tick, runSlices } = require('./support/dom.js');
@@ -28,33 +29,32 @@ async function minute(env, body) {
 }
 
 (async function () {
-  // hidden 守卫：两个回调都必须先行返回，renderStatus/任何请求不得发生
+  // hidden 守卫：回调先行返回，renderStatus/任何请求不得发生
   {
     const env = timerEnv({ marketOf });
     env.document.hidden = true;
-    assert.equal(env._harness.intervals.length, 2, '两个定时回调都已注册');
-    for (const cb of env._harness.intervals) cb();
+    assert.equal(env._harness.intervals.length, 1, '只注册一个行情刷新定时器');
+    env._harness.intervals[0]();
     assert.equal(env._harness.renders.length, 0, '后台标签下 renderStatus/load/loadQuotes 全部不触发');
     assert.equal(env._harness.pending.length, 0, '后台标签下不请求 /api/session');
   }
 
-  // 从未取到开市状态：报价按未开市不刷新
-  {
-    const env = timerEnv({ marketOf });
-    env._harness.intervals[1]();
-    assert.deepEqual(env._harness.renders, [], '未知时按未开市处理');
-  }
-
-  // 后端判开市（cn）：60s → 状态保鲜 + load({refresh:true})；之后报价回调 → loadQuotes()
+  // 从未取到开市状态：按未开市处理，图表与报价表都不刷新
   {
     const env = timerEnv({ marketOf });
     env.state.code = 'sh600036';
-    env.state.watchlist = [{ code: 'sh600036' }];
-    await minute(env, markets(true, false));
-    assert.deepEqual(env._harness.renders, ['status', 'load'], '60s 回调先保鲜状态再刷新图表');
-    env._harness.renders.length = 0;
-    env._harness.intervals[1]();
-    assert.deepEqual(env._harness.renders, ['quotes'], '报价回调只刷快照');
+    env.state.watchlist = [{ code: 'sh600036' }, { code: 'hk00700' }];
+    await minute(env, new Error('offline'));
+    assert.deepEqual(env._harness.renders, ['status'], '未知时按未开市处理');
+  }
+
+  // 后端判开市（cn）：状态保鲜 + load({refresh:true})；报价表随图表应答，不另取
+  {
+    const env = timerEnv({ marketOf });
+    env.state.code = 'sh600036';
+    env.state.watchlist = [{ code: 'sh600036' }, { code: 'hk00700' }];
+    await minute(env, markets(true, true));
+    assert.deepEqual(env._harness.renders, ['status', 'load'], '刷新图表即刷新报价表，一轮只读一次库');
     assert.equal(env._harness.pending.length, 0, '定时回调已完成 session 与周期偏好读取');
   }
 
@@ -64,40 +64,56 @@ async function minute(env, body) {
     env.state.code = 'hk00700';
     await minute(env, markets(false, true));
     assert.deepEqual(env._harness.renders, ['status', 'load'], '港股按 hk 结果刷新');
-    env.state.code = 'sh600036';
-    env._harness.renders.length = 0;
-    env._harness.intervals[1]();
-    assert.deepEqual(env._harness.renders, [], '自选里没有开市市场的标的时不刷报价');
   }
 
-  // 有意改写（目标 2026-09-29 第三阶段）：图表与报价统一 60 秒
+  // 图表与报价表同一个 60 秒节奏
   {
     const env = timerEnv({ marketOf });
-    assert.deepEqual(env._harness.intervalMs, [60000, 60000], '图表与报价都是 60 秒一轮');
+    assert.deepEqual(env._harness.intervalMs, [60000], '行情刷新 60 秒一轮');
   }
 
-  // 报价按各自选标的的市场判断：所选 A 股休市不停港股自选的报价；没有选中标的也照常
+  // 当前代码休市而其他市场的自选在交易：图表不刷新，单独取报价表；没有选中标的也照常
   {
     const env = timerEnv({ marketOf });
     env.state.code = 'sh600036';
     env.state.watchlist = [{ code: 'sh600036' }, { code: 'hk00700' }];
     await minute(env, markets(false, true));
-    env._harness.renders.length = 0;
-    env._harness.intervals[1]();
-    assert.deepEqual(env._harness.renders, ['quotes'], '港股自选开市时照常刷报价');
+    assert.deepEqual(env._harness.renders, ['status', 'quotes'], '港股自选开市时照常刷报价表');
     env.state.code = null;
     env._harness.renders.length = 0;
-    env._harness.intervals[1]();
-    assert.deepEqual(env._harness.renders, ['quotes'], '没有选中标的也刷自选报价');
+    await minute(env, markets(false, true));
+    assert.deepEqual(env._harness.renders, ['status', 'quotes'], '没有选中标的也刷自选报价');
+  }
+
+  // 图表该刷新却没有发出请求（例如周期不可用而早退）：报价表单独取，不随图表停住
+  {
+    const env = timerEnv({ marketOf });
+    env.load = () => { env._harness.renders.push('load'); };
+    env.state.code = 'sh600036';
+    await minute(env, markets(true, false));
+    assert.deepEqual(env._harness.renders, ['status', 'load', 'quotes'], '图表未发请求时补取报价表');
+  }
+
+  // 周期偏好同步失败：不借用旧偏好刷新图表，报价表照常
+  {
+    const env = timerEnv({ marketOf });
+    env.el('periodDialog').close = () => {};
+    env.state.code = 'sh600036';
+    env._harness.intervals[0]();
+    env._harness.pending.shift().resolve(okJson(markets(true, false)));
+    await tick(); await tick();
+    env._harness.pending.shift().resolve(errJson(500));
+    await tick(); await tick();
+    assert.deepEqual(env._harness.renders, ['status', 'quotes'], '偏好失败只刷报价表');
   }
 
   // 后端判休市（含交易日历判定的节假日）：只保鲜状态，不发刷新
   {
     const env = timerEnv({ marketOf });
     env.state.code = 'sh600036';
+    env.state.watchlist = [{ code: 'sh600036' }, { code: 'hk00700' }];
     await minute(env, markets(false, false));
-    env._harness.intervals[1]();
-    assert.deepEqual(env._harness.renders, ['status'], '休市时两回调均不发刷新');
+    assert.deepEqual(env._harness.renders, ['status'], '休市时图表与报价表都不刷新');
   }
 
   // 取数失败（网络或 HTTP 错误）保留上次结果
@@ -135,8 +151,7 @@ async function minute(env, body) {
     const env = timerEnv({ marketOf });
     env.state.code = null;
     await minute(env, markets(true, true));
-    env._harness.intervals[1]();
-    assert.deepEqual(env._harness.renders, ['status'], '无选中标的且自选为空时两回调均不发刷新');
+    assert.deepEqual(env._harness.renders, ['status'], '无选中标的且自选为空时不发刷新');
   }
 
   // 收盘后有限跟进：图表快照还是盘中（phase=live）而市场已收盘时补读一次，之后快照为待定稿/已定稿即停
@@ -215,7 +230,7 @@ async function minute(env, body) {
   env.state.watchlist = [{code: 'sh600036'}];
   await minute(env, {...markets(false, false), mode: 'demo'});
   env._harness.renders.length = 0;
-  for (let i = 0; i < 3; i++) for (const cb of env._harness.intervals) cb();
+  for (let i = 0; i < 3; i++) env._harness.intervals[0]();
   await tick();
   assert.equal(env._harness.pending.length, 0, 'demo 不再轮询 session 或行情');
   assert.deepEqual(env._harness.renders, []);

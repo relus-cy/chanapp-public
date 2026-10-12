@@ -4,6 +4,7 @@ import functools
 import json
 import unittest
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from unittest import mock
 
 from fastapi.testclient import TestClient
@@ -46,9 +47,9 @@ class FacadeBase(unittest.TestCase):
     def writer(self):
         return engine_data._collector().writer()
 
-    def commit_days(self, days, close=10.0, prov="final"):
+    def commit_days(self, days, close=10.0, prov="final", code=CODE):
         with self.writer() as conn:
-            rows = [RawDayRow(CODE, d, close, close * 1.1, close * 0.98, close + (i % 5) * 0.1, 1000.0, "lot",
+            rows = [RawDayRow(code, d, close, close * 1.1, close * 0.98, close + (i % 5) * 0.1, 1000.0, "lot",
                               1.0, "CNY", close, 0, prov, new_batch_id()) for i, d in enumerate(days)]
             return facts.commit_day_rows(conn, rows, item="day_history", today=self.today, **KW)
 
@@ -57,10 +58,10 @@ class FacadeBase(unittest.TestCase):
             for d in days:
                 facts.quarantine(conn, CODE, "day", d, "review_conflict")
 
-    def commit_minutes(self, day, state="closed"):
+    def commit_minutes(self, day, state="closed", code=CODE, base=10.0):
         slots = sessions.slots("CN", FACT)
         with self.writer() as conn:
-            rows = [RawMinuteRow(CODE, day, f"{day} {t}", 10.0, 10.0 + (i % 7) * 0.05, 9.9, 10.0 + (i % 5) * 0.03,
+            rows = [RawMinuteRow(code, day, f"{day} {t}", base, base + (i % 7) * 0.05, base - 0.1, base + (i % 5) * 0.03,
                                  10.0, "lot", 1.0, state, "traded", new_batch_id()) for i, t in enumerate(slots)]
             return facts.commit_minute_rows(conn, rows, item="minute_history", fact_freq=FACT,
                                             today=self.today, **KW)
@@ -437,8 +438,8 @@ class FacadeApiTests(FacadeBase):
 
         with mock.patch.object(engine_data.views, "read_view", then_commit(views.read_view)), \
              mock.patch.object(engine_data.views, "read_bundle", then_commit(views.read_bundle)), \
-             mock.patch.object(engine_data.views, "read_bundle_with_quote",
-                               then_commit(views.read_bundle_with_quote)):
+             mock.patch.object(engine_data.views, "read_bundle_with_quotes",
+                               then_commit(views.read_bundle_with_quotes)):
             chart = self.client.get(f"/api/chart?code={CODE}&freq=day")
         self.assertEqual(chart.status_code, 200, chart.text)
         meta = chart.json()["meta"]
@@ -481,24 +482,28 @@ class FacadeApiTests(FacadeBase):
 
 
 class ChartEmbeddedQuoteTests(FacadeBase):
-    """A 股图表应答内嵌报价（2026-10-09 起）：价格卡与自选当前行用它，与图中末根 bar 同一次读事务，
-    不再经独立报价轮询链（两条 60 秒链各读各的时刻，盘中曾差一次采集）。
+    """图表应答内嵌报价表（2026-10-09 起当前 A 股，2026-10-12 起自选各项与当前代码、两个市场）：价格卡与自选
+    各行用它，与图中末根 bar 同一次读事务，不再经独立报价轮询链（各读各的时刻，盘中曾差一次采集）。
 
-    失败方式：quote 与末根 bar 分属两次读取（价格对不上）；缺省调用也附 quote 键（契约只增）；
-    无事实标的编造价格而不是 null；有 pc 时涨跌幅不以 pc 为基准。
+    失败方式：报价与末根 bar 分属两次读取（价格对不上）；自选其他代码不随图表应答（自选行与图分属两次读取）；
+    缺省调用也附 quotes 键；无事实标的编造价格；有 pc 时涨跌幅不以 pc 为基准。
     """
+    OTHER = "sz000002"
 
     def setUp(self):
         super().setUp()
+        wl = Path(cache_support.temp_dir(self)) / "w.json"
+        wl.write_text(json.dumps([{"code": self.OTHER, "name": "万科A"}], ensure_ascii=False), encoding="utf-8")
+        cache_support.set_env(self, "WATCHLIST_PATH", str(wl))
         from chanapp.api.main import app
         self.client = TestClient(app)
 
-    def test_bundle_with_quote_matches_last_bar_from_same_minutes(self):
+    def test_bundle_quotes_match_last_bar_from_same_minutes(self):
         self.commit_days(self.days)
         self.commit_minutes(self.today, state="forming")
         out = engine_data.get_bars_bundle(CODE, ("day", "m60", "m30"), adjust="raw", primary="day",
-                                          with_quote=True)
-        q = out["quote"]
+                                          quote_codes=(CODE,))
+        q = out["quotes"][CODE]
         self.assertIsNotNone(q)
         self.assertEqual((q["price_label"], q["trade_date"]), ("最新", self.today))
         self.assertEqual(q["price"], out["day"]["bars"][-1]["close"])   # 同一批分钟事实：报价即末根 bar 收盘
@@ -506,7 +511,7 @@ class ChartEmbeddedQuoteTests(FacadeBase):
         self.assertIsNone(q["pc"])          # 当日日线行未确认（无盘前参考价）：涨跌为空，不用昨收代替
         self.assertIsNone(q["pct"])
         plain = engine_data.get_bars_bundle(CODE, ("day",), adjust="raw")
-        self.assertNotIn("quote", plain)    # 缺省不内嵌
+        self.assertNotIn("quotes", plain)   # 缺省不内嵌
 
     def test_embedded_quote_pct_uses_today_pc(self):
         self.commit_days(self.days)
@@ -518,23 +523,30 @@ class ChartEmbeddedQuoteTests(FacadeBase):
                                                    1000.0, "lot", 1.0, "CNY", 9.5, 0, "live",
                                                    new_batch_id())],
                                   item="preopen_ref", today=self.today, **KW)
-        out = engine_data.get_bars_bundle(CODE, ("day",), adjust="raw", primary="day", with_quote=True)
-        q = out["quote"]
+        out = engine_data.get_bars_bundle(CODE, ("day",), adjust="raw", primary="day", quote_codes=(CODE,))
+        q = out["quotes"][CODE]
         self.assertEqual((q["price"], q["pc"]), (last_close, 9.5))
         self.assertEqual(q["pct"], round((last_close / 9.5 - 1) * 100, 2))
         self.assertEqual(out["day"]["bars"][-1]["close"], last_close)   # 当日 bar 与报价同值
 
-    def test_chart_response_quote_matches_last_kline_bar(self):
+    def test_chart_response_quotes_cover_watchlist_and_current_code(self):
         self.commit_days(self.days)
         self.commit_minutes(self.today, state="forming")
+        self.commit_days(self.days, code=self.OTHER, close=20.0)
+        self.commit_minutes(self.today, state="forming", code=self.OTHER, base=20.0)
+        slots = sessions.slots("CN", FACT)
         body = self.client.get(f"/api/chart?code={CODE}&freq=day&adjust=raw").json()
-        self.assertIn("quote", body)
-        self.assertEqual(body["quote"]["price"], body["kline"][-1]["close"])
-        self.assertEqual(body["quote"]["price_label"], "最新")
+        self.assertEqual(set(body["quotes"]), {self.OTHER, CODE})      # 自选各项加不在自选里的当前代码
+        cur, other = body["quotes"][CODE], body["quotes"][self.OTHER]
+        self.assertEqual(cur["price"], body["kline"][-1]["close"])
+        self.assertEqual((cur["price_label"], cur["price_unavailable"], cur["name"]), ("最新", False, ""))
+        self.assertEqual((other["price"], other["name"]), (round(20.0 + ((len(slots) - 1) % 5) * 0.03, 2), "万科A"))
+        quotes = self.client.get(f"/api/quotes?code={CODE}").json()["quotes"]
+        self.assertEqual(quotes, body["quotes"])                        # 报价表与图表内嵌同一口径
 
     def test_no_facts_embeds_null_quote_not_invented(self):
-        out = engine_data.get_bars_bundle(CODE, ("day",), adjust="raw", with_quote=True)
-        self.assertIsNone(out["quote"])                  # 标的没有任何事实：null，前端显示暂无可信价格
+        out = engine_data.get_bars_bundle(CODE, ("day",), adjust="raw", quote_codes=(CODE,))
+        self.assertEqual(out["quotes"], {CODE: None})    # 标的没有任何事实：null，前端显示暂无可信价格
         self.assertIsNone(out["day"])
 
 

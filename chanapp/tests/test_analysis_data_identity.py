@@ -1,7 +1,9 @@
 """Offline content identity checks: analysis prompt hash, bundle-sourced tokens, no supply identity."""
 import copy
 import hashlib
+import json
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from chanapp.api import analysis
@@ -109,9 +111,11 @@ class TestChartSingleRead(unittest.TestCase):
         datasets = datasets or {}
         calls = []
 
-        def bundle(code, freqs, *, adjust='qfq', primary=None, with_quote=False):
-            calls.append((tuple(freqs), primary))
-            return {f: copy.deepcopy(datasets.get(f) or {'bars': load_bars(), 'token': f't-{f}'}) for f in freqs}
+        def bundle(code, freqs, *, adjust='qfq', primary=None, quote_codes=()):
+            calls.append((tuple(freqs), primary, tuple(quote_codes)))
+            out = {f: copy.deepcopy(datasets.get(f) or {'bars': load_bars(), 'token': f't-{f}'}) for f in freqs}
+            out['quotes'] = {c: None for c in quote_codes}
+            return out
 
         with mock.patch.object(chart_payload.engine_data, 'get_bars_bundle', side_effect=bundle, create=True), \
              mock.patch.object(chart_payload.engine_data, 'get_bars', side_effect=AssertionError('第二次读取')):
@@ -124,21 +128,29 @@ class TestChartSingleRead(unittest.TestCase):
             with self.subTest(freq=freq):
                 response, calls = self.chart(freq)
                 self.assertEqual(response.status_code, 200, response.text)
-                self.assertEqual(calls, [(freqs, freq)])        # 主图周期作为 primary 传给门面
+                self.assertEqual([c[:2] for c in calls], [(freqs, freq)])   # 主图周期作为 primary 传给门面
                 meta = response.json()['meta']
                 self.assertEqual(meta['token'], f't-{freq}')
                 self.assertEqual(meta['analysis_tokens'], {'day': 't-day', 'm60': 't-m60', 'm30': 't-m30'})
 
-    def test_chart_embeds_quote_for_cn_and_omits_for_hk(self):
-        """A 股应答含 "quote" 键（价格卡/自选当前行与末根 bar 同快照；替身门面无事实时为 null）；
-        港股不含此键——其报价在 PH3 前走显示层，前端据键是否存在选通道。"""
-        response, _ = self.chart('day')
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertIn('quote', response.json())
-        self.assertIsNone(response.json()['quote'])
-        hk, _ = self.chart('day', code='hk00700')
-        self.assertEqual(hk.status_code, 200, hk.text)
-        self.assertNotIn('quote', hk.json())
+    def test_chart_embeds_quotes_for_both_markets_in_the_same_read(self):
+        """两个市场的应答都含 "quotes" 键：当前代码与自选各项的报价随 bars 同一次门面读取（不另读报价），
+        行结构同 /api/quotes（替身门面无事实时价格为空并标 price_unavailable）。"""
+        wl = Path(cache_support.temp_dir(self)) / 'w.json'
+        wl.write_text(json.dumps([{'code': 'sz000002', 'name': '万科A'}], ensure_ascii=False), encoding='utf-8')
+        cache_support.set_env(self, 'WATCHLIST_PATH', str(wl))
+        for code in ('sh000001', 'hk00700'):
+            with self.subTest(code=code), \
+                 mock.patch.object(chart_payload.engine_data, 'quote', side_effect=AssertionError('另读报价'),
+                                   create=True), \
+                 mock.patch.object(chart_payload.engine_data, 'quotes', side_effect=AssertionError('另读报价'),
+                                   create=True):
+                response, calls = self.chart('day', code=code)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(calls[0][2], ('sz000002', code))
+                self.assertEqual(set(response.json()['quotes']), {'sz000002', code})
+                self.assertTrue(response.json()['quotes'][code]['price_unavailable'])
+                self.assertEqual(response.json()['quotes']['sz000002']['name'], '万科A')
 
     def test_empty_main_view_is_502_unless_unsupported(self):
         # 主图用周线（共振以外的周期；原用 m5，已下线）

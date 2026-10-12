@@ -1,4 +1,4 @@
-"""刷新时间关系：防止正常减速被报 stale、页面空轮询、报价缓存漂移和查看租期断档。
+"""刷新时间关系：防止正常减速被报 stale、页面空轮询和查看租期断档。
 
 后端读取运行常量，前端通过现有 Node 沙盒读取真实定时器；不复制时间值。
 这是跨 Python/JS 的关系测试，运行需要 node（与 JS 完整套件相同）。
@@ -8,7 +8,6 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from chanapp.engine import display_feed
 from chanapp.engine.kline import config
 
 
@@ -24,7 +23,7 @@ const vm = require('node:vm');
 const { appSource } = require('./tests/support/dom.js');
 const { timerEnv, loadEnv } = require('./tests/support/app.js');
 const intervals = timerEnv()._harness.intervalMs;
-assert.equal(intervals.length, 2, '图表和报价各注册一个轮询定时器');
+assert.equal(intervals.length, 1, '图表与报价表共用一个行情刷新定时器');
 const timeouts = [];
 const env = loadEnv({setTimeout: (fn, ms) => { timeouts.push(ms); return timeouts.length; }});
 // 覆盖共享桩的默认超时，使用 app.js 的真实声明，再观察 load() 实际使用的值。
@@ -33,7 +32,7 @@ assert.ok(declaration, '未找到图表请求超时声明');
 vm.runInContext(declaration[0], env);
 env.load({refresh: true});
 assert.equal(timeouts.length, 1, '常规图表请求注册一个超时');
-console.log(JSON.stringify({chart: intervals[0] / 1000, quote: intervals[1] / 1000,
+console.log(JSON.stringify({chart: intervals[0] / 1000,
                             timeout: timeouts[0] / 1000}));
 """],
             cwd=ROOT, capture_output=True, text=True, timeout=10,
@@ -50,17 +49,11 @@ console.log(JSON.stringify({chart: intervals[0] / 1000, quote: intervals[1] / 10
                     config.STALE_IN_SESSION_S, 2 * interval,
                     "盘中过期阈值必须大于额度加倍后的采集间隔",
                 )
-            for poll in ("chart", "quote"):
-                with self.subTest(relation="poll_not_faster_than_collection", kind=kind, poll=poll):
-                    self.assertGreaterEqual(
-                        timing[poll], interval,
-                        "页面刷新不得快于普通采集间隔",
-                    )
-        with self.subTest(relation="quote_cache_matches_poll"):
-            self.assertEqual(
-                display_feed.QUOTE_TTL, timing["quote"],
-                "报价缓存时长必须等于报价刷新间隔",
-            )
+            with self.subTest(relation="poll_not_faster_than_collection", kind=kind):
+                self.assertGreaterEqual(
+                    timing["chart"], interval,
+                    "页面刷新不得快于普通采集间隔",
+                )
         with self.subTest(relation="viewing_survives_missed_refresh"):
             self.assertGreaterEqual(
                 config.VIEWING_WINDOW_S, 2 * timing["chart"] + timing["timeout"],

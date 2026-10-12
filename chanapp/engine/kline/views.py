@@ -532,11 +532,12 @@ def read_bundle(conn, code, freqs, *, adjust="qfq", now=None) -> dict:
         return _bundle(conn, code, freqs, adjust, now)
 
 
-def read_bundle_with_quote(conn, code, freqs, *, adjust="qfq", now=None) -> tuple[dict, dict | None]:
-    """read_bundle 同一次读事务里加算 quote()：A 股价格卡与自选当前行由此与任一周期末根 bar 严格同快照
-    （两条独立轮询链各读各的时刻，盘中会差一次采集）。"""
+def read_bundle_with_quotes(conn, code, freqs, quote_codes, *, adjust="qfq", now=None) -> tuple[dict, dict]:
+    """read_bundle 同一次读事务里加算 quote_codes 各自的 quote()：价格卡与自选各行由此与任一周期末根 bar 严格
+    同快照（各读各的时刻时，盘中会差一次采集）。"""
+    now = now or datetime.now()
     with facts.read_txn(conn):
-        return _bundle(conn, code, freqs, adjust, now), quote(conn, code, now=now)
+        return _bundle(conn, code, freqs, adjust, now), quotes(conn, quote_codes, now=now)
 
 
 
@@ -606,3 +607,10 @@ def quote(conn, code, *, now=None) -> dict | None:
     limit_up = bool(pc and ratio and latest["close"] >= limit_up_price(pc, ratio) - 1e-9)
     return {"price": latest["close"], "price_time": latest["slot_end"], "price_label": "最新",
             "pc": pc, "pct": pct, "limit_up": limit_up, "trade_date": today, "stale": stale}
+
+
+def quotes(conn, codes, *, now=None) -> dict:
+    """{code: quote() 或 None}：全部代码同一次读事务、同一个 now，自选各行之间也同快照。"""
+    now = now or datetime.now()
+    with facts.read_txn(conn):
+        return {code: quote(conn, code, now=now) for code in dict.fromkeys(codes)}

@@ -126,7 +126,7 @@ class TestChartHistoryApi(unittest.TestCase):
             timings.update({"compute_ms": 0, "resonance_ms": 0})
             return copy.deepcopy(payload)
 
-        def bundle(code, freqs, *, adjust="qfq", primary=None, with_quote=False):
+        def bundle(code, freqs, *, adjust="qfq", primary=None, quote_codes=()):
             return {f: dict(dataset, token=f"t-{f}") for f in freqs}
 
         with mock.patch.object(main.engine_data, "get_bars_bundle", side_effect=bundle, create=True) as fetch, \
@@ -136,8 +136,10 @@ class TestChartHistoryApi(unittest.TestCase):
             response = self.client.get("/api/chart?code=sh600519&freq=week&adjust=raw"
                                        "&rule_profile=relaxed&signal_scope=standard")
         self.assertEqual(response.status_code, 200)
-        fetch.assert_called_once_with("sh600519", ("day", "m60", "m30", "week"), adjust="raw", primary="week",
-                                      with_quote=True)
+        fetch.assert_called_once()
+        self.assertEqual(fetch.call_args.args, ("sh600519", ("day", "m60", "m30", "week")))
+        self.assertEqual({k: fetch.call_args.kwargs[k] for k in ("adjust", "primary")}, {"adjust": "raw", "primary": "week"})
+        self.assertIn("sh600519", fetch.call_args.kwargs["quote_codes"])     # 报价与 bars 同一次读取
         self.assertEqual({k: builder.call_args.kwargs[k] for k in ("rule_profile", "signal_scope", "adjust")},
                          {"rule_profile": "relaxed", "signal_scope": "standard", "adjust": "raw"})
         self.assertEqual(builder.call_args.args[2]["token"], "t-week")       # 主图取自同一次 bundle
