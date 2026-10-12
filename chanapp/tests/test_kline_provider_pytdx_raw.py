@@ -32,6 +32,45 @@ class FakeTdx:
         return copy.deepcopy(self.rows[max(0, end - min(size, count)):end])
 
 
+class LaggyServer:
+    """模拟单连接上的应答队列：慢请求按 pytdx 默认（raise_exception=False）返回 None，
+    应答迟到后留在连接上，被同一连接的下一个请求读走；断开连接即丢弃。"""
+
+    def __init__(self, data, slow=()):
+        self.data, self.slow, self.served = data, set(slow), []
+        self.hosts = iter(["h1", "h2", "h3", "h4"])
+
+    def pool(self):
+        pool = pytdx_raw._HostPool()
+        server = self
+
+        class Api:
+            def __init__(self, host):
+                self.host, self.queue = host, []
+
+            def _bars(self, category, market, num, offset, count):
+                rows = server.data[num]
+                end = len(rows) - offset
+                self.queue.append(copy.deepcopy(rows[max(0, end - count):end]) if end > 0 else [])
+                if (num, offset) in server.slow:
+                    server.slow.discard((num, offset))
+                    return None
+                server.served.append((self.host, num, offset))
+                return self.queue.pop(0)
+
+            get_index_bars = get_security_bars = _bars
+
+            def disconnect(self):
+                self.queue.clear()
+
+        def ensure_conn():
+            if pool._api is None:
+                pool._host = next(server.hosts)
+                pool._api = Api(pool._host)
+        pool._ensure_conn = ensure_conn
+        return pool
+
+
 class PytdxRawTests(unittest.TestCase):
     NOW = datetime(2026, 9, 15, 10, 0)
 
@@ -175,6 +214,29 @@ class PytdxRawTests(unittest.TestCase):
         with self.assertRaises(raw.ProviderError) as cm:
             pool.query("index", 9, 1, "000001", 0, 10)
         self.assertNotIsInstance(cm.exception, raw.ProviderConnectionError)
+
+    def test_late_page_is_never_read_as_another_codes_page(self):
+        # 回放 09-26 串包链：翻页超时时 pytdx 默认返回 None、迟到的响应留在连接上；
+        # 旧实现把 None 当作见底（截断 A）并沿用连接，下一只 B 读走 A 的迟到页。
+        a = _rows("m5-sh000001-20260811.json")
+        b = _rows("m5-sz300209-20260811.json")
+        server = LaggyServer({"000001": a, "300209": b}, slow={("000001", 10)})
+        provider = pytdx_raw.PytdxRawProvider(query=server.pool().query, page=10)
+        with self.assertRaises(raw.ProviderConnectionError):
+            provider.minute_history("sh000001", "m5", "2026-08-11 09:30", "2026-08-11 15:00", now=self.NOW)
+        rows = provider.minute_history("sz300209", "m5", "2026-08-11 09:30", "2026-08-11 15:00", now=self.NOW)
+        expected = sorted((r["datetime"], r["close"]) for r in b)
+        self.assertEqual([(r.slot_end, r.close) for r in rows], [(d[:16], c) for d, c in expected])
+
+    def test_failed_continuation_page_does_not_fail_over_mid_fetch(self):
+        # 不同主站的最新一根可能不同，按偏移翻页跨站拼接会错位或断档：翻页中途失败整批放弃
+        a = _rows("m5-sh000001-20260811.json")
+        server = LaggyServer({"000001": a}, slow={("000001", 10)})
+        pool = server.pool()
+        with self.assertRaises(raw.ProviderConnectionError):
+            pytdx_raw.PytdxRawProvider(query=pool.query, page=10).minute_history(
+                "sh000001", "m5", "2026-08-11 09:30", "2026-08-11 15:00", now=self.NOW)
+        self.assertEqual([h for h, _, _ in server.served], ["h1"])
 
     def test_market_num_rejects_hk(self):
         with self.assertRaises(raw.ProviderError):

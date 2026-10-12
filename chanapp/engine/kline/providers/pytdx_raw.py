@@ -10,7 +10,11 @@
 - history 行记 closed，live 行只留当日、记 forming（计划 A 决定 8）。
 - 主站池、选站、连接与故障切换、category 映射由旧实现迁入（计划 A 决定 11），
   本模块不依赖旧实现，也不 import factors/adjust（输出不复权）。pytdx 库 lazy import。
-- 激活门槛（最小修复 + 串包回放，spec §8）不在本模块范围。
+- 串包（2026-09-26 根因：超时返回 None 被当作见底、迟到的页留在连接上被下一个请求读走）：
+  连接用 raise_exception=True，None 同样按失败处理并断开连接，迟到响应随旧连接丢弃；
+  翻页（offset > 0）只在取首页的同一连接上续取，不切站、不按寿命重连，中途失败整批放弃
+  （不同主站最新一根可能不同，按偏移跨站拼接会错位或断档）。
+- 其余激活门槛（m15 实测、盘中主站复跑、指数量口径、回绕 fixture，spec §8）不在本模块范围。
 - 失败归类：连接、超时与多站连接失败抛 ProviderConnectionError（采集器计入单源冷却、不消耗缺口重试次数）；
   多站都只返回空数据、回绕、串包等抛 ProviderError。
 """
@@ -104,6 +108,8 @@ class _HostPool:
         self._host: tuple[str, int] | None = None
         self._connected_at = 0.0
         self._requests = 0
+        self._conn_seq = 0                                # 每次断开递增：翻页只认取首页时的那条连接
+        self._pages: dict[tuple, int] = {}               # (kind, category, market, num) → 首页所在连接
         self._ranked: list[tuple[str, int]] | None = None
         self._host_states: dict[tuple[str, int], _HostState] = {}
         self._lock = threading.Lock()
@@ -172,6 +178,7 @@ class _HostPool:
         return ranked
 
     def _disconnect(self):
+        self._conn_seq += 1
         if self._api is not None:
             try:
                 self._api.disconnect()
@@ -193,7 +200,7 @@ class _HostPool:
             host = ranked[(start + i) % len(ranked)]
             if not self._host_state(host).allow():
                 continue
-            api = TdxHq_API()
+            api = TdxHq_API(raise_exception=True)
             try:
                 if api.connect(host[0], host[1], time_out=CONNECT_TIMEOUT):
                     self._api, self._host = api, host
@@ -210,19 +217,22 @@ class _HostPool:
             self._connect_next()
 
     def query(self, kind, category, market, num, offset, count) -> list[dict]:
-        """单页取数：异常或（首页）空数据 → 记站失败、切下一站重试，最多 3 站。"""
+        """单页取数。首页：异常或空数据 → 记站失败、切下一站重试，最多 3 站；翻页见 _continue。"""
+        key = (kind, category, market, num)
         last_err = None
         with self._lock:
+            if offset > 0:
+                return self._continue(key, offset, count)
             for _ in range(FAILOVER_ATTEMPTS):
                 try:
                     self._ensure_conn()
-                    fn = self._api.get_index_bars if kind == "index" else self._api.get_security_bars
-                    page = fn(category, market, num, offset, count)
-                    if not page and offset == 0:
+                    page = self._bars(key, offset, count)
+                    if not page:
                         raise _EmptyPage("空数据")
                     self._host_state(self._host).record_success()
                     self._requests += 1
-                    return [dict(r) for r in page or []]
+                    self._pages[key] = self._conn_seq
+                    return [dict(r) for r in page]
                 except Exception as e:  # noqa: BLE001
                     last_err = e
                     log.warning("pytdx %s cat=%s @%s 失败: %s，切站重试", num, category, self._host, e)
@@ -233,6 +243,29 @@ class _HostPool:
         if isinstance(last_err, _EmptyPage):
             raise ProviderError(message)            # 各站都连上了、只是没有数据：标的级
         raise ProviderConnectionError(message)
+
+    def _bars(self, key, offset, count):
+        kind, category, market, num = key
+        fn = self._api.get_index_bars if kind == "index" else self._api.get_security_bars
+        page = fn(category, market, num, offset, count)
+        if page is None:                            # raise_exception=False 的超时形态，按失败处理
+            raise ProviderConnectionError("返回 None")
+        return page
+
+    def _continue(self, key, offset, count) -> list[dict]:
+        """翻页：必须仍是取首页的那条连接；空页即见底；失败断开连接、整批放弃，不切站。"""
+        num, category = key[3], key[1]
+        if self._api is None or self._pages.get(key) != self._conn_seq:
+            raise ProviderConnectionError(f"pytdx {num} cat={category} 翻页时连接已变化，整批放弃")
+        try:
+            page = self._bars(key, offset, count)
+        except Exception as e:  # noqa: BLE001
+            log.warning("pytdx %s cat=%s @%s 翻页失败: %s，断开连接、整批放弃", num, category, self._host, e)
+            self._host_state(self._host).record_failure()
+            self._disconnect()
+            raise ProviderConnectionError(f"pytdx {num} cat={category} 翻页失败: {e}") from None
+        self._requests += 1
+        return [dict(r) for r in page]
 
 
 _pool: _HostPool | None = None
