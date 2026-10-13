@@ -18,6 +18,19 @@ log = logging.getLogger(__name__)
 
 RESONANCE_FREQS = ("day", "m60", "m30")
 
+
+def round_floats(obj):
+    """对外数值统一 4 位小数：前复权价、结构价位、MACD 与特征等派生值去掉二进制尾数噪声（如 7.039999999999999）。
+    原始价与报价本身不超过 3 位，不受影响；图表应答、历史分页与 AI prompt 共用这一口径。"""
+    if isinstance(obj, float):
+        return round(obj, 4)
+    if isinstance(obj, dict):
+        return {k: round_floats(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [round_floats(v) for v in obj]
+    return obj
+
+
 def analysis_periods(code: str) -> tuple[str, ...]:
     """日线必需，分钟按偏好与市场能力参与；顺序也是共振与 AI 的输入顺序。"""
     prefs = period_preferences.current()
@@ -181,8 +194,7 @@ def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
     ]
     macd = sig["macd"]
     macd_rows = [
-        {"time": b["dt"], "dif": round(macd["dif"][i], 4),
-         "dea": round(macd["dea"][i], 4), "hist": round(macd["hist"][i], 4)}
+        {"time": b["dt"], "dif": macd["dif"][i], "dea": macd["dea"][i], "hist": macd["hist"][i]}
         for i, b in enumerate(bars)
     ]
 
@@ -194,8 +206,7 @@ def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
 
     # 通道线：x 索引转时间（x1 已延伸到最后已知 bar，恒在 bars 范围内）
     def _rail_out(r: dict) -> dict:
-        return {"t0": bars[r["x0"]]["dt"], "y0": round(r["y0"], 4),
-                "t1": bars[r["x1"]]["dt"], "y1": round(r["y1"], 4)}
+        return {"t0": bars[r["x0"]]["dt"], "y0": r["y0"], "t1": bars[r["x1"]]["dt"], "y1": r["y1"]}
 
     channels = [
         {"upper": _rail_out(ch["upper"]), "lower": _rail_out(ch["lower"]),
@@ -235,4 +246,4 @@ def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
     }
     if quotes is not None:
         payload["quotes"] = quotes
-    return payload
+    return round_floats(payload)

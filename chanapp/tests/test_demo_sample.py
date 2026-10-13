@@ -115,7 +115,7 @@ class DemoSampleTests(unittest.TestCase):
                 self.assertEqual((cached.status_code, cached.content), (304, b''))
                 qfq = client.get('/api/chart?code=sz300308&freq=day&adjust=qfq').json()
                 self.assertEqual(len(qfq['kline']), 243)
-                self.assertAlmostEqual(qfq['kline'][0]['close'], 422.56556343577626)
+                self.assertEqual(qfq['kline'][0]['close'], 422.5656)              # 对外数值统一 4 位小数
                 self.assertEqual(qfq['kline'][-1]['close'], 895.86)
                 self.assertEqual(client.get('/api/session').json()['mode'], 'demo')
                 f10 = client.get('/api/f10?code=sz300308')

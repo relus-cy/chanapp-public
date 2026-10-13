@@ -573,7 +573,8 @@ def _reference_close(conn, market, day_rows, closed_days, today):
 def quote(conn, code, *, now=None) -> dict | None:
     """右栏与自选行情（spec §6.4）：价格与参考前收必须属于同一交易日。
 
-    当日首根分钟出现前显示昨收并标「昨收」，涨跌为空；参考前收缺失时涨跌为空，不用昨收代替。
+    当日首根分钟出现前标「昨收」，涨跌为空：A 股个股盘前参考价已确认时价格即参考前收（除权日为除权参考价），
+    否则为最近收盘；参考前收缺失时涨跌为空，不用昨收代替。
     停牌占位不作为最新价。港股与指数没有盘前参考价取数项，参考前收即上一交易日收盘：最近收盘与今天之间缺交易日的
     日线行时置空（见 _reference_close）。无任何事实返回 None。
     limit_up：参考前收已确认且价格为当日最新时，price >= 涨停价 − 1e-9（limit_ratio、limit_up_price）。
@@ -592,16 +593,19 @@ def quote(conn, code, *, now=None) -> dict | None:
             return None
         stale, _, _ = dataset_stale(conn, code, fact or "day", now)
         prev_close = _reference_close(conn, market, day_rows, closed_days, today)
-    if not minutes:
-        last = closed_days[-1]
-        return {"price": last["close"], "price_time": None, "price_label": "昨收", "pc": None,
-                "pct": None, "limit_up": False, "trade_date": last["trade_date"], "stale": stale}
-    latest = minutes[-1]
     if market == "HK" or kind == "index":
         pc = prev_close
     else:
         today_row = next((r for r in reversed(day_rows) if r["trade_date"] == today), None)
         pc = today_row["pc"] if today_row is not None else None
+    if not minutes:
+        if market != "HK" and kind != "index" and pc:       # 盘前参考价已确认：昨收即除权参考价（主流行情口径）
+            return {"price": pc, "price_time": None, "price_label": "昨收", "pc": pc,
+                    "pct": None, "limit_up": False, "trade_date": today, "stale": stale}
+        last = closed_days[-1]
+        return {"price": last["close"], "price_time": None, "price_label": "昨收", "pc": None,
+                "pct": None, "limit_up": False, "trade_date": last["trade_date"], "stale": stale}
+    latest = minutes[-1]
     pct = round((latest["close"] / pc - 1) * 100, 2) if pc else None
     ratio = limit_ratio(code)
     limit_up = bool(pc and ratio and latest["close"] >= limit_up_price(pc, ratio) - 1e-9)

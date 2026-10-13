@@ -283,14 +283,14 @@ def _chart_history(request: Request, code: str, freq: str, before: str, limit: i
         "code": code,
         "freq": freq,
         "adjust": page["adjust"],
-        "kline": [{
+        "kline": engine_chart_payload.round_floats([{
             "time": bar["dt"],
             "open": bar["open"],
             "high": bar["high"],
             "low": bar["low"],
             "close": bar["close"],
             "volume": bar["volume"],
-        } for bar in page["bars"]],
+        } for bar in page["bars"]]),
         "meta": {
             "history": True,
             **{k: page[k] for k in ("token", "has_more", "oldest_dt", "incomplete_days", "notices",

@@ -362,7 +362,7 @@ class ViewContractTests(ViewTests):
         self.commit_day([day("2026-09-28", None, 16.77, prov="preopen")], item="preopen_ref")
         q = views.quote(self.conn, "sh600926", now=datetime(2026, 9, 28, 9, 20))
         self.assertEqual((q["price"], q["price_label"], q["pct"], q["limit_up"]),
-                         (20.0, "昨收", None, False))                 # 盘前昨收高于涨停价也不是涨停
+                         (16.77, "昨收", None, False))                # 盘前已确认：昨收即参考前收，未成交不判涨停
 
     def test_index_quote_uses_previous_close_and_never_limit_up(self):
         # 指数没有盘前参考价取数项：参考前收即上一交易日收盘（与港股同），不判涨停

@@ -87,17 +87,6 @@ def _strip_pct(text: str) -> str:
     return re.sub(r"，衰竭度\s*[\d.]+%", "", text)
 
 
-def _round_floats(obj):
-    """prompt 数值统一 4 位小数：消除浮点尾数噪声（同值不同字节会打掉缓存前缀）。"""
-    if isinstance(obj, float):
-        return round(obj, 4)
-    if isinstance(obj, dict):
-        return {k: _round_floats(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_round_floats(v) for v in obj]
-    return obj
-
-
 # 形成中信号进 prompt 时剔除随时间窗滑动整体位移的内部索引字段
 _PROV_DROP = ("x", "forming", "structure_ref", "last_sure_pos")
 
@@ -124,7 +113,7 @@ def collect_prompt_data(code: str, freq: str, bars: list[dict],
     zs = zss[-1] if zss else None
     cards = sorted(evidence_cards, key=lambda c: c["dt"])[-5:]
     short = {"structure_short": True} if structure_short else {}
-    return _round_floats({
+    return engine_chart_payload.round_floats({
         "code": code,
         "freq": freq,
         **short,

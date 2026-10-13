@@ -14,7 +14,7 @@
 | `get_bars_bundle(code, freqs, *, adjust="qfq", primary=None, quote_codes=()) -> {freq: dict 或 None}` | 多周期在同一次读事务里读取（图表、共振与 AI 共用）。标的没有任何事实时该周期为 `None`。`quote_codes` 非空时另含 `"quotes"` 键 `{code: quote 报价或 None}`，与各周期同一次读事务，`/api/chart` 用它 |
 | `get_bars_history(code, freq, before, limit=520, *, adjust="qfq", token=None) -> dict 或 None` | 历史分页，取 `before` 之前（不含）至多 `limit` 根。先比令牌，不符或缺失抛 `TokenMismatch`（其 `.token` 为当前令牌）；令牌相符的空页表示历史到头 |
 | `refetch_window(code, freq="day") -> dict` | 手动重拉，返回 `{"status": ...}`：`ok`、`partial`、`failed`、`busy`、`disabled`（demo 或采集器关闭） |
-| `quote(code) -> dict 或 None` | 报价 `{price, price_time, price_label, pc, pct, limit_up, trade_date, stale}` |
+| `quote(code) -> dict 或 None` | 报价 `{price, price_time, price_label, pc, pct, limit_up, trade_date, stale}`。当日首根分钟出现前 `price_label` 为 `昨收`、涨跌为空：A 股个股当日参考前收已确认时价格即参考前收（除权日为除权参考价），否则为最近收盘 |
 | `quotes(codes) -> {code: dict 或 None}` | 多个代码的 `quote` 报价，同一次读事务（`/api/quotes` 用它） |
 | `status(codes) -> dict` | 运行状态，同 `/api/status` |
 | `configure_instance()` | 上下文管理器：加载并校验实例配置、初始化实例目录。应用启动时调用；脚本直接使用门面时也要先进入它，才会按实例配置选择模式与数据路径 |
@@ -29,7 +29,7 @@
 | --- | --- |
 | `code`、`freq` | 请求参数 |
 | `adjust` | 实际生效的模式；指数恒为 `raw` |
-| `bars` | `[{dt, open, high, low, close, volume}]`，按时间升序。日线、周线的 `dt` 为 `YYYY-MM-DD`，分钟为 `YYYY-MM-DD HH:MM`，一律是区间末端标签（A 股上午最后一根标 11:30）。`volume` 恒以股计 |
+| `bars` | `[{dt, open, high, low, close, volume}]`，按时间升序。日线、周线的 `dt` 为 `YYYY-MM-DD`，分钟为 `YYYY-MM-DD HH:MM`，一律是区间末端标签（A 股上午最后一根标 11:30）。`volume` 恒以股计；前复权只缩放价格，`volume` 与不复权相同（送转前的量不按送转比例调整） |
 | `token` | 视图令牌，见下文 |
 | `source` | 页内最新一根 bar 所属批次的来源名；CSV 导入的批次为 `import` |
 | `degraded`、`degraded_note` | 页内有任一 bar 来自冷备来源时为 `true` 与 `冷备来源`，否则为 `false` 与空串 |
@@ -101,7 +101,7 @@
 
 完整字段以 `chanapp/api/main.py`、`chanapp/api/analysis.py` 为准，这里只列与数据契约相关的行为。
 
-- `GET /api/chart?code=&freq=&adjust=`：`freq` 取 `week`、`day`、`m60`、`m30`；`m15`、`m5` 在读取前返回 400。未勾选或当前市场不能合成的周期返回 400。当前周期首次取数失败返回 502。响应为 `{kline, macd, structure, signals, evidence, channels, resonance, meta, ...}`，`kline` 元素为 `{time, open, high, low, close, volume}`；`meta` 是门面返回体去掉 `bars`，另加 `bars`（根数）、`first_dt`、`last_dt`、`analysis_freqs`、`analysis_tokens`、`analysis_calculation_id`。响应另含 `quotes`：自选各项与当前代码的报价行（结构同 `/api/quotes`），与 `kline` 同一次读取，页面的价格卡与自选各行用它，保证与图中末根 bar 同快照；两个市场相同。带弱 ETag，`If-None-Match` 命中返回 304。带 `refetch=1` 时先手动重拉，结果放在响应头 `X-Refetch-Status`。
+- `GET /api/chart?code=&freq=&adjust=`：`freq` 取 `week`、`day`、`m60`、`m30`；`m15`、`m5` 在读取前返回 400。未勾选或当前市场不能合成的周期返回 400。当前周期首次取数失败返回 502。响应为 `{kline, macd, structure, signals, evidence, channels, resonance, meta, ...}`，`kline` 元素为 `{time, open, high, low, close, volume}`；`meta` 是门面返回体去掉 `bars`，另加 `bars`（根数）、`first_dt`、`last_dt`、`analysis_freqs`、`analysis_tokens`、`analysis_calculation_id`。响应另含 `quotes`：自选各项与当前代码的报价行（结构同 `/api/quotes`），与 `kline` 同一次读取，页面的价格卡与自选各行用它，保证与图中末根 bar 同快照；两个市场相同。响应里的浮点数（前复权价、结构价位、MACD、特征等）统一保留 4 位小数，历史分页同。带弱 ETag，`If-None-Match` 命中返回 304。带 `refetch=1` 时先手动重拉，结果放在响应头 `X-Refetch-Status`。
 - `GET /api/chart?...&before=&limit=&token=`：历史分页，`limit` 为 1–2000（默认 520），`token` 取首页的 `meta.token`。令牌不符或缺失返回 **409 `{"detail": "数据已更新", "token": 当前令牌}`**；标的没有事实返回 503。
 - `GET /api/analysis?code=&freq=&adjust=&rule_profile=&signal_scope=&tokens=`：`tokens` 是 URL 编码的 JSON 对象，取自图表的 `meta.analysis_tokens`；`freq` 不影响分析内容。按以下顺序判断，命中即返回：
   1. `freq` 为 `m15`、`m5` 返回 400；`week` 等不在 `day`、`m60`、`m30` 内的值由参数校验返回 422；

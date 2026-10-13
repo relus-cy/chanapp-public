@@ -290,6 +290,35 @@ class CloseAcceptance(_Flow):
         self.assertEqual(self.status(X)["phase"], "final")
 
 
+class ExRightsDayAcceptance(_Flow):
+    """除权日盘前到首根分钟之间（2026-10-13 德明利 10 派 15 元转增 4 股实测，修复后补的回归）：盘前参考价确认后，
+    报价「昨收」显示除权参考价而不是上一日原始收盘（主流行情软件口径）；前复权历史按等比因子缩放，输出与其他派生
+    数值同为 4 位小数（修前带二进制尾数，如 7.039999999999999）；成交量不复权，与原始价视图相同。"""
+    DAY, PC = "2026-09-28", 7.04                          # 前收 10、10 派 1.44 元转增 4 股：(10 − 0.144) ÷ 1.4
+
+    def test_preopen_reference_reprices_quote_and_history_before_first_minute(self):
+        self.chart(X, "day")                               # 周末先把窗口建好（日线收盘恒为 10）
+        with facts.write_txn(self.conn):
+            self.conn.execute("INSERT OR IGNORE INTO calendar(market, date, is_open, sessions, source, fetched_at)"
+                              " VALUES ('CN',?,1,'[]','test',?)", (self.DAY, facts.now_iso()))
+        self.provider.preopen_ref = lambda code, day: RawDayRow(
+            code, day, None, None, None, None, None, "lot", None, "CNY", self.PC, 0, "preopen", new_batch_id())
+        now = at(self.DAY, 9, 20)
+        self.clock.t = now.timestamp()
+        self.assertEqual(self.worker.preopen([X], now), {X})
+
+        body = self.chart(X, "day")
+        q = body["quotes"][X]
+        self.assertEqual((q["price"], q["price_label"], q["pct"], q["limit_up"]), (self.PC, "昨收", None, False))
+        self.assertNotIn("today_unconfirmed", [n["code"] for n in body["meta"]["notices"]])
+        raw = self.chart(X, "day", adjust="raw")
+        self.assertEqual(body["kline"][-1], {**raw["kline"][-1], "open": self.PC, "high": self.PC, "low": self.PC,
+                                             "close": self.PC})                    # 量与时间同原始价视图
+        page = self.chart(X, "day", before=body["kline"][0]["time"], token=body["meta"]["token"], limit=3)
+        self.assertEqual({(b["open"], b["high"], b["low"], b["close"]) for b in page["kline"]},
+                         {(self.PC,) * 4})
+
+
 class HKNewListingAcceptance(_Flow):
     """第三阶段第四轮复审阻断 4：只有当天历史的非自选港股（新上市），收盘后首开要能建当天的前复权缓存。
     当天缓存只由定稿请求；首开的首建截止日退回上一交易日、为空，读取仍须进入同一台账约束的当天追赶。"""
