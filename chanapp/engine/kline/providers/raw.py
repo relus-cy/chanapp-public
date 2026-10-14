@@ -20,6 +20,15 @@ class ProviderConnectionError(ProviderError):
     """连接类失败（超时、断连、DNS）：计入单源冷却，不消耗缺口重试次数。"""
 
 
+class ProviderAuthError(ProviderError):
+    """不会自愈的失败：供应商以自己的错误码拒绝凭据或额度，或凭据未设置（vendor_code="未设置"）。
+    采集器停发整个来源的请求并经 /api/status 原样带出错误码与原话（已脱敏），探测成功或重启才恢复。"""
+
+    def __init__(self, vendor_code, vendor_message):
+        self.vendor_code, self.vendor_message = str(vendor_code), str(vendor_message)
+        super().__init__(f"{self.vendor_code}: {self.vendor_message}")
+
+
 class ProviderUnsupported(ProviderError):
     """该能力未验证或不支持（如 P3 前的指数盘中、PH1 前的港股 m5）：跳过，不计入熔断与退避。"""
 

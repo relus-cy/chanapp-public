@@ -1,0 +1,7 @@
+{
+ "note": "2026-10-12 错 access_token 一次性请求：longbridge.OpenApiException 的属性",
+ "type": "OpenApiException",
+ "code": 401004,
+ "message": "token invalid",
+ "trace_id": "f4b2b30e86d577d5a2f669df879500f3"
+}

@@ -5,7 +5,9 @@
   BEGIN IMMEDIATE 原子递增（WAL 下与写者事务串行），它不是行情事实，不影响任何视图代次；
 - 上游请求一律在写者锁外进行，锁内只做提交、缺口与批次登记（大响应可能耗时较长）；
 - 额度：按源持久化计数（quota_usage，重启不清零），非恢复请求不得占用预留额度；
-- 失败：单标的退避先于单源冷却；只有连接类失败（ProviderConnectionError 与非 provider 异常）计入单源冷却，
+- 失败：不可自愈失败（ProviderAuthError：供应商错误码拒绝凭据或额度、凭据未设置）停发整个来源，每
+  SOURCE_PROBE_S 秒放行一个探测请求，成功即恢复（SourceBlock，只在内存），不计标的失败与缺口次数；
+  其余失败单标的退避先于单源冷却；只有连接类失败（ProviderConnectionError 与非 provider 异常）计入单源冷却，
   其余 ProviderError（5xx、越界、4xx 等）只退避该标的；ProviderUnsupported 只跳过并退还额度；
   历史来源的请求（历史追赶、请求路径追赶的续传）按 code#history 单独退避，不跳过同一代码的盘前、盘中与定稿；
   永不调用冷备（D1：冷备只能手动切换绑定）；
@@ -68,8 +70,9 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from chanapp.engine.kline import admission, bindings, calendar, config, facts, hk_vendor_qfq, sessions, views
-from chanapp.engine.kline.providers.raw import (ProviderConnectionError, ProviderError,  # noqa: F401
-                                                ProviderRangeError, ProviderServerError, ProviderUnsupported)
+from chanapp.engine.kline.providers.raw import (ProviderAuthError, ProviderConnectionError,  # noqa: F401
+                                                ProviderError, ProviderRangeError, ProviderServerError,
+                                                ProviderUnsupported)
 from chanapp.engine.kline.rows import FetchItem, InstrumentRow, kind_of, market_of
 from chanapp.engine.kline.providers.catalog import REGISTRY
 
@@ -197,6 +200,50 @@ class Budget:
             with facts.write_txn(conn):
                 conn.execute("UPDATE quota_usage SET count=MAX(count-?, 0) WHERE source=? AND day=?",
                              (n, self.source, self.day()))
+
+
+class SourceBlock:
+    """不可自愈的上游失败（ProviderAuthError：供应商错误码拒绝凭据或额度、凭据未设置）：整个来源停发请求，
+    每 probe_s 秒放行一个请求作探测（同一时刻至多一个），成功即解除。只在内存：改凭据要重启服务，重启即清除。
+    调度、历史追赶与请求路径追赶三类线程共用，加锁。"""
+
+    def __init__(self, probe_s, clock):
+        self.probe_s, self.clock = probe_s, clock
+        self.entries: dict = {}            # source → {vendor_code, vendor_message, since, last_try}
+        self._probing: set = set()
+        self._lock = threading.Lock()
+
+    def admit(self, source):
+        """None：未停发；True：放行为探测（调用方结束时必调 release）；False：本轮不发。"""
+        with self._lock:
+            entry = self.entries.get(source)
+            if entry is None:
+                return None
+            if source in self._probing or self.clock() - entry["last_try"] < self.probe_s:
+                return False
+            entry["last_try"] = self.clock()
+            self._probing.add(source)
+            return True
+
+    def release(self, source) -> None:
+        with self._lock:
+            self._probing.discard(source)
+
+    def fail(self, source, exc: ProviderAuthError) -> bool:
+        """记下（或刷新）停发状态；返回是否新进入停发。"""
+        with self._lock:
+            old = self.entries.get(source)
+            self.entries[source] = {"vendor_code": exc.vendor_code, "vendor_message": exc.vendor_message,
+                                    "since": old["since"] if old else self.clock(), "last_try": self.clock()}
+            return old is None
+
+    def clear(self, source) -> bool:
+        with self._lock:
+            return self.entries.pop(source, None) is not None
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {s: dict(e) for s, e in self.entries.items()}
 
 
 class Breaker:
@@ -330,6 +377,7 @@ class Collector:
         self._catchup_guard = threading.Lock()
         self.source_breaker = Breaker(config.BREAKER_MAX_FAILURES, config.BREAKER_COOLDOWN_S, self.clock)
         self.code_backoff = Breaker(config.CODE_BACKOFF_AFTER, config.CODE_BACKOFF_S, self.clock)
+        self.source_block = SourceBlock(config.SOURCE_PROBE_S, self.clock)
         self._thread = None
         self._history_thread = None
         self._stop = threading.Event()
@@ -413,7 +461,8 @@ class Collector:
 
         on_sent 给定时，请求进入实际调用（fn）后必调一次：返回、上游报错与中断（KeyboardInterrupt 等，结果未知）
         都算发出；进入之前的跳过（退避、冷却、额度、provider 不可用或不提供该能力）与 fn 报 ProviderUnsupported
-        （能力未验证，与额度一样退还）不算。"""
+        （能力未验证，与额度一样退还）不算。ProviderAuthError（不可自愈）让整个来源进入 source_block 停发，
+        对调用方转成 _Skipped；停发期间每 config.SOURCE_PROBE_S 秒放行一个请求作探测，成功即解除。"""
         if self._lock_held():
             raise RuntimeError("上游请求不得在写者锁内进行")
         if minute and not self.minute_enabled(code):
@@ -421,6 +470,17 @@ class Collector:
         key = self._backoff_key(code)
         if not self.code_backoff.allow(key) or not self.source_breaker.allow(source):
             raise _Skipped()
+        probe = self.source_block.admit(source)
+        if probe is False:
+            raise _Skipped()
+        try:
+            return self._send(code, key, source, fn, recovery=recovery, capability=capability,
+                              on_sent=on_sent, minute=minute)
+        finally:
+            if probe:
+                self.source_block.release(source)
+
+    def _send(self, code, key, source, fn, *, recovery, capability, on_sent, minute):
         try:
             provider = self.provider(source)
         except ProviderUnsupported:
@@ -437,14 +497,24 @@ class Collector:
             if budget is not None:
                 budget.refund()
             raise _Skipped()
-        unsupported = False
+        unsent = False
         try:
             out = fn(provider)
         except ProviderUnsupported:
-            unsupported = True
+            unsent = True
             if budget is not None:
                 budget.refund()
             raise
+        except ProviderAuthError as exc:
+            # 不会自愈：整个来源停发、不计标的失败；对调用方等同冷却中的跳过（不计缺口次数、定稿按暂缓处理）
+            if exc.vendor_code == "未设置":          # 凭据没配，一个请求都没发出
+                unsent = True
+                if budget is not None:
+                    budget.refund()
+            if self.source_block.fail(source, exc):
+                log.warning("上游不可自愈失败，停发该来源请求，每 %d 秒探测一次 source=%s 错误码=%s 原话=%s",
+                            config.SOURCE_PROBE_S, source, exc.vendor_code, exc.vendor_message)
+            raise _Skipped() from None
         except ProviderConnectionError:
             self.code_backoff.record(key, False)
             self.source_breaker.record(source, False)
@@ -457,10 +527,12 @@ class Collector:
             self.source_breaker.record(source, False)
             raise ProviderConnectionError(f"{type(exc).__name__}: {exc}") from None
         finally:
-            if on_sent is not None and not unsupported:
+            if on_sent is not None and not unsent:
                 on_sent()
         self.code_backoff.record(key, True)
         self.source_breaker.record(source, True)
+        if self.source_block.clear(source):
+            log.warning("上游已恢复，恢复对该来源的请求 source=%s", source)
         return out
 
     # today 取自本轮模式的 now（调度传入），缺省才用时钟：准入的越界判定以它为准
@@ -1577,7 +1649,11 @@ class Collector:
                     else:
                         rows = self._call(code, source, lambda p: p.minute_history(code, dataset, lo, hi,
                                                                                    now=self.now()), minute=True)
-                except (_Skipped, _BudgetExhausted, ProviderError):
+                except (_Skipped, _BudgetExhausted):
+                    out["stopped"] = "fetch_failed"
+                    break
+                except ProviderError as exc:
+                    log.warning("窗口取数失败 code=%s %s %s..%s 类别=%s", code, dataset, lo, hi, type(exc).__name__)
                     out["stopped"] = "fetch_failed"
                     break
                 with self.writer() as conn:
@@ -1831,7 +1907,10 @@ class Collector:
         source, gen = bindings.active(self.conn(), market_of(code), kind_of(code), FetchItem.MINUTE_LIVE)
         try:
             rows = self._call(code, source, lambda p: p.minute_live(code, fact, now=now), capability="minute_live", minute=True)
-        except (_Skipped, _BudgetExhausted, ProviderError):
+        except (_Skipped, _BudgetExhausted):
+            return None, []
+        except ProviderError as exc:
+            log.warning("盘中取数失败 code=%s 类别=%s", code, type(exc).__name__)   # 类名即脱敏类别
             return None, []
         if not rows:
             return None, []
@@ -2069,7 +2148,7 @@ class Collector:
                             raise
                         fact = None             # 日线请求途中取消了分钟：已取回的日线照常提交，按只日线完成
             except _Skipped:
-                why = "backoff" if not self.code_backoff.allow(code) else "cooldown"
+                why = self._skip_reason(code, day_src, min_src)
                 return self._defer(rec, code, day, why, now=now, gap=True, fact=fact)
             except _BudgetExhausted:
                 return self._defer(rec, code, day, "quota", now=now, gap=True, fact=fact)
@@ -2183,6 +2262,12 @@ class Collector:
             rec["reason"] = reason
         self._save_final(rec, code, day)
         return "review" if terminal else "failed"
+
+    def _skip_reason(self, key, *sources) -> str:
+        """_Skipped 的暂缓原因（只进日志）：来源停发、标的退避或来源冷却。"""
+        if any(s in self.source_block.snapshot() for s in sources):
+            return "blocked"
+        return "backoff" if not self.code_backoff.allow(key) else "cooldown"
 
     def _defer(self, rec, code, day, why, *, now=None, gap=False, hold=False, fact=None) -> str:
         """暂缓：这次一个上游请求都没发出才不计次（_release 退还预占），已发出的照算；原因变化时记一次 INFO。
@@ -2457,7 +2542,7 @@ class Collector:
             elif isinstance(exc, ProviderUnsupported):
                 out["deferred"] = "unsupported"
             elif isinstance(exc, _Skipped):
-                out["deferred"] = "backoff" if not self.code_backoff.allow(self._backoff_key(code)) else "cooldown"
+                out["deferred"] = self._skip_reason(self._backoff_key(code), primary)
             return out
         short = [freq for freq in freqs
                  if not self._vendor_covers(code, freq, fresh[freq], spans[freq], through, cache[freq][0], full=full)]
@@ -2999,6 +3084,15 @@ class Collector:
                                             "verified_at": row["verified_at"]} if row and source else None)
             probes.append({"market": b.market, "kind": b.kind, "item": b.item.value, "active": active,
                            "binding_gen": gen, "probe": last["probe"], "keepalive": last["keepalive-"]})
+        markets: dict = {}
+        for p in probes:
+            markets.setdefault(p["active"], set()).add(p["market"])
+        upstream = [{"source": source, "markets": sorted(markets.get(source, ())),
+                     "vendor_code": e["vendor_code"], "vendor_message": e["vendor_message"],
+                     "since": datetime.fromtimestamp(e["since"]).isoformat(timespec="seconds"),
+                     "next_probe_at": datetime.fromtimestamp(e["last_try"] + config.SOURCE_PROBE_S)
+                     .isoformat(timespec="seconds")}
+                    for source, e in sorted(self.source_block.snapshot().items())]
         budget = {}
         for source in config.QUOTA:
             b = self._budget(source)
@@ -3007,7 +3101,7 @@ class Collector:
                 "mode": selected.mode if selected is not None else "unconfigured",
                 "enabled": is_enabled() and all(t is not None and t.is_alive()
                                                 for t in (self._thread, self._history_thread)),
-                "datasets": datasets, "probes": probes, "budget": budget,
+                "datasets": datasets, "probes": probes, "budget": budget, "upstream": upstream,
                 "calendar_export": str(self.cache_dir / "selfcheck_calendar.json")}
 
 

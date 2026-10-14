@@ -1,0 +1,9 @@
+{
+ "note": "2026-10-12 错证书一次性请求：HTTP 404，正文 JSON 并回显证书（此处换成测试证书）",
+ "status": 404,
+ "body": {
+  "code": 404,
+  "message": "Licence证书不存在",
+  "licence": "SECRET-LICENCE-123"
+ }
+}

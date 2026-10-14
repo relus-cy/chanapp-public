@@ -54,7 +54,7 @@ def status(conn, codes):
                                  "SELECT COUNT(*) FROM pending_review WHERE code=? AND dataset=? AND verdict IS NULL",
                                  (code, dataset)).fetchone()[0]})
     return {"mode": "demo", "enabled": False, "checked_at": datetime.now().isoformat(timespec="seconds"),
-            "datasets": datasets, "probes": [], "budget": {}, "calendar_export": None}
+            "datasets": datasets, "probes": [], "budget": {}, "upstream": [], "calendar_export": None}
 
 
 def _audit_path(cache_dir) -> Path:

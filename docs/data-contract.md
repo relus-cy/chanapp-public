@@ -115,7 +115,7 @@
 
   以上 409 都不调用模型。
 - `GET /api/quotes?code=`：报价表，`{data_version, quotes: {code: 行}}`，覆盖自选各项，另加不在自选里的当前代码 `code`；全部代码同一次读取。行为 `{name, price, pct, limit_up, price_time, price_label, stale, price_unavailable}`，两个市场都只由 K 线事实派生（门面 `quote`）；标的没有事实时价格为空、`price_unavailable` 为真；读取失败返回 502。页面在图表不刷新的时段用它。`GET /api/quote?code=` 返回单个代码的同结构行，保留兼容，页面不用。
-- `GET /api/status`：`{mode, enabled, checked_at, datasets, probes, budget, calendar_export}`。`mode` 为 `demo` 或 `real`；`enabled` 为真表示采集器在运行；`datasets` 逐项给出 `last_commit_at`、`stale`、`stale_judged`（为 false 时表示当前时段采集器不判 stale，`stale` 恒为 false）、`open_gaps`、`known_gaps`（重试 5 次后不再自动补取的缺口）、`pending_review`。
+- `GET /api/status`：`{mode, enabled, checked_at, datasets, probes, budget, upstream, calendar_export}`。`mode` 为 `demo` 或 `real`；`enabled` 为真表示采集器在运行；`datasets` 逐项给出 `last_commit_at`、`stale`、`stale_judged`（为 false 时表示当前时段采集器不判 stale，`stale` 恒为 false）、`open_gaps`、`known_gaps`（重试 5 次后不再自动补取的缺口）、`pending_review`。`upstream` 列出因不可自愈失败而停发请求的来源，每项 `{source, markets, vendor_code, vendor_message, since, next_probe_at}`：`vendor_code` 与 `vendor_message` 是供应商自己的错误码与原话（已脱敏；凭据未设置时错误码为 `未设置`），`markets` 是当前由该来源供数的市场，`since` 是开始停发的时间，`next_probe_at` 是最早允许探测的时间（探测随下一轮调度发出，所以可能已过去）；没有停发时为空数组，demo 恒为空。
 - `GET/PUT /api/periods`：展示周期勾选，见 [展示周期与分析](periods-and-analysis.md)。
 
 ## CSV 导入
@@ -367,7 +367,7 @@ adapter 只负责取数、结构检查、单位与标签归一，输出上文同
 ```
 
 
-失败用 `raw.py` 里的异常区分，采集器据此处理：`ProviderRangeError`（返回越出请求范围，整批作废并登记缺口）、`ProviderServerError`（上游 5xx，登记缺口）、`ProviderConnectionError`（连接类失败，计入该来源的冷却）、`ProviderUnsupported`（能力未实现或未验证，跳过）、其他 `ProviderError`（只对该标的退避）。异常消息不得包含凭据。
+失败用 `raw.py` 里的异常区分，采集器据此处理：`ProviderRangeError`（返回越出请求范围，整批作废并登记缺口）、`ProviderServerError`（上游 5xx，登记缺口）、`ProviderConnectionError`（连接类失败，计入该来源的冷却）、`ProviderUnsupported`（能力未实现或未验证，跳过）、`ProviderAuthError(vendor_code, vendor_message)`（供应商以自己的错误码拒绝凭据或额度，或凭据未设置：不会自愈，整个来源停发请求，每 5 分钟放行一个请求作探测，成功即恢复，重启也清除；经 `/api/status` 的 `upstream` 原样带出）、其他 `ProviderError`（只对该标的退避）。只有带凭据的来源需要抛 `ProviderAuthError`，且只在供应商给出明确错误码时抛；没有错误码的失败按其他类别处理。异常消息不得包含凭据。
 
 ### 注册能力
 

@@ -5,6 +5,8 @@
 - latest 多日行会把近期交易日填成 sf=1 平价，只取当日行；
 - 日线 st/et 用 YYYYMMDD，分钟用 'YYYY-MM-DD HH:MM:SS'（14 位紧凑格式有空返与越界），并校验返回范围；
 - 证书在 URL 路径里：异常与日志一律替换为 [REDACTED]，并切断异常链。
+- 非 200 响应带供应商错误码时（429 纯文本正文 "101:…"、404 JSON 的 code）抛 ProviderAuthError，原话脱敏后带出
+  （404 正文会回显证书）；不带错误码的（正文为空的 404 等）仍是标的级 ProviderError。
 """
 from __future__ import annotations
 
@@ -12,8 +14,8 @@ import os
 import urllib.parse
 from datetime import date, datetime, timedelta
 
-from chanapp.engine.kline.providers.raw import (ProviderConnectionError, ProviderError, ProviderRangeError,
-                                                ProviderServerError)
+from chanapp.engine.kline.providers.raw import (ProviderAuthError, ProviderConnectionError, ProviderError,
+                                                ProviderRangeError, ProviderServerError)
 from chanapp.engine.kline.rows import CalendarRow, InstrumentRow, RawDayRow, RawMinuteRow, kind_of, new_batch_id
 
 CONTRACT_VERSION = "mairui-raw-2"         # 2：分钟端点改原生 15 分钟
@@ -22,6 +24,17 @@ _TIMEOUT_SMALL = (8, 30)
 _TIMEOUT_HISTORY = (8, 180)
 _CALENDAR_MIN_OPEN = 200        # A 股每年约 242 个交易日；少于此数视为截断
 _MINUTE_PATH = {"m5": ("5/n", "5"), "m15": ("15/n", "15")}   # 分钟事实粒度 → (个股, 指数) 路径段
+
+
+def _vendor_error(body) -> tuple[str, str] | None:
+    """供应商错误码与原话：JSON 的 code/message，或纯文本 "101:原话"；没有错误码返回 None。"""
+    if isinstance(body, dict) and body.get("code") is not None:
+        return str(body["code"]), str(body.get("message") or body.get("msg") or "")
+    if isinstance(body, str):
+        head, sep, rest = body.strip().partition(":")
+        if sep and head.isdigit():
+            return head, rest.strip()
+    return None
 
 
 def _vendor_code(code: str) -> str:
@@ -46,7 +59,7 @@ class MairuiProvider:
     def _http(self, path, params, timeout):
         import requests
         if not self._licence:
-            raise ProviderConnectionError("MAIRUI_LICENCE 未设置")   # 整个源不可用，不消耗缺口重试
+            raise ProviderAuthError("未设置", "MAIRUI_LICENCE 未设置")   # 整个源不可用、不会自愈
         url = API + path.replace("{L}", urllib.parse.quote(self._licence, safe=""))
         response = requests.get(url, params=params, timeout=timeout)
         try:
@@ -65,6 +78,9 @@ class MairuiProvider:
         if status >= 500:
             raise ProviderServerError(f"HTTP {status} {path.split('/{L}')[0]}")
         if status != 200:
+            vendor = _vendor_error(body)
+            if vendor is not None:
+                raise ProviderAuthError(vendor[0], self._redact(vendor[1]))
             raise ProviderError(f"HTTP {status} {path.split('/{L}')[0]}: {self._redact(body)[:200]}")
         return body
 

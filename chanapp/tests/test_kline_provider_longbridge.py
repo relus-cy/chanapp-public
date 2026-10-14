@@ -15,6 +15,7 @@ from pathlib import Path
 from chanapp.engine.kline.providers import longbridge, raw
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "kline_raw" / "longbridge"
+ERR = Path(__file__).resolve().parent / "fixtures" / "kline_errors"   # 不进契约哈希
 
 
 def _rows(name):
@@ -200,12 +201,40 @@ class LongbridgeErrorClassTests(unittest.TestCase):
         with self.assertRaises(raw.ProviderConnectionError):
             p.day_history("hk00700", "2026-05-14", "2026-05-15")
 
-    def test_missing_credentials_is_connection_class(self):
+    def test_missing_credentials_is_non_self_healing(self):
         with unittest.mock.patch.dict(os.environ, {}, clear=False):
             for name in longbridge._CRED_NAMES:
                 os.environ.pop(name, None)
-            with self.assertRaises(raw.ProviderConnectionError):
+            with self.assertRaises(raw.ProviderAuthError) as ctx:
                 longbridge.SdkClient()._context()
+        self.assertEqual(ctx.exception.vendor_code, "未设置")
+
+    def test_vendor_401_codes_are_non_self_healing_and_echoed(self):
+        rec = json.loads((ERR / "longbridge-401004-token.json").read_text())
+
+        class OpenApiException(Exception):        # 与 SDK 异常同形：code、message、trace_id 属性
+            def __init__(self):
+                super().__init__(f"OpenApiException: (code={rec['code']}) {rec['message']}")
+                self.code, self.message, self.trace_id = rec["code"], rec["message"], rec["trace_id"]
+
+        class Rejected:
+            def history_by_date(self, *args):
+                raise OpenApiException()
+
+        with self.assertRaises(raw.ProviderAuthError) as ctx:
+            longbridge.LongbridgeProvider(client=Rejected()).day_history("hk00700", "2026-05-14", "2026-05-15")
+        self.assertEqual((ctx.exception.vendor_code, ctx.exception.vendor_message), ("401004", "token invalid"))
+
+    def test_other_vendor_codes_stay_ordinary(self):
+        class Limited:
+            def history_by_date(self, *args):
+                exc = RuntimeError("OpenApiException: (code=301600) the interval must be less than one month")
+                exc.code, exc.message = 301600, "the interval must be less than one month"
+                raise exc
+
+        with self.assertRaises(raw.ProviderError) as ctx:
+            longbridge.LongbridgeProvider(client=Limited()).day_history("hk00700", "2026-05-14", "2026-05-15")
+        self.assertNotIsInstance(ctx.exception, raw.ProviderAuthError)
 
 
 class FakeCalendarClient:

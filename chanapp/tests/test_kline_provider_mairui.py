@@ -7,11 +7,17 @@ from pathlib import Path
 from chanapp.engine.kline.providers import mairui, raw
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "kline_raw" / "mairui"
+ERR = Path(__file__).resolve().parent / "fixtures" / "kline_errors"   # 不进契约哈希
 LICENCE = "SECRET-LICENCE-123"
 
 
 def fixture(name):
     rec = json.loads((FIX / name).read_text())
+    return rec["status"], rec["body"]
+
+
+def error_fixture(name):
+    rec = json.loads((ERR / name).read_text())
     return rec["status"], rec["body"]
 
 
@@ -136,9 +142,33 @@ class MairuiTests(unittest.TestCase):
             p.day_history("sh600036", "2026-09-01", "2026-09-02")
         self.assertNotIsInstance(ctx.exception, raw.ProviderConnectionError)
 
-    def test_missing_licence_is_source_level(self):
+    def test_missing_licence_is_non_self_healing(self):
+        # 证书没配：整个源不可用、不会自愈，与证书无效同类处理（不进连接类冷却循环）
         p = mairui.MairuiProvider(licence="")
-        with self.assertRaises(raw.ProviderConnectionError):
+        with self.assertRaises(raw.ProviderAuthError) as ctx:
+            p.day_history("sh600036", "2026-09-01", "2026-09-02")
+        self.assertEqual((ctx.exception.vendor_code, ctx.exception.vendor_message),
+                         ("未设置", "MAIRUI_LICENCE 未设置"))
+
+    def test_vendor_error_codes_are_non_self_healing_and_echoed(self):
+        # 以供应商错误码为准：429 正文 "101:…"、404 JSON code；原话原样带出（证书回显已脱敏）
+        for name, code, message in (
+                ("mairui-429-quota.json", "101", "Licence证书当日请求已超限"),
+                ("mairui-404-licence.json", "404", "Licence证书不存在")):
+            p, _ = self.provider(error_fixture(name))
+            with self.assertRaises(raw.ProviderAuthError, msg=name) as ctx:
+                p.minute_live("sz300209", "m15", now=datetime(2026, 9, 28, 12, 33))
+            self.assertEqual((ctx.exception.vendor_code, ctx.exception.vendor_message), (code, message))
+            self.assertNotIn(LICENCE, str(ctx.exception))
+
+    def test_failures_without_vendor_code_stay_ordinary(self):
+        # 正文为空的 404（路径或代码不存在）与 5xx 没有供应商错误码：照旧是标的级/服务端失败
+        p, _ = self.provider(error_fixture("mairui-404-empty.json"))
+        with self.assertRaises(raw.ProviderError) as ctx:
+            p.day_history("sh600036", "2026-09-01", "2026-09-02")
+        self.assertNotIsInstance(ctx.exception, (raw.ProviderAuthError, raw.ProviderConnectionError))
+        p, _ = self.provider((500, {"code": 500, "message": "busy"}))
+        with self.assertRaises(raw.ProviderServerError):
             p.day_history("sh600036", "2026-09-01", "2026-09-02")
 
     def test_every_public_fetch_requests_only_unadjusted_endpoints(self):

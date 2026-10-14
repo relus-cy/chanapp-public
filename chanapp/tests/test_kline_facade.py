@@ -476,7 +476,7 @@ class FacadeApiTests(FacadeBase):
         response = self.client.get("/api/status")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(set(response.json()),
-                         {"checked_at", "mode", "enabled", "datasets", "probes", "budget", "calendar_export"})
+                         {"checked_at", "mode", "enabled", "datasets", "probes", "budget", "calendar_export", "upstream"})
         self.assertEqual(response.json()["mode"], "unconfigured")  # 直接库级测试没有进入应用 lifespan
         self.assertFalse(response.json()["enabled"])
 

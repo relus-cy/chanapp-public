@@ -25,8 +25,8 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from chanapp.engine.kline import sessions
-from chanapp.engine.kline.providers.raw import (ProviderConnectionError, ProviderError, ProviderRangeError,
-                                                ProviderUnsupported)
+from chanapp.engine.kline.providers.raw import (ProviderAuthError, ProviderConnectionError, ProviderError,
+                                                ProviderRangeError, ProviderUnsupported)
 from chanapp.engine.kline.rows import CalendarRow, RawDayRow, RawMinuteRow, new_batch_id
 
 log = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ class SdkClient:
                     creds = [os.environ.get(n, "") for n in _CRED_NAMES]
                     if not all(creds):
                         missing = [n for n, v in zip(_CRED_NAMES, creds) if not v]
-                        raise ProviderConnectionError(f"长桥凭据未设置: {missing}")   # 整个源不可用
+                        raise ProviderAuthError("未设置", f"长桥凭据未设置: {missing}")   # 整个源不可用、不会自愈
                     from longbridge.openapi import Config, QuoteContext
                     config = Config.from_apikey(*creds, enable_print_quote_packages=False)
                     self._ctx = QuoteContext(config)
@@ -195,6 +195,9 @@ class LongbridgeProvider:
         except (OSError, TimeoutError) as exc:      # 含 ConnectionError：连接类，冷却整个源
             raise ProviderConnectionError(f"长桥 {method}: {type(exc).__name__}: {exc}") from None
         except Exception as exc:  # noqa: BLE001 — 消息里不含凭据（SDK 异常只带错误码与说明）
+            code = getattr(exc, "code", None)
+            if code is not None and str(code).startswith("401"):   # 401xxx：凭据被拒（401004 token invalid）
+                raise ProviderAuthError(code, getattr(exc, "message", "") or exc) from None
             raise ProviderError(f"长桥 {method}: {type(exc).__name__}: {exc}") from None
 
     def _history(self, code, period, adjust, first_day, last_day) -> list[dict]:

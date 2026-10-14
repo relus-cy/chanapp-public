@@ -34,6 +34,7 @@ BREAKER_MAX_FAILURES = 3            # 单源连败冷却
 BREAKER_COOLDOWN_S = 600
 CODE_BACKOFF_AFTER = 2              # 单标的连败退避
 CODE_BACKOFF_S = 300
+SOURCE_PROBE_S = 300                # 不可自愈失败（凭据、额度）后每 5 分钟放行一个请求作探测
 FINALIZE_RETRY_S = 7200              # 当日定稿失败后隔这么久再试（按实际失败时刻；目标 2026-09-29 第三阶段）
 FINALIZE_MAX_ATTEMPTS = 3           # 每个（代码，交易日）至多这么多次自动尝试；一个请求都没发出的暂缓与手动重拉不计
 FINALIZE_DEFER_S = 60               # 定稿因退避、冷却或额度暂缓后，同一代码至少隔这么久再看
