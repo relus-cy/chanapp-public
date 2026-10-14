@@ -1,4 +1,4 @@
-"""上游不可自愈失败（ProviderAuthError）：整个来源停发请求，每 5 分钟放行一个请求作探测，探测成功即恢复；
+"""上游不可自愈失败（ProviderAuthError）：整个来源停发请求，每分钟放行一个请求作探测，探测成功即恢复；
 经 /api/status 原样带出供应商错误码与原话。不按标的计失败，不把缺口推向 known_gap。"""
 import tempfile
 import unittest
@@ -48,7 +48,7 @@ class UpstreamBlockTests(unittest.TestCase):
     def upstream(self, c):
         return c.status(CODES, now=c.now())["upstream"]
 
-    def test_quota_rejection_stops_whole_source_and_probes_every_five_minutes(self):
+    def test_quota_rejection_stops_whole_source_and_probes_every_minute(self):
         p = Rejecting(ProviderAuthError("101", "Licence证书当日请求已超限"))
         c, conn = self.make(p)
         c.drain_gaps(max_requests=10)
@@ -56,19 +56,19 @@ class UpstreamBlockTests(unittest.TestCase):
         self.assertEqual(self.upstream(c), [{
             "source": "mairui", "markets": ["CN"], "vendor_code": "101",
             "vendor_message": "Licence证书当日请求已超限", "since": "2026-09-26T20:00:00",
-            "next_probe_at": "2026-09-26T20:05:00"}])
+            "next_probe_at": "2026-09-26T20:01:00"}])
         self.assertEqual([r["attempts"] for r in conn.execute("SELECT attempts FROM coverage_gaps")], [0, 0, 0])
 
-        self.clock.t += 299
+        self.clock.t += 59
         c.drain_gaps(max_requests=10)
-        self.assertEqual(len(p.calls), 1)                     # 未到 5 分钟：不探测
+        self.assertEqual(len(p.calls), 1)                     # 未到 1 分钟：不探测
         self.clock.t += 1
         c.drain_gaps(max_requests=10)
         self.assertEqual(len(p.calls), 2)                     # 到点恰放行一个请求，仍被拒
-        self.assertEqual(self.upstream(c)[0]["next_probe_at"], "2026-09-26T20:10:00")
+        self.assertEqual(self.upstream(c)[0]["next_probe_at"], "2026-09-26T20:02:00")
 
         p.rejection = None
-        self.clock.t += 300
+        self.clock.t += 60
         c.drain_gaps(max_requests=10)
         self.assertEqual(self.upstream(c), [])                # 探测成功即恢复，其余标的随即照常取数
         self.assertEqual(sorted(call[1] for call in p.calls[2:]), sorted(CODES))

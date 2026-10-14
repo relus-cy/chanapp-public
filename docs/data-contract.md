@@ -367,7 +367,7 @@ adapter 只负责取数、结构检查、单位与标签归一，输出上文同
 ```
 
 
-失败用 `raw.py` 里的异常区分，采集器据此处理：`ProviderRangeError`（返回越出请求范围，整批作废并登记缺口）、`ProviderServerError`（上游 5xx，登记缺口）、`ProviderConnectionError`（连接类失败，计入该来源的冷却）、`ProviderUnsupported`（能力未实现或未验证，跳过）、`ProviderAuthError(vendor_code, vendor_message)`（供应商以自己的错误码拒绝凭据或额度，或凭据未设置：不会自愈，整个来源停发请求，每 5 分钟放行一个请求作探测，成功即恢复，重启也清除；经 `/api/status` 的 `upstream` 原样带出）、其他 `ProviderError`（只对该标的退避）。只有带凭据的来源需要抛 `ProviderAuthError`，且只在供应商给出明确错误码时抛；没有错误码的失败按其他类别处理。异常消息不得包含凭据。
+失败用 `raw.py` 里的异常区分，采集器据此处理：`ProviderRangeError`（返回越出请求范围，整批作废并登记缺口）、`ProviderServerError`（上游 5xx，登记缺口）、`ProviderConnectionError`（连接类失败，计入该来源的冷却）、`ProviderUnsupported`（能力未实现或未验证，跳过）、`ProviderAuthError(vendor_code, vendor_message)`（供应商以自己的错误码拒绝凭据或额度，或凭据未设置：不会自愈，整个来源停发请求，每分钟放行一个请求作探测，成功即恢复，重启也清除；经 `/api/status` 的 `upstream` 原样带出）、其他 `ProviderError`（只对该标的退避）。只有带凭据的来源需要抛 `ProviderAuthError`，且只在供应商给出明确错误码时抛；没有错误码的失败按其他类别处理。异常消息不得包含凭据。
 
 ### 注册能力
 
