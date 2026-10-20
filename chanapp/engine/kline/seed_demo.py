@@ -19,7 +19,7 @@ from chanapp.engine.kline.rows import CalendarRow, InstrumentRow
 SAMPLE_DIR = Path(__file__).resolve().parents[2] / 'samples' / 'demo'
 _FILES = ('bars.csv', 'calendar.json', 'instruments.json', 'instance.json', 'watchlist.json')
 _PATH_OVERRIDES = ('CHANAPP_INSTANCE_CONFIG', 'CHANAPP_CACHE_DIR', 'WATCHLIST_PATH',
-                   'VIEW_LOG_PATH', 'ANALYSIS_CACHE_DIR')
+                   'VIEW_LOG_PATH', 'DRAWINGS_PATH', 'ANALYSIS_CACHE_DIR')
 
 
 def initialize(directory, *, sample_dir=SAMPLE_DIR):

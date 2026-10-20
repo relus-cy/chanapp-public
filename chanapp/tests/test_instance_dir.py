@@ -28,7 +28,7 @@ from chanapp.engine import data as engine_data
 from chanapp.engine import instance_paths
 
 PKG_ROOT = Path(__file__).resolve().parent.parent
-_PATH_VARS = ("CHANAPP_INSTANCE_CONFIG", "CHANAPP_CACHE_DIR", "WATCHLIST_PATH", "VIEW_LOG_PATH",
+_PATH_VARS = ("CHANAPP_INSTANCE_CONFIG", "CHANAPP_CACHE_DIR", "WATCHLIST_PATH", "VIEW_LOG_PATH", "DRAWINGS_PATH",
               "ANALYSIS_CACHE_DIR")
 
 

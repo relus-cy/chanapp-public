@@ -93,6 +93,7 @@ demo 不调用在线来源，分钟粒度只按导入可用的粒度校验，不
 | 个人自选 | `WATCHLIST_PATH` | — | `<实例>/watchlist.json` | `<缓存根>/watchlist.json` |
 | 搜索查看记录 | `VIEW_LOG_PATH` | 同目录 `<自选文件名>.views.sqlite` | `<实例>/views.sqlite` | `<缓存根>/views.sqlite` |
 | 展示周期偏好 | — | 同目录 `<自选文件名>.periods.json` | `<实例>/periods.json` | `<缓存根>/periods.json` |
+| 画线 | `DRAWINGS_PATH` | 同目录 `<自选文件名>.drawings.sqlite` | `<实例>/drawings.sqlite` | `<缓存根>/drawings.sqlite` |
 
 - 仓库里的 `chanapp/watchlist.json` 只是种子：个人自选文件不存在时从它读取，写入一律落在个人路径。
 - 一个进程只服务一个实例。改用实例目录不会自动搬迁旧路径下的状态；需要沿用旧数据时，先停服务再手动移动文件。
@@ -113,7 +114,7 @@ demo 不调用在线来源，分钟粒度只按导入可用的粒度校验，不
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
 | `CHANAPP_INSTANCE_CONFIG` | 不设（demo） | 实例配置文件路径 |
-| `CHANAPP_CACHE_DIR`、`WATCHLIST_PATH`、`VIEW_LOG_PATH`、`ANALYSIS_CACHE_DIR` | 不设 | 逐项覆盖数据路径，见上节 |
+| `CHANAPP_CACHE_DIR`、`WATCHLIST_PATH`、`VIEW_LOG_PATH`、`DRAWINGS_PATH`、`ANALYSIS_CACHE_DIR` | 不设 | 逐项覆盖数据路径，见上节 |
 | `COLLECTOR_ENABLED` | `1` | 只在真实模式下有意义。`0` 时不启动采集器，首次打开、补窗口和落后追赶也不访问上游；已入库数据照常服务，没有事实的代码返回 502。不能跳过凭据校验。测试时设为 `0` |
 | `LLM_PROVIDER` | `deepseek` | AI 分析的模型服务，目前只支持这一个值（OpenAI 兼容的 chat completions 接口） |
 | `LLM_API_KEY` | 不设 | 模型服务的 key；不设时 AI 分析返回 `unconfigured`，页面显示静态样例 |

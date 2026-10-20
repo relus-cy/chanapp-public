@@ -29,6 +29,11 @@ PUT /api/watchlist/{code}/tags（自定义标签：strip/去空/保序去重/每
 GET /api/views → {recent: [{code, name, freq, adjust, first_viewed_at, last_viewed_at, views, watched}]}（最近在前）；
 持久化到 VIEW_LOG_PATH；未设时设了 WATCHLIST_PATH 则与它同目录，否则在实例目录，再否则在缓存目录
 （engine/instance_paths.py）。
+
+用户画线（chanapp/api/drawings.py）：GET /api/drawings?code=，PUT /api/drawings/{code}/{id} {body, base_revision}，
+DELETE /api/drawings/{code}/{id}?base_revision=（软删除），DELETE /api/drawings/{code}（清空该标的）；
+条件写不符回 409 {"detail", "current"}。路径 DRAWINGS_PATH，否则随 WATCHLIST_PATH / 实例目录 / 缓存目录。
+
 /api/chart?refetch=1 先整段重取主图周期与共振依赖的分析窗口再读取，结果在响应头 X-Refetch-Status
 （ok / partial / failed / busy / disabled；busy 为同一标的已有重拉或追赶在途、本次没有重取；
 demo 模式为 disabled，照常读取）。同一标的重拉在途时读取只读现有快照（不等它的锁），
@@ -56,6 +61,7 @@ import hashlib
 import json
 import logging
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -64,7 +70,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Path as Path_, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -77,6 +83,7 @@ if str(_PKG_ROOT.parent) not in sys.path:
 import chanapp  # noqa: E402
 from chanapp.api import analysis as api_analysis  # noqa: E402
 from chanapp.api import view_log as api_view_log  # noqa: E402
+from chanapp.api import drawings as api_drawings  # noqa: E402
 from chanapp.engine import atomic_file  # noqa: E402
 from chanapp.engine import chart_payload as engine_chart_payload  # noqa: E402
 from chanapp.engine import data as engine_data  # noqa: E402
@@ -428,6 +435,82 @@ def record_view(item: ViewItem) -> dict:
     """页面在用户选择代码打开图表时调用一次；自动刷新不调用。"""
     _view_log().record(item.code, item.name or item.code, item.freq, item.adjust)
     return _recent_views()
+
+
+# ---------- 用户画线（按标的逐条存，条件写；内容语义归前端） ----------
+
+_CODE_PATTERN = r"^(sh|sz)\d{6}$|^hk\d{5}$"
+_DRAWING_ID_PATTERN = r"^[A-Za-z0-9_-]{8,64}$"
+DrawingCode = Annotated[str, Path_(pattern=_CODE_PATTERN)]
+DrawingId = Annotated[str, Path_(pattern=_DRAWING_ID_PATTERN)]
+
+
+class DrawingWrite(BaseModel):
+    body: dict
+    base_revision: int | None = None
+
+
+_drawing_stores: dict = {}
+
+
+def _drawing_store() -> api_drawings.DrawingStore:
+    """按路径缓存的画线库（路径每次请求解析，测试可逐例注入）。"""
+    path = _state_paths().drawings
+    store = _drawing_stores.get(path)
+    if store is None:
+        try:
+            store = _drawing_stores[path] = api_drawings.DrawingStore(path)
+        except (OSError, sqlite3.Error) as exc:
+            raise HTTPException(status_code=503, detail="画线存储不可用") from exc
+    return store
+
+
+def _drawing_conflict(exc: api_drawings.Conflict) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc), "current": exc.current},
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/drawings")
+def list_drawings(code: Annotated[str, Query(pattern=_CODE_PATTERN)]) -> JSONResponse:
+    try:
+        items = _drawing_store().items(code)
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail="画线读取失败") from exc
+    return JSONResponse({"code": code, "drawings": items}, headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/drawings/{code}/{drawing_id}")
+def put_drawing(code: DrawingCode, drawing_id: DrawingId, item: DrawingWrite):
+    try:
+        return _drawing_store().put(code, drawing_id, item.body, item.base_revision)
+    except api_drawings.Conflict as exc:
+        return _drawing_conflict(exc)
+    except api_drawings.LimitExceeded as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail="画线未能保存，请重试") from exc
+
+
+@app.delete("/api/drawings/{code}/{drawing_id}")
+def delete_drawing(code: DrawingCode, drawing_id: DrawingId, base_revision: int = Query(...)):
+    try:
+        return _drawing_store().delete(code, drawing_id, base_revision)
+    except api_drawings.Conflict as exc:
+        return _drawing_conflict(exc)
+    except api_drawings.NotFound as exc:
+        raise HTTPException(status_code=404, detail="画线不存在") from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail="画线未能删除，请重试") from exc
+
+
+@app.delete("/api/drawings/{code}")
+def clear_drawings(code: DrawingCode) -> dict:
+    try:
+        return {"code": code, "deleted": _drawing_store().clear(code)}
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail="画线未能清空，请重试") from exc
 
 
 @app.get("/api/watchlist")

@@ -21,7 +21,7 @@ from chanapp.api.main import app
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLES = ROOT / 'samples/demo'
-PATH_VARS = ('CHANAPP_INSTANCE_CONFIG', 'CHANAPP_CACHE_DIR', 'WATCHLIST_PATH', 'VIEW_LOG_PATH', 'ANALYSIS_CACHE_DIR')
+PATH_VARS = ('CHANAPP_INSTANCE_CONFIG', 'CHANAPP_CACHE_DIR', 'WATCHLIST_PATH', 'VIEW_LOG_PATH', 'DRAWINGS_PATH', 'ANALYSIS_CACHE_DIR')
 
 
 class DemoSampleTests(unittest.TestCase):

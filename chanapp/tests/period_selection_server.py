@@ -15,7 +15,7 @@ from pathlib import Path
 
 root, port, freq = Path(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
 root.mkdir(parents=True, exist_ok=True)
-for key in ("WATCHLIST_PATH", "VIEW_LOG_PATH", "CHANAPP_CACHE_DIR", "ANALYSIS_CACHE_DIR"):
+for key in ("WATCHLIST_PATH", "VIEW_LOG_PATH", "DRAWINGS_PATH", "CHANAPP_CACHE_DIR", "ANALYSIS_CACHE_DIR"):
     os.environ.pop(key, None)
 os.environ["COLLECTOR_ENABLED"] = "1"
 from chanapp.engine.kline import bindings, collector, instance, sessions

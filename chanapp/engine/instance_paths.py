@@ -9,6 +9,7 @@
 | 自选 | WATCHLIST_PATH | — | `<实例>/watchlist.json` | `<缓存根>/watchlist.json` |
 | 查看记录 | VIEW_LOG_PATH | 同目录 `<名>.views.sqlite` | `<实例>/views.sqlite` | `<缓存根>/views.sqlite` |
 | 周期偏好 | — | 同目录 `<名>.periods.json` | `<实例>/periods.json` | `<缓存根>/periods.json` |
+| 画线 | DRAWINGS_PATH | 同目录 `<名>.drawings.sqlite` | `<实例>/drawings.sqlite` | `<缓存根>/drawings.sqlite` |
 
 仓库自带的 `watchlist.json` 只是种子：读取时个人文件不存在才回退到它，写入一律落在个人路径。
 只有配置了实例目录才在启动时初始化（建目录、种子只读复制、已有文件一律不动）；未配置时路径与
@@ -38,6 +39,7 @@ class InstancePaths:
     watchlist: Path
     view_log: Path
     period_prefs: Path
+    drawings: Path
 
 
 def resolve(instance_dir=None, *, cache_dir=None) -> InstancePaths:
@@ -62,6 +64,7 @@ def resolve(instance_dir=None, *, cache_dir=None) -> InstancePaths:
         watchlist=watchlist_env or state_dir / "watchlist.json",
         view_log=explicit("VIEW_LOG_PATH") or _beside(watchlist_env, ".views.sqlite") or state_dir / "views.sqlite",
         period_prefs=_beside(watchlist_env, ".periods.json") or state_dir / "periods.json",
+        drawings=explicit("DRAWINGS_PATH") or _beside(watchlist_env, ".drawings.sqlite") or state_dir / "drawings.sqlite",
     )
 
 
@@ -79,7 +82,7 @@ def initialize(paths: InstancePaths) -> None:
         paths.instance_dir.parent.mkdir(parents=True, exist_ok=True)
         paths.instance_dir.mkdir(mode=0o700, exist_ok=True)
     for directory in {paths.cache_dir, paths.analysis_dir, paths.watchlist.parent,
-                      paths.view_log.parent, paths.period_prefs.parent}:
+                      paths.view_log.parent, paths.period_prefs.parent, paths.drawings.parent}:
         directory.mkdir(parents=True, exist_ok=True)
     if paths.watchlist.exists() or not seed.is_file():
         return
@@ -107,6 +110,7 @@ def activate(instance_dir, *, cache_dir=None):
     paths = resolve(instance_dir, cache_dir=cache_dir)
     # 必须在种子复制和事实库建表之前判别，否则首次打开会被误当升级。
     existing = (paths.watchlist.exists() or paths.view_log.exists() or paths.period_prefs.exists()
+                or paths.drawings.exists()
                 or (paths.cache_dir.is_dir() and any(paths.cache_dir.iterdir())))
     if instance_dir is not None:
         try:

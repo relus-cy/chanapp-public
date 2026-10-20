@@ -30,7 +30,7 @@ class PeriodPreferencesTests(unittest.TestCase):
         env = dict(os.environ, CHANAPP_INSTANCE_CONFIG=str(self.config), COLLECTOR_ENABLED='0')
         # 无 mode 的配置是 demo（#42）；这里验真实模式的首次提示与采集器接线，凭据只是占位，不出站
         env.update({key: 'offline-test-placeholder' for spec in REGISTRY.values() for key in spec.credentials})
-        for key in ('WATCHLIST_PATH', 'VIEW_LOG_PATH', 'CHANAPP_CACHE_DIR', 'ANALYSIS_CACHE_DIR'):
+        for key in ('WATCHLIST_PATH', 'VIEW_LOG_PATH', 'DRAWINGS_PATH', 'CHANAPP_CACHE_DIR', 'ANALYSIS_CACHE_DIR'):
             env.pop(key, None)
         self.env = patch.dict(os.environ, env, clear=True)
         self.env.start()

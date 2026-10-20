@@ -117,6 +117,12 @@
 - `GET /api/quotes?code=`：报价表，`{data_version, quotes: {code: 行}}`，覆盖自选各项，另加不在自选里的当前代码 `code`；全部代码同一次读取。行为 `{name, price, pct, limit_up, price_time, price_label, stale, price_unavailable}`，两个市场都只由 K 线事实派生（门面 `quote`）；标的没有事实时价格为空、`price_unavailable` 为真；读取失败返回 502。页面在图表不刷新的时段用它。`GET /api/quote?code=` 返回单个代码的同结构行，保留兼容，页面不用。
 - `GET /api/status`：`{mode, enabled, checked_at, datasets, probes, budget, upstream, calendar_export}`。`mode` 为 `demo` 或 `real`；`enabled` 为真表示采集器在运行；`datasets` 逐项给出 `last_commit_at`、`stale`、`stale_judged`（为 false 时表示当前时段采集器不判 stale，`stale` 恒为 false）、`open_gaps`、`known_gaps`（重试 5 次后不再自动补取的缺口）、`pending_review`。`upstream` 列出因不可自愈失败而停发请求的来源，每项 `{source, markets, vendor_code, vendor_message, since, next_probe_at}`：`vendor_code` 与 `vendor_message` 是供应商自己的错误码与原话（已脱敏；凭据未设置时错误码为 `未设置`），`markets` 是当前由该来源供数的市场，`since` 是开始停发的时间，`next_probe_at` 是最早允许探测的时间（探测随下一轮调度发出，所以可能已过去）；没有停发时为空数组，demo 恒为空。
 - `GET/PUT /api/periods`：展示周期勾选，见 [展示周期与分析](periods-and-analysis.md)。
+- 画线：按标的逐条保存，内容由页面定义，服务端只校验后原样存取。路径见 [配置 · 实例目录与数据路径](configuration.md#实例目录与数据路径)，新建文件权限 0600；demo 同样可读写。
+  - `GET /api/drawings?code=`：`{code, drawings: [{id, body, revision, updated_at}]}`，只含未删除的画线，按创建先后排列。
+  - `PUT /api/drawings/{code}/{id}`，请求体 `{body, base_revision}`：新建时 `base_revision` 为空，修改时填当前 `revision`；成功返回该画线，`revision` 加 1。`id` 为 8–64 位字母、数字、`-`、`_`。`body` 必须是对象，`v` 为 1，序列化后不超过 16 KB，否则 422；单个标的最多 500 条未删除画线。
+  - `DELETE /api/drawings/{code}/{id}?base_revision=`：软删除，保留墓碑；已删除的再删返回 200；不存在返回 404。
+  - `DELETE /api/drawings/{code}`：把该标的所有未删除画线标为删除，返回 `{code, deleted}`，不检查版本。
+  - 冲突返回 **409 `{"detail": "画线已被修改", "current": 服务端当前版本或 null}`**：新建时 `id` 已存在（含已删除）、`base_revision` 与当前不符、修改或删除已删除的画线。墓碑占住 `id`，迟到的写入不能复活已删除的画线。存储读写失败返回 503。
 
 ## CSV 导入
 
@@ -155,7 +161,7 @@ UTF-8 CSV（允许 BOM），逗号分隔，首行表头恰好是下面 12 列（
 
 ### 例子：导入并查看
 
-如果端口 8899 上仍有 demo 服务运行，先在它的终端按 `Ctrl+C` 停止服务。确认当前终端没有设置 `CHANAPP_CACHE_DIR`、`WATCHLIST_PATH`、`VIEW_LOG_PATH`、`ANALYSIS_CACHE_DIR` 路径覆盖，避免读写其他实例。路径规则见 [配置 · 实例目录与数据路径](configuration.md#实例目录与数据路径)。
+如果端口 8899 上仍有 demo 服务运行，先在它的终端按 `Ctrl+C` 停止服务。确认当前终端没有设置 `CHANAPP_CACHE_DIR`、`WATCHLIST_PATH`、`VIEW_LOG_PATH`、`DRAWINGS_PATH`、`ANALYSIS_CACHE_DIR` 路径覆盖，避免读写其他实例。路径规则见 [配置 · 实例目录与数据路径](configuration.md#实例目录与数据路径)。
 
 下面的数据取自随仓库发布的 demo 样本。它包含中际旭创 `sz300308` 与上证指数 2026-09-14 至 09-18 的日线，以及中际旭创 09-18 的 16 根 15 分线。15 分线由样本的 5 分线聚合。
 
@@ -315,7 +321,7 @@ CHANAPP_INSTANCE_CONFIG=.cache/csv/instance.json .venv/bin/python -m chanapp.eng
 
 [`manifest.json`](../chanapp/samples/demo/manifest.json) 记录输入语义、覆盖范围和各文件的 SHA-256。
 
-`python -m chanapp.engine.kline.seed_demo DIR` 先按 `chanapp/samples/demo/manifest.json` 核对样本的字节数与 SHA-256，再经同一导入入口写入事实库，并在同一写者锁内写入交易日历与标的名称。它只接受空目录或已有同一份 demo 配置的目录，拒绝目录内的符号链接，要求先清除 `CHANAPP_INSTANCE_CONFIG`、`CHANAPP_CACHE_DIR`、`WATCHLIST_PATH`、`VIEW_LOG_PATH`、`ANALYSIS_CACHE_DIR`。重复执行不新增行情行、不改令牌、不覆盖个人自选与周期偏好。
+`python -m chanapp.engine.kline.seed_demo DIR` 先按 `chanapp/samples/demo/manifest.json` 核对样本的字节数与 SHA-256，再经同一导入入口写入事实库，并在同一写者锁内写入交易日历与标的名称。它只接受空目录或已有同一份 demo 配置的目录，拒绝目录内的符号链接，要求先清除 `CHANAPP_INSTANCE_CONFIG`、`CHANAPP_CACHE_DIR`、`WATCHLIST_PATH`、`VIEW_LOG_PATH`、`DRAWINGS_PATH`、`ANALYSIS_CACHE_DIR`。重复执行不新增行情行、不改令牌、不覆盖个人自选与周期偏好。
 
 ## 接入其他在线来源
 

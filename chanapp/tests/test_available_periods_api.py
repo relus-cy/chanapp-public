@@ -33,7 +33,7 @@ class AvailablePeriodsApiTests(unittest.TestCase):
         config = self.root / 'config.json'
         config.write_text(json.dumps({'mode': 'real', 'instance_dir': str(self.root / 'state')}))
         env = {k: v for k, v in os.environ.items() if k not in (
-            'WATCHLIST_PATH', 'VIEW_LOG_PATH', 'CHANAPP_CACHE_DIR', 'ANALYSIS_CACHE_DIR')}
+            'WATCHLIST_PATH', 'VIEW_LOG_PATH', 'DRAWINGS_PATH', 'CHANAPP_CACHE_DIR', 'ANALYSIS_CACHE_DIR')}
         env.update(CHANAPP_INSTANCE_CONFIG=str(config), COLLECTOR_ENABLED='0', LLM_API_KEY='offline-fixture')
         env.update({key: 'offline-fixture' for spec in REGISTRY.values() for key in spec.credentials})
         self.enterContext(patch.dict(os.environ, env, clear=True))

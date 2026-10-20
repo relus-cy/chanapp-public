@@ -41,7 +41,7 @@ class DemoOfflineTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
-        excluded = {"CHANAPP_INSTANCE_CONFIG", "CHANAPP_CACHE_DIR", "WATCHLIST_PATH", "VIEW_LOG_PATH",
+        excluded = {"CHANAPP_INSTANCE_CONFIG", "CHANAPP_CACHE_DIR", "WATCHLIST_PATH", "VIEW_LOG_PATH", "DRAWINGS_PATH",
                     "ANALYSIS_CACHE_DIR"}
         env = {key: value for key, value in os.environ.items() if key not in excluded}
         env.update({key: "offline-test-placeholder" for spec in REGISTRY.values() for key in spec.credentials})

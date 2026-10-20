@@ -32,7 +32,7 @@ python3.12 -m venv .venv
 
 ## 离线 demo
 
-先完成安装。运行前确认当前终端没有设置 `CHANAPP_INSTANCE_CONFIG`、`CHANAPP_CACHE_DIR`、`WATCHLIST_PATH`、`VIEW_LOG_PATH`、`ANALYSIS_CACHE_DIR`。
+先完成安装。运行前确认当前终端没有设置 `CHANAPP_INSTANCE_CONFIG`、`CHANAPP_CACHE_DIR`、`WATCHLIST_PATH`、`VIEW_LOG_PATH`、`DRAWINGS_PATH`、`ANALYSIS_CACHE_DIR`。
 
 ```bash
 .venv/bin/python -m chanapp.engine.kline.seed_demo .cache/demo
