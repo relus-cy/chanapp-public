@@ -10,7 +10,7 @@ Primary surface: the web page. CLI and HTTP contract coverage is listed in [test
 ## Launch
 
 1. Follow [test installation](../../../CONTRIBUTING.md#用户流程验收). Set `PYTHON` only when the interpreter differs from `.venv/bin/python`.
-2. Choose the affected entries in [features](features/README.md). Run their command. For the complete flow suite:
+2. Choose the affected entries in [features](features/README.md). Run their command. CI runs the complete flow suite on every push and is its gate; run it locally only when asked or when the affected set is unclear:
 
    ```bash
    npm run test:e2e

@@ -58,7 +58,7 @@ class DeployContractTests(unittest.TestCase):
                 with self.subTest(content=content):
                     if content is not None:
                         config.write_text(content)
-                    result = subprocess.run(['bash', '-s', '--', str(app), str(config), 'python3'],
+                    result = subprocess.run(['bash', '-s', '--', str(app), str(config), 'python3', '9'],
                                             input=script, capture_output=True, text=True)
                     self.assertEqual(result.returncode == 0, content == '{"mode":"real"}')
                     if content is not None:
@@ -68,7 +68,7 @@ class DeployContractTests(unittest.TestCase):
             config.unlink()
             config.symlink_to(internal)
             for path in (internal, config):
-                result = subprocess.run(['bash', '-s', '--', str(app), str(path), 'python3'],
+                result = subprocess.run(['bash', '-s', '--', str(app), str(path), 'python3', '9'],
                                         input=script, capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0)
         unit = (ROOT / 'scripts/chanapp.service').read_text()
@@ -141,6 +141,34 @@ class DeployContractTests(unittest.TestCase):
             backups = list((Path(tmp) / 'chanapp-deploy-backups').glob('deploy-*.tar'))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(backups, [])
+
+    def test_backup_holds_code_but_not_state_the_sync_never_touches(self):
+        # 事实库等运行状态不在 rsync 范围内，部署不改它们；在线打包的 SQLite 也不是一致快照，
+        # 只拖慢部署并占盘，一致快照走运维文档的 facts.snapshot
+        out = subprocess.run(['bash', str(ROOT / 'scripts/deploy.sh'), 'app-host', '--dry-run'],
+                             capture_output=True, text=True, check=True).stdout
+        script = out.split("<<'BACKUP'\n", 1)[1].split("\nBACKUP\n", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            app = Path(tmp) / 'srv' / 'chanapp'
+            for rel in ('web/app.js', '.cache/facts.sqlite', '.runtime/selfcheck/status.json',
+                        'tmp/probe/observations.jsonl', '.venv/lib/site.py'):
+                (app / rel).parent.mkdir(parents=True, exist_ok=True)
+                (app / rel).write_text(rel)
+            python = app / '.venv' / 'bin' / 'python'
+            python.parent.mkdir(parents=True)
+            python.write_text('#!/bin/sh\necho "uvicorn==0.30.0"\n')
+            python.chmod(0o755)
+            env = {**os.environ, 'HOME': tmp}
+            subprocess.run(['bash', '-s', '--', str(app), '3'], input=script, text=True,
+                           capture_output=True, env=env, check=True)
+            backup, = (Path(tmp) / 'chanapp-deploy-backups').glob('deploy-*.tar')
+            outer = subprocess.run(['tar', '-xOf', str(backup), './app.tgz'], capture_output=True, check=True).stdout
+            names = subprocess.run(['tar', '-tzf', '-'], input=outer, capture_output=True, check=True).stdout.decode().split()
+            freeze = subprocess.run(['tar', '-xOf', str(backup), './pip-freeze.txt'], capture_output=True, text=True,
+                                    check=True).stdout
+        self.assertIn('./web/app.js', names)
+        self.assertEqual([n for n in names if n.split('/')[1] in ('.cache', '.runtime', 'tmp', '.venv')], [])
+        self.assertEqual(freeze, 'uvicorn==0.30.0\n')
 
     def test_backup_keep_count_validated(self):
         env = {**os.environ, 'DEPLOY_BACKUP_KEEP': '0'}
