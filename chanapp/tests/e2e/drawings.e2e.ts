@@ -8,7 +8,8 @@ const CODE = 'sz300308';
 const require = createRequire(import.meta.url);
 const { chromium } = require(require.resolve('playwright-core', { paths: [require.resolve('@e2e-dev/web')] }));
 
-// Probe: bar coordinates, price → y, and the bars the drawing library actually placed a drawing on.
+// Probe: bar coordinates, price → y, the bars the drawing library actually placed a drawing on,
+// and the style and lock the library draws a drawing with.
 const PROBE = `window.__draw = {
   bars: function () { var ts = charts.main.timeScale();
     return klineData.map(function (b) { return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
@@ -17,6 +18,7 @@ const PROBE = `window.__draw = {
   labels: function (id) { var d = drawCtl && drawCtl.manager.get(id); if (!d) return null;
     return d.points.map(function (p) { var hit = klineData.filter(function (b) { return String(toTime(b.time)) === String(p.time); })[0];
       return hit ? hit.time : 'off-bar'; }); },
+  shown: function (id) { var d = drawCtl && drawCtl.manager.get(id); return d ? { style: d.style, locked: !!d.locked } : null; },
 };`;
 let appSource: string | null = null;
 async function probedApp() {
@@ -43,6 +45,27 @@ async function clickAt(b, point) {
   await b.mouse.move(point.x, point.y);
   await b.mouse.down();
   await b.mouse.up();
+}
+
+// A real mouse click on the centre of the element a CSS selector finds.
+async function clickCss(b, css: string) {
+  const point = await b.evaluate(css => {
+    const r = document.querySelector(css).getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }, css);
+  await clickAt(b, point);
+}
+
+// Pick a colour in the floating style bar: open its colour panel if it is closed, then click the swatch.
+async function pickColor(b, hex: string) {
+  if (await b.evaluate(() => document.querySelector('#dsColorPop').hidden)) await clickCss(b, '#dsColorBtn');
+  await clickCss(b, `#dsColor [data-color="${hex}"]`);
+}
+
+// Choose a tool through its group's drop-down menu, as the user does for a tool that is not the group's button.
+async function chooseTool(b, kind: string) {
+  await clickCss(b, `#drawBar .dt-group:has([data-tool="${kind}"]) .dt-more`);
+  await clickCss(b, `#drawBar .dt-menu [data-tool="${kind}"]`);
 }
 
 // Visible bars between two fractions of the chart width, in page coordinates, with their high/low y.
@@ -129,6 +152,7 @@ test('a segment drawn with the mouse is saved, survives reload and follows its a
   // Select the line at its midpoint, recolour it, then delete it with the keyboard.
   await clickAt(browser, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
   await expect(browser.locator('#drawStyle')).toBeVisible();
+  await screen.getByRole('button', '线条颜色').tap();
   await browser.locator('#dsColor').getByRole('button', '#f23645').tap();
   await expect.poll(async () => (await drawings(app))[0].body.style.color).toBe('#f23645');
   expect((await drawings(app))[0].revision).toBe(2);
@@ -139,7 +163,9 @@ test('a segment drawn with the mouse is saved, survives reload and follows its a
 
 test('a line drawn on 60 minutes keeps its bar on the daily chart and clearing removes every drawing', async ({ app, browser, screen }) => {
   await openWide({ app, browser }, `/?code=${CODE}&freq=m60`);
-  await screen.getByRole('button', '水平线').tap();
+  await screen.getByRole('button', '更多线条工具').tap();
+  await screen.getByRole('menuitemradio', '水平线').tap();
+  await expect(screen.getByRole('button', '水平线')).toHaveAttribute('aria-pressed', 'true');   // the group button now shows it
   await clickAt(browser, await chartPoint(browser, 0.5, 0.5));
   await expect.poll(async () => (await drawings(app)).length).toBe(1);
   const [line] = await drawings(app);
@@ -272,14 +298,14 @@ test('the end-point magnet snaps to the bar high, Shift and the off setting do n
     expect(dragged.price).not.toBe(r.high);
     expect(dragged.price).toBeGreaterThan(r.high);
 
-    // Recolour it: the next fib starts with that colour, also after a reload.
-    await page.locator('#dsColor [data-color="#089981"]').click();
+    // Recolour it: every level of the one-colour fib follows, and the next fib starts with that colour, also after a reload.
+    await pickColor(page, '#089981');
     await expect.poll(async () => (await drawings(app))[0].body.style.color).toBe('#089981');
+    expect((await drawings(app))[0].body.style.levels.map(level => level.color)).toEqual(Array(24).fill('#089981'));
 
-    // Magnet weak → strong → off.
+    // Magnet off with its toggle; the strength menu keeps weak.
     await page.locator('#drawMagnet').click();
-    await page.locator('#drawMagnet').click();
-    await page.locator('#drawMagnetMode', { hasText: '关' }).waitFor();
+    await page.locator('#drawMagnet[aria-pressed="false"]').waitFor();
     await page.getByRole('button', { name: '斐波那契回撤' }).click();
     await clickAt(page, { x: p.x, y: p.yHigh - 15 });
     await clickAt(page, { x: r.x, y: r.yLow + 120 });
@@ -292,7 +318,7 @@ test('the end-point magnet snaps to the bar high, Shift and the off setting do n
     await page.reload();
     await page.locator('#center[aria-busy="false"]').waitFor();
     await page.waitForFunction(() => window.__draw && window.__draw.bars().length > 0);
-    await page.locator('#drawMagnetMode', { hasText: '关' }).waitFor();
+    await page.locator('#drawMagnet[aria-pressed="false"]').waitFor();
     await page.getByRole('button', { name: '斐波那契回撤' }).click();
     await clickAt(page, { x: p.x, y: p.yHigh - 60 });
     await clickAt(page, { x: r.x, y: r.yLow + 60 });
@@ -314,6 +340,7 @@ test('a rectangle filled at transparency 80 still shows the candles under it', a
   await clickAt(browser, { x: bars[bars.length - 1].x, y: bottom });
   await expect.poll(async () => (await drawings(app)).length).toBe(1);
   await expect(browser.locator('#drawStyle')).toBeVisible();
+  await screen.getByRole('button', '填充').tap();
   await browser.locator('#dsFillColor [data-fill="#787b86"]').tap();
   await browser.evaluate(() => {
     const alpha = document.querySelector('#dsAlpha') as HTMLInputElement;
@@ -354,18 +381,18 @@ test('two devices share drawings, a stale edit gets the server version and a del
 
     // A recolours (revision 2); B returns to the foreground and edits on top of revision 2.
     await clickAt(browser, mid);
-    await browser.locator('#dsColor').getByRole('button', '#f23645').tap();
+    await pickColor(browser, '#f23645');
     await expect.poll(async () => (await drawings(app))[0].revision).toBe(2);
     const reread = other.waitForResponse(response => response.url().includes('/api/drawings?code='));
     await other.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     await reread;
     await clickAt(other, mid);
-    await other.locator('#dsColor [data-color="#089981"]').click();
+    await pickColor(other, '#089981');
     await expect.poll(async () => (await drawings(app))[0].revision).toBe(3);
     expect((await drawings(app))[0].body.style.color).toBe('#089981');
 
     // A still holds revision 2: its edit is refused, A shows the server version and says so.
-    await browser.locator('#dsColor').getByRole('button', '#ff9800').tap();
+    await pickColor(browser, '#ff9800');
     await expect(browser.locator('#drawNote')).toContainText('画线已在其他设备修改或删除，已载入最新版本');
     await settle();
     expect((await drawings(app))[0]).toMatchObject({ revision: 3, body: { style: { color: '#089981' } } });
@@ -373,7 +400,7 @@ test('two devices share drawings, a stale edit gets the server version and a del
     // B deletes it; A's next edit on the stale copy must not bring it back.
     await other.keyboard.press('Delete');
     await expect.poll(async () => (await drawings(app)).length).toBe(0);
-    await browser.locator('#dsColor').getByRole('button', '#f23645').tap();
+    await pickColor(browser, '#f23645');
     await expect(browser.locator('#drawStyle')).toBeHidden();
     await settle();
     expect(await drawings(app)).toEqual([]);
@@ -396,7 +423,7 @@ test('two devices share drawings, a stale edit gets the server version and a del
   expect(await drawings(app)).toEqual([]);
   await browser.unroute(/\/api\/drawings\/sz300308\/[^/?]+$/);
   await clickAt(browser, mid);
-  await browser.locator('#dsColor').getByRole('button', '#f23645').tap();
+  await pickColor(browser, '#f23645');
   await expect.poll(async () => (await drawings(app)).length).toBe(1);
   expect((await drawings(app))[0]).toMatchObject({ revision: 1, body: { style: { color: '#f23645' } } });
   await expect(browser.locator('#drawNote')).not.toContainText('未保存');
@@ -494,8 +521,11 @@ test('switching theme keeps a user colour and leaves the saved drawing untouched
   const a = await chartPoint(browser, 0.3, 0.45), b = await chartPoint(browser, 0.6, 0.3);
   await clickAt(browser, a);
   await clickAt(browser, b);
-  await browser.locator('#dsColor').getByRole('button', '#f23645').tap();
-  await expect.poll(async () => (await drawings(app))[0]?.body.style.color).toBe('#f23645');
+  await pickColor(browser, '#f23645');
+  // Widen the 1px default so the colour probe at the midpoint reads the line itself, not its antialiased edge.
+  await screen.getByRole('button', '线条宽度').tap();
+  await screen.getByRole('menuitemradio', '3px').tap();
+  await expect.poll(async () => (await drawings(app))[0]?.body.style).toMatchObject({ color: '#f23645', width: 3 });
   const before = (await drawings(app))[0];
   await clickAt(browser, await chartPoint(browser, 0.9, 0.9));
   await screen.getByRole('button', '切换日间/夜间主题').tap();
@@ -526,4 +556,165 @@ test('a stored drawing the page cannot read is skipped with a note while the oth
   expect(await browser.evaluate(() => window.__pageErrors)).toEqual([]);
   await settle();
   expect((await drawings(app)).map(d => [d.id, d.revision])).toEqual([['broken-line-1', 1], ['good-line-01', 1]]);
+});
+
+test('every tool in every toolbar group places a drawing that is saved with default style and shown again after reload', async ({ app, browser, screen }) => {
+  await openWide({ app, browser });
+  const kinds: string[] = await browser.evaluate(() =>
+    Array.from(document.querySelectorAll('#drawBar .dt-menu [data-tool]')).map(item => (item as HTMLElement).dataset.tool));
+  expect(kinds.length).toBe(35);
+  // Click points spread over the empty-ish middle of the pane; a tool takes as many as its anchors.
+  const spots = [[0.2, 0.3], [0.3, 0.55], [0.4, 0.35], [0.5, 0.6], [0.6, 0.4], [0.7, 0.65], [0.8, 0.45]];
+  for (const [i, kind] of kinds.entries()) {
+    await chooseTool(browser, kind);
+    const count = await browser.evaluate(kind => LightweightChartsDrawing.OVERLAY_SPECS[kind].pointCount, kind);
+    for (let k = 0; k < count; k++) await clickAt(browser, await chartPoint(browser, spots[k][0], spots[k][1]));
+    await expect.poll(async () => (await drawings(app)).length, kind).toBe(i + 1);
+    await browser.keyboard.press('Escape');                               // deselect: the style bar leaves the pane
+  }
+  await settle();
+  const saved = await drawings(app);
+  expect(saved.map(d => d.body.kind)).toEqual(kinds);
+  // Untouched drawings store no style keys: the defaults the page draws with are the ones it compares against.
+  expect(saved.filter(d => Object.keys(d.body.style).length).map(d => d.body.kind)).toEqual([]);
+  await browser.reload();
+  await expect(browser.locator('#center')).toHaveAttribute('aria-busy', 'false');
+  await expect.poll(() => browser.evaluate(ids => ids.filter(id => window.__draw.labels(id) === null), saved.map(d => d.id))).toEqual([]);
+  await expect(browser.locator('#drawNote')).toBeHidden();
+  // The page's own defaults are what an untouched drawing is drawn with: thin blue lines, a one-colour unfilled
+  // retracement, and arrow marks in the A-share colours (up red, down green).
+  const shown = async (kind: string) => browser.evaluate(id => window.__draw.shown(id).style, saved.find(d => d.body.kind === kind).id);
+  expect(await shown('trend-line')).toMatchObject({ color: '#2a98fe', width: 1 });
+  const fib = await shown('fib-retracement');
+  expect(fib).toMatchObject({ color: '#2a98fe', width: 1, fillBackground: false });
+  expect(fib.levels.filter(l => l.visible).map(l => [l.coeff, l.color])).toEqual([0, 0.236, 0.382, 0.5, 0.618, 1].map(v => [v, '#2a98fe']));
+  expect((await shown('arrow-mark-up')).color).toBe('#f23645');
+  expect((await shown('arrow-mark-down')).color).toBe('#089981');
+  // The group buttons remember the last tool of each group.
+  await expect(screen.getByRole('button', '时空尺')).toBeVisible();
+});
+
+test('a locked drawing cannot be dragged or deleted with the keyboard, stays locked after reload, and lock-all is only a page setting', async ({ app, browser, screen }) => {
+  // The drawing library drags a line by its body only once it is selected: select, then drag.
+  const dragBody = async (b, at) => {
+    await clickAt(b, at);
+    await b.mouse.move(at.x, at.y);
+    await b.mouse.down();
+    await b.mouse.move(at.x + 60, at.y + 60, { steps: 6 });
+    await b.mouse.up();
+  };
+  await openWide({ app, browser });
+  const a = await chartPoint(browser, 0.3, 0.45), b = await chartPoint(browser, 0.6, 0.3), mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  await screen.getByRole('button', '线段').tap();
+  await clickAt(browser, a);
+  await clickAt(browser, b);
+  await expect.poll(async () => (await drawings(app)).length).toBe(1);
+  await screen.getByRole('button', '锁定').tap();
+  await expect.poll(async () => (await drawings(app))[0].body.locked).toBe(true);
+  const locked = (await drawings(app))[0];
+  await expect(screen.getByRole('button', '删除')).toBeDisabled();
+  // Dragging the body and pressing Delete leave it where it is.
+  await dragBody(browser, mid);
+  await browser.keyboard.press('Delete');
+  await settle();
+  expect(await drawings(app)).toEqual([locked]);
+
+  await browser.reload();
+  await expect(browser.locator('#center')).toHaveAttribute('aria-busy', 'false');
+  await expect.poll(() => browser.evaluate(id => window.__draw.labels(id), locked.id)).not.toBeNull();
+  await clickAt(browser, mid);
+  await expect(screen.getByRole('button', '解锁')).toHaveAttribute('aria-pressed', 'true');
+  await screen.getByRole('button', '解锁').tap();
+  await expect.poll(async () => 'locked' in (await drawings(app))[0].body).toBe(false);
+
+  // Lock-all stops edits on this page without writing a lock into the drawing; unlocking all restores dragging.
+  await browser.keyboard.press('Escape');
+  await screen.getByRole('button', '锁定全部画线').tap();
+  await expect(screen.getByRole('button', '解锁全部画线')).toHaveAttribute('aria-pressed', 'true');
+  const before = (await drawings(app))[0];
+  await dragBody(browser, mid);
+  await settle();
+  expect((await drawings(app))[0]).toEqual(before);
+  // Its own lock button cannot undo lock-all, and a colour change saves the colour but never the page's lock.
+  await expect(screen.getByRole('button', '解锁')).toBeDisabled();
+  await pickColor(browser, '#f23645');
+  await expect.poll(async () => (await drawings(app))[0].revision).toBe(before.revision + 1);
+  expect((await drawings(app))[0].body).toMatchObject({ style: { color: '#f23645' } });
+  expect('locked' in (await drawings(app))[0].body).toBe(false);
+  // A line drawn while everything is locked is locked on the page at once, and is saved without a lock.
+  await browser.keyboard.press('Escape');
+  await screen.getByRole('button', '线段').tap();
+  await clickAt(browser, await chartPoint(browser, 0.3, 0.75));
+  await clickAt(browser, await chartPoint(browser, 0.6, 0.7));
+  await expect.poll(async () => (await drawings(app)).length).toBe(2);
+  const fresh = (await drawings(app)).find(d => d.id !== before.id);
+  expect('locked' in fresh.body).toBe(false);
+  expect(await browser.evaluate(id => window.__draw.shown(id).locked, fresh.id)).toBe(true);
+  await expect(screen.getByRole('button', '删除')).toBeDisabled();
+  await browser.keyboard.press('Delete');
+  await settle();
+  expect((await drawings(app)).map(d => d.id).sort()).toEqual([before.id, fresh.id].sort());
+
+  await browser.reload();
+  await expect(browser.locator('#center')).toHaveAttribute('aria-busy', 'false');
+  await expect(screen.getByRole('button', '解锁全部画线')).toHaveAttribute('aria-pressed', 'true');
+  await screen.getByRole('button', '解锁全部画线').tap();
+  await dragBody(browser, mid);
+  const first = async () => (await drawings(app)).find(d => d.id === before.id);
+  await expect.poll(async () => (await first()).revision).toBe(before.revision + 2);
+  expect('locked' in (await first()).body).toBe(false);
+});
+
+test('the drawing button collapses the toolbar, the choice survives reload, and the style bar never covers a placement', async ({ app, browser, screen }) => {
+  await openWide({ app, browser });
+  await expect(browser.locator('#drawBar')).toBeVisible();
+  await screen.getByRole('button', '线段').tap();
+  await clickAt(browser, await chartPoint(browser, 0.3, 0.45));
+  await clickAt(browser, await chartPoint(browser, 0.6, 0.3));
+  await expect(browser.locator('#drawStyle')).toBeVisible();
+  // The bar floats next to the drawing, inside the pane and clear of the price axis.
+  const placed = await browser.evaluate(() => {
+    const bar = document.querySelector('#drawStyle').getBoundingClientRect(), pane = document.querySelector('#chart').getBoundingClientRect();
+    return { inside: bar.left >= pane.left && bar.right <= pane.right - 72 && bar.top >= pane.top && bar.bottom <= pane.bottom };
+  });
+  expect(placed.inside).toBe(true);
+  // Starting the next tool hides it, so the next click lands on the chart even where the bar was.
+  await screen.getByRole('button', '线段').tap();
+  await expect(browser.locator('#drawStyle')).toBeHidden();
+  await browser.keyboard.press('Escape');
+
+  await screen.getByRole('button', '画线').tap();
+  await expect(browser.locator('#drawBar')).toBeHidden();
+  await browser.reload();
+  await expect(browser.locator('#center')).toHaveAttribute('aria-busy', 'false');
+  await expect(browser.locator('#drawBar')).toBeHidden();
+  await expect(screen.getByRole('button', '画线')).toHaveAttribute('aria-pressed', 'false');
+  await screen.getByRole('button', '画线').tap();
+  await expect(browser.locator('#drawBar')).toBeVisible();
+});
+
+test('hovering a drawing button shows its name, a disabled delete says why, and the tip leaves with the mouse', async ({ app, browser, screen }) => {
+  await openWide({ app, browser });
+  const tip = browser.locator('.draw-tip');
+  const hover = async (css: string) => {
+    const p = await browser.evaluate(css => {
+      const r = document.querySelector(css).getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }, css);
+    await browser.mouse.move(p.x, p.y);
+  };
+  await hover('#drawBar .dt-group[data-group="fib"] .dt-main');
+  await expect(tip).toHaveText('斐波那契回撤');
+  await hover('#drawLockAll');
+  await expect(tip).toHaveText('锁定全部画线（只在本浏览器）');
+  const chart = await chartPoint(browser, 0.5, 0.8);
+  await browser.mouse.move(chart.x, chart.y);
+  await expect(tip).toBeHidden();
+
+  await screen.getByRole('button', '线段').tap();
+  await clickAt(browser, await chartPoint(browser, 0.3, 0.45));
+  await clickAt(browser, await chartPoint(browser, 0.6, 0.3));
+  await screen.getByRole('button', '锁定').tap();
+  await hover('#dsDelete');
+  await expect(tip).toHaveText('已锁定，先解锁再删除');
 });

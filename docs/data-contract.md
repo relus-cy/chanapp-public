@@ -122,7 +122,7 @@
   - `PUT /api/drawings/{code}/{id}`，请求体 `{body, base_revision}`：新建时 `base_revision` 为空，修改时填当前 `revision`；成功返回该画线，`revision` 加 1。`id` 为 8–64 位字母、数字、`-`、`_`。`body` 必须是对象，`v` 为整数 1，序列化后不超过 16 KB，否则 422；单个标的最多 500 条未删除画线。
   - `DELETE /api/drawings/{code}/{id}?base_revision=`：软删除，保留墓碑；已删除的再删返回 200；不存在返回 404。
   - `DELETE /api/drawings/{code}`：把该标的所有未删除画线标为删除，返回 `{code, deleted}`，不检查版本。
-  - `body` 第 1 版字段：`kind`（工具：`trend-line`、`horizontal-line`、`extended-line`、`parallel-channel`、`fib-retracement`、`rectangle`）；`adjust`（画线时的复权模式，`qfq` 或 `raw`）；`anchors`（`[{freq, dt, price}]`：端点所在周期、那根 K 线的标签、价格）；`style`（只含改过默认值的样式键）；`ref`（前复权参照 `{day, close}`，不复权为 `null`）。页面按 `v` 迁移旧格式，服务端不改写。
+  - `body` 第 1 版字段：`kind`（工具名，取画线库的类型名，例如 `trend-line`、`horizontal-line`、`fib-retracement`、`rectangle`；页面工具栏列出的全部类型见 `chanapp/web/app.js` 的 `DRAW_GROUPS`）；`adjust`（画线时的复权模式，`qfq` 或 `raw`）；`anchors`（`[{freq, dt, price}]`：端点所在周期、那根 K 线的标签、价格）；`style`（只含改过默认值的样式键）；`ref`（前复权参照 `{day, close}`，不复权为 `null`）；`locked`（可选，只在锁定时为 `true`）。页面按 `v` 迁移旧格式，服务端不改写。
   - 冲突返回 **409 `{"detail": "画线已被修改", "current": 服务端当前版本或 null}`**：新建时 `id` 已存在（含已删除）、`base_revision` 与当前不符、修改或删除已删除的画线。墓碑占住 `id`，迟到的写入不能复活已删除的画线。存储读写失败返回 503。
 
 ## CSV 导入

@@ -2,7 +2,10 @@
    与 app.js 同为 classic script（页面在 app.js 前加载，挂 chanDrawings 全局；node 测试直接 require 纯函数）。
 
    存储格式（服务端只校验 v 与大小，语义归这里）：
-     {v: 1, kind, adjust: 'qfq'|'raw', anchors: [{freq, dt, price}], style: {用户改过的样式键}, ref: {day, close}|null}
+     {v: 1, kind, adjust: 'qfq'|'raw', anchors: [{freq, dt, price}], style: {用户改过的样式键}, ref: {day, close}|null,
+      locked?: true}
+   - style 只存与默认样式不同的键，默认样式由 installDefaults 统一设定（改默认值会改变没改过样式的旧画线的外观）；
+     locked 只在锁定时出现，锁定的画线不能拖动、不能用键盘删除。
    - 锚点记画线时所在周期与该 bar 的原始标签 dt（区间末端），不存图表时间值：日线、周线是日期字符串，分钟线是秒数，
      跨周期不能直接比较。显示时按「锚点 bar 的起始时刻 → 当前周期第一根末端晚于它的 bar」映射；
      晚于最后一根的锚点按交易时段数第 k 根未来槽位，早于已加载数据的按日历时间近似（左拉补历史后重新映射）。
@@ -230,7 +233,58 @@
     if (!ok) return null;
     var ref = body.ref && typeof body.ref.day === 'string' && body.ref.close > 0 ? body.ref : null;
     var style = body.style && typeof body.style === 'object' && !Array.isArray(body.style) ? body.style : {};
-    return { v: 1, kind: body.kind, adjust: body.adjust, anchors: body.anchors, style: style, ref: ref };
+    var out = { v: 1, kind: body.kind, adjust: body.adjust, anchors: body.anchors, style: style, ref: ref };
+    if (body.locked === true) out.locked = true;
+    return out;
+  }
+
+  // ---------- 默认样式（看齐长桥：细线、单一蓝色、斐波那契单色不填充；A 股红涨绿跌） ----------
+  var DEFAULT_COLOR = '#2a98fe';
+  var LIB_BLUES = { '#2962ff': 1, '#1e53e5': 1, '#3d85c6': 1 };
+  var SOLO_SHAPES = { 'rectangle': 1, 'triangle': 1, 'rotated-rectangle': 1, 'circle': 1, 'ellipse': 1,
+    'disjoint-channel': 1, 'flat-top-bottom': 1, 'abcd-pattern': 1, 'xabcd-pattern': 1, 'head-and-shoulders': 1,
+    'triangle-pattern': 1, 'cyclic-lines': 1 };
+  var FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 1];
+  function defaultsFor(Lib, kind) {
+    var base = Lib.factoryStyleFor(kind), o = { width: 1 };
+    ['color', 'textColor', 'backgroundColor', 'customTextColor'].forEach(function (k) {
+      if (typeof base[k] === 'string' && (LIB_BLUES[base[k].toLowerCase()] || SOLO_SHAPES[kind])) o[k] = DEFAULT_COLOR;
+    });
+    if ('transparency' in base && base.fillBackground) o.transparency = Math.max(base.transparency, 85);
+    if (kind === 'arrow-mark-up') o.color = '#f23645';
+    if (kind === 'arrow-mark-down') o.color = '#089981';
+    if (kind === 'fib-retracement' || kind === 'trend-based-fib-extension') {
+      o.levels = base.levels.map(function (l) {
+        return Object.assign({}, l, { color: DEFAULT_COLOR, visible: kind === 'fib-retracement' ? FIB_LEVELS.indexOf(l.coeff) >= 0 : l.visible });
+      });
+      o.fillBackground = false;
+      o.fibLevelsAsPercents = true;
+    }
+    if (kind === 'parallel-channel') {
+      o.levels = base.levels.map(function (l) { return Object.assign({}, l, { color: DEFAULT_COLOR, width: 1 }); });
+      o.transparency = 90;
+    }
+    if (kind === 'fib-speed-resistance-fan' || kind === 'gann-fan') o.fillBackground = false;
+    return o;
+  }
+  // 画线库的默认样式是模块级的，装一次即可；新放置的画线和 styleDiff 的比较基准都用它
+  function installDefaults(Lib) {
+    if (Lib.__chanDefaults) return;
+    Lib.__chanDefaults = true;
+    Lib.setDefaultStyleOverride(function (kind) { return defaultsFor(Lib, kind); });
+  }
+
+  // 改线条颜色：和旧线条颜色相同的文字、填充、各档位颜色一起换（单色画线保持单色，用户另设的颜色不动）
+  function recolorPatch(style, color) {
+    var old = String(style.color || '').toLowerCase(), patch = { color: color };
+    ['textColor', 'backgroundColor', 'customTextColor'].forEach(function (k) {
+      if (typeof style[k] === 'string' && style[k].toLowerCase() === old) patch[k] = color;
+    });
+    if (Array.isArray(style.levels) && style.levels.length &&
+        style.levels.every(function (l) { return String(l.color || '').toLowerCase() === old; })) {
+      patch.levels = style.levels.map(function (l) { return Object.assign({}, l, { color: color }); });
+    }
+    return patch;
   }
 
   // 返回换到当前口径的新 body；不需要改动（不复权、比例为 1、拿不到参照那天）时返回 null。
@@ -252,12 +306,13 @@
   //     styleFor(kind) → 用户样式键, onChange(state), notify(msg)}
   function createController(o) {
     var Lib = o.Lib;
+    installDefaults(Lib);
     var view = null;
     var dm = new Lib.DrawingManager(o.chart, o.series, {
       magnet: o.magnet || 'weak',
       timeInfo: function () { return { timeZone: 'UTC', intraday: !!(view && isMinute(view.freq)) }; },
     });
-    var code = null, records = {}, order = [], loadSeq = 0, suppress = 0, hidden = 0, skipped = 0;
+    var code = null, records = {}, order = [], loadSeq = 0, suppress = 0, hidden = 0, skipped = 0, lockAll = !!o.lockAll;
     var gesture = false, renderPending = false;
 
     function quiet(fn) { suppress++; try { fn(); } finally { suppress--; } }
@@ -265,7 +320,7 @@
       var unsaved = 0;
       order.forEach(function (id) { if (records[id] && records[id].state === 'error') unsaved++; });
       return { code: code, count: order.length, hidden: hidden, skipped: skipped, unsaved: unsaved, selection: dm.selection().slice(),
-        tool: dm.tool(), visible: dm.drawingsVisible() };
+        tool: dm.tool(), visible: dm.drawingsVisible(), lockAll: lockAll };
     }
     function changed() { if (o.onChange) o.onChange(state()); }
     function notify(msg) { if (o.notify) o.notify(msg); }
@@ -291,9 +346,12 @@
         return { freq: view.freq, dt: anchorDt(p.time, view), price: p.price };
       });
       if (anchors.some(function (a) { return !a.dt; })) return null;
-      return { v: 1, kind: d.kind, adjust: view.adjust, anchors: anchors, style: styleDiff(d.kind, d.style),
+      var out = { v: 1, kind: d.kind, adjust: view.adjust, anchors: anchors, style: styleDiff(d.kind, d.style),
         ref: view.adjust === 'qfq' ? refFor(view.bars, view.freq) : null };
+      if (prev && prev.locked === true) out.locked = true;      // 「锁定全部」只是本页的显示状态，不写进画线
+      return out;
     }
+    function ownBody(rec) { return rec.local || readBody(rec.body); }
 
     function api(method, path, body, keepalive) {
       return o.fetch(path, Object.assign({ method: method, cache: 'no-store' }, keepalive ? { keepalive: true } : {},
@@ -401,6 +459,7 @@
         quiet(function () { dm.update(Object.assign({}, d, { style: fullStyle(d.kind, Object.assign(styleDiff(d.kind, d.style), remembered)) })); });
         d = dm.get(d.id);
       }
+      if (lockAll) { quiet(function () { dm.update(Object.assign({}, d, { locked: true })); }); d = dm.get(d.id); }   // 新画的也随「锁定全部」
       var rec = records[d.id] = record(d.id, code, { state: 'dirty' });
       order.push(d.id);
       rec.local = bodyFrom(d, rec);
@@ -470,7 +529,7 @@
           var points = body.anchors.map(function (a) { return { time: chartTime(a, view), price: a.price }; });
           if (points.some(function (p) { return p.time == null; })) { rec.mapped = null; return; }
           try {
-            dm.add({ id: id, kind: body.kind, points: points, style: fullStyle(body.kind, body.style) });
+            dm.add({ id: id, kind: body.kind, points: points, style: fullStyle(body.kind, body.style), locked: !!body.locked || lockAll });
             rec.mapped = points.map(function (p) { return p.time; });
           } catch (err) {
             skipped++; rec.mapped = null;
@@ -550,6 +609,29 @@
         }, function () { notify('清空画线失败：网络错误'); });
       },
       setTool: function (kind) { dm.setTool(kind); },
+      // 单条锁定写进画线；锁定全部只改本页显示（解锁全部后各条回到自己的锁定状态）
+      setLocked: function (id, on) {
+        var rec = records[id], d = dm.get(id), body = rec && ownBody(rec);
+        if (!d || !body) return;
+        body = JSON.parse(JSON.stringify(body));
+        if (on) body.locked = true; else delete body.locked;
+        rec.local = body;
+        if (rec.state !== 'saving') rec.state = 'dirty';
+        quiet(function () { dm.update(Object.assign({}, d, { locked: on || lockAll })); });
+        schedule(rec);
+        changed();
+      },
+      isLocked: function (id) { var rec = records[id], body = rec && ownBody(rec); return !!(body && body.locked); },
+      setLockAll: function (on) {
+        lockAll = !!on;
+        quiet(function () {
+          dm.drawings().slice().forEach(function (d) {
+            var rec = records[d.id], body = rec && ownBody(rec);
+            dm.update(Object.assign({}, d, { locked: lockAll || !!(body && body.locked) }));
+          });
+        });
+        changed();
+      },
       setMagnet: function (mode) { dm.setMagnet(mode); },
       setVisible: function (on) { dm.setDrawingsVisible(on); },
       selected: function () {
@@ -563,7 +645,9 @@
         dm.update(Object.assign({}, d, { style: style }));
         return styleDiff(d.kind, style);
       },
-      removeSelected: function () { dm.selection().slice().forEach(function (id) { dm.remove(id); }); },
+      removeSelected: function () {
+        dm.selection().slice().forEach(function (id) { var d = dm.get(id); if (d && !d.locked) dm.remove(id); });
+      },
       // Escape 先交给画线（退出工具、取消选中），这时不再关侧栏或弹层
       consumesEscape: function () { return dm.tool() != null || dm.selection().length > 0; },
       state: state,
@@ -572,7 +656,8 @@
   }
 
   var api = { locate: locate, futureLabel: futureLabel, buildView: buildView, chartTime: chartTime, anchorDt: anchorDt,
-    dayClose: dayClose, refFor: refFor, rescale: rescale, readBody: readBody, createController: createController };
+    dayClose: dayClose, refFor: refFor, rescale: rescale, readBody: readBody, createController: createController,
+    DEFAULT_COLOR: DEFAULT_COLOR, recolorPatch: recolorPatch };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.chanDrawings = api;
 })(this);
