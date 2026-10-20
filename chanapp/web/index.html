@@ -481,6 +481,40 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .rule-line > span { font-size: 11px; color: var(--dim); }
   .rule-option, .seg { height: var(--ctl-h-sm); }
   .rule-option button { padding: 0 10px; font-size: 11px; }
+  /* 画线工具栏（主图左侧竖排）、样式条与提示条；窄窗只显示画线，不提供工具 */
+  .draw-bar {
+    position: absolute; left: 8px; top: 56px; z-index: 7; display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 3px; background: var(--material-solid); border: 1px solid var(--line2); border-radius: var(--radius-s);
+    box-shadow: var(--shadow-raise);
+  }
+  .draw-bar button {
+    display: inline-flex; flex-direction: column; align-items: center; justify-content: center; width: 26px; min-height: 26px; padding: 2px 0;
+    background: transparent; border: none; border-radius: var(--radius-xs); color: var(--dim); cursor: pointer; font-size: 9px; line-height: 1;
+    transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  }
+  .draw-bar svg { width: 16px; height: 16px; }
+  @media (hover:hover) { .draw-bar button:hover { color: var(--fg); background: var(--raise); } }
+  .draw-bar button.active, .draw-bar button[aria-pressed="true"] { color: var(--gold); background: var(--capsule); box-shadow: var(--shadow-raise); }
+  .draw-sep { width: 16px; height: 1px; background: var(--line2); margin: 3px 0; }
+  .draw-note {
+    position: absolute; left: 50px; bottom: 34px; z-index: 7; display: flex; gap: 8px; align-items: center;
+    padding: 2px 8px; font-size: 11px; color: var(--dim); background: var(--material-solid);
+    border: 1px solid var(--line2); border-radius: var(--radius-s);
+  }
+  .draw-note[hidden], .draw-style[hidden], .draw-style [hidden] { display: none; }  /* 作者 display 会盖过 UA [hidden] */
+  .draw-note button { background: none; border: none; color: var(--gold); cursor: pointer; font-size: 11px; padding: 0; }
+  .draw-style {
+    position: absolute; right: 84px; top: 30px; z-index: 8;
+    display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 11px; color: var(--dim);
+    background: var(--material-solid); border: 1px solid var(--line2); border-radius: var(--radius-l); box-shadow: var(--shadow-float);
+  }
+  .draw-style .seg button { padding: 0 7px; font-size: 11px; }
+  .ds-swatches { display: flex; gap: 3px; }
+  .ds-swatches button { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--line2); padding: 0; cursor: pointer; }
+  .ds-swatches button.active { outline: 2px solid var(--gold); outline-offset: 1px; }
+  .ds-fill { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+  #dsAlpha { width: 70px; }
+  @media (max-width: 1100px) { .draw-bar, .draw-style { display: none !important; } }
   .resonance {
     flex: 1; display: flex; gap: 6px; align-items: center; min-width: 0; height: var(--ctl-h-sm); overflow: hidden;
     container: res / inline-size;
@@ -837,6 +871,28 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
       <div id="chartError" class="chart-error" hidden></div>
       <div class="legend" id="ohlc"></div>
       <div id="axisAnchor"></div>
+      <div class="draw-bar" id="drawBar" role="toolbar" aria-orientation="vertical" aria-label="画线工具">
+        <button type="button" data-tool="trend-line" aria-label="线段" title="线段" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 18 18 6"/><circle cx="6" cy="18" r="1.8"/><circle cx="18" cy="6" r="1.8"/></svg></button>
+        <button type="button" data-tool="horizontal-line" aria-label="水平线" title="水平线" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h18"/><circle cx="12" cy="12" r="1.8"/></svg></button>
+        <button type="button" data-tool="extended-line" aria-label="延长线" title="延长线（两端延伸到图边）" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 20 22 4"/><circle cx="8.5" cy="14.8" r="1.8"/><circle cx="15.5" cy="9.2" r="1.8"/></svg></button>
+        <button type="button" data-tool="parallel-channel" aria-label="平行通道" title="平行通道" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 14 14 5M10 19 21 10"/></svg></button>
+        <button type="button" data-tool="fib-retracement" aria-label="斐波那契回撤" title="斐波那契回撤" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16M4 10h16M4 14h16M4 19h16"/><path d="M6 19 18 5" stroke-dasharray="2 2"/></svg></button>
+        <button type="button" data-tool="rectangle" aria-label="矩形" title="矩形" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
+        <span class="draw-sep" aria-hidden="true"></span>
+        <button type="button" id="drawMagnet" aria-label="端点吸附" title="端点吸附：弱吸附只在靠近 K 线开高低收时吸附，强吸附总是吸到最近的开高低收；按住 Shift 临时关闭，按住 Ctrl/⌘ 临时强吸附"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4v8a6 6 0 0 0 12 0V4"/><path d="M6 8h4M14 8h4"/></svg><span id="drawMagnetMode">弱</span></button>
+        <button type="button" id="drawHide" aria-label="隐藏全部画线" title="隐藏全部画线" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg></button>
+        <button type="button" id="drawClear" aria-label="清空当前标的的画线" title="清空当前标的的画线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+      </div>
+      <div class="draw-note" id="drawNote" role="status" hidden></div>
+      <div class="draw-style" id="drawStyle" role="group" aria-label="画线样式" hidden>
+        <div class="ds-swatches" id="dsColor" role="group" aria-label="线条颜色"></div>
+        <div class="seg" id="dsWidth" role="group" aria-label="线宽"><button data-width="1">1</button><button data-width="2">2</button><button data-width="3">3</button><button data-width="4">4</button></div>
+        <div class="seg" id="dsLine" role="group" aria-label="线型"><button data-line="solid">实线</button><button data-line="dashed">虚线</button><button data-line="dotted">点线</button></div>
+        <label class="ds-fill" id="dsFillWrap"><input type="checkbox" id="dsFill">填充</label>
+        <div class="ds-swatches" id="dsFillColor" role="group" aria-label="填充颜色"></div>
+        <input type="range" id="dsAlpha" min="0" max="100" step="5" aria-label="填充透明度" title="填充透明度">
+        <button type="button" class="soft-btn" id="dsDelete">删除</button>
+      </div>
     </div>
     <div id="subWrap">
       <div id="subBar">
@@ -919,6 +975,8 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
 </div>
 <script src="/vendor/lightweight-charts.standalone.production.js"></script>
 <script src="/indicators.js"></script>
+<script src="/vendor/lightweight-charts-drawing.umd.js"></script>
+<script src="/drawings.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

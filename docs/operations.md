@@ -82,7 +82,7 @@ ls -l "$SNAPSHOT"
 
 - 先确认事实库路径存在：`facts.open_facts` 遇到不存在的路径会新建空库，路径写错时「备份」会成功复制一个空库。
 - 快照与备份目录放在代码目录之外，只有运行用户可读写。
-- 个人状态里的 `views.sqlite` 也是 SQLite 文件，应在服务停止时复制；`watchlist.json`、`periods.json` 可直接复制。
+- 个人状态里的 `views.sqlite`、`drawings.sqlite`（画线）也是 SQLite 文件，应在服务停止时复制；`watchlist.json`、`periods.json` 可直接复制。
 - 只含随包样本、没有导入过其他数据的 demo 实例可以随时用 `seed_demo` 重建，不必备份事实库。导入过自定义 CSV 的实例，要么按上面备份事实库，要么完整保留导入用的原始 CSV 与实例配置，以便重新导入。
 
 ## 恢复

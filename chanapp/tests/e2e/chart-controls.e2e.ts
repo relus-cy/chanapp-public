@@ -1,4 +1,4 @@
-import { test, expect, openChart } from './support';
+import { test, expect, openChart, probedAppSource } from './support';
 
 async function chartAction(browser, action, query: RegExp) {
   const response = browser.waitForResponse(query);
@@ -86,6 +86,14 @@ test('stroke rules and signal scope reach the real analysis and survive reload',
 });
 
 test('structure layer toggle hides only the drawn analysis and survives reload', async ({ app, browser, screen }) => {
+  const probe = `window.__structure = function () {
+    var ma = Object.keys(maSeries).map(function (n) { return maSeries[n]; });
+    var lines = charts.main.panes()[0].getSeries().filter(function (s) {
+      return s.seriesType() === 'Line' && ma.indexOf(s) < 0 && s.options().visible && s.data().length > 0; });
+    return { lines: lines.length, markers: charts.markers.shown().length };
+  };`;
+  const source = await probedAppSource(probe);
+  await browser.route(/\/app\.js(\?|$)/, route => route.fulfill({ body: source, contentType: 'application/javascript' }));
   // The 60-minute sample has a zhongshu inside the initial visible window; the daily one does not.
   await openChart({ app, browser }, '/?code=sz300308&freq=m60');
   const cards = await browser.locator('#cardsCount').textContent();
@@ -97,18 +105,27 @@ test('structure layer toggle hides only the drawn analysis and survives reload',
     for (let i = 3; i < pixels.length; i += 4) if (pixels[i]) painted++;
     return painted;
   });
+  // Lines on the main pane other than candles and moving averages are structure (strokes, segments,
+  // forming parts, channels); with the layer hidden none may stay visible, nor may any signal marker.
+  const structureShown = () => browser.evaluate(() => window.__structure());
   await expect.poll(zsInk).toBeGreaterThan(0);
+  const shown = await structureShown();
+  expect(shown.lines).toBeGreaterThan(1);
+  expect(shown.markers).toBeGreaterThan(0);
   await screen.getByRole('button', '图层与规则').tap();
   await screen.getByRole('button', '隐藏').tap();
   await expect.poll(zsInk).toBe(0);
+  await expect.poll(structureShown).toEqual({ lines: 0, markers: 0 });
   await expect(browser.locator('#ruleSummary')).toHaveText('严格成笔 · 扩展提示 · 结构层隐藏');
   await expect(browser.locator('#cardsCount')).toHaveText(cards);
   await chartAction(browser, () => browser.reload(), /\/api\/chart\?/);
   await expect(browser.locator('#ruleSummary')).toHaveText('严格成笔 · 扩展提示 · 结构层隐藏');
   await expect.poll(zsInk).toBe(0);
+  await expect.poll(structureShown).toEqual({ lines: 0, markers: 0 });
   await screen.getByRole('button', '图层与规则').tap();
   await screen.getByRole('button', '显示').tap();
   await expect.poll(zsInk).toBeGreaterThan(0);
+  await expect.poll(structureShown).toEqual(shown);
   await expect(browser.locator('#ruleSummary')).toHaveText('严格成笔 · 扩展提示');
 });
 

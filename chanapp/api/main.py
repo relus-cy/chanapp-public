@@ -451,17 +451,19 @@ class DrawingWrite(BaseModel):
 
 
 _drawing_stores: dict = {}
+_drawing_stores_lock = threading.Lock()
 
 
 def _drawing_store() -> api_drawings.DrawingStore:
-    """按路径缓存的画线库（路径每次请求解析，测试可逐例注入）。"""
+    """按路径缓存的画线库（路径每次请求解析，测试可逐例注入）；加锁保证同一路径只有一个实例。"""
     path = _state_paths().drawings
-    store = _drawing_stores.get(path)
-    if store is None:
-        try:
-            store = _drawing_stores[path] = api_drawings.DrawingStore(path)
-        except (OSError, sqlite3.Error) as exc:
-            raise HTTPException(status_code=503, detail="画线存储不可用") from exc
+    with _drawing_stores_lock:
+        store = _drawing_stores.get(path)
+        if store is None:
+            try:
+                store = _drawing_stores[path] = api_drawings.DrawingStore(path)
+            except (OSError, sqlite3.Error) as exc:
+                raise HTTPException(status_code=503, detail="画线存储不可用") from exc
     return store
 
 

@@ -54,7 +54,8 @@ def validate_body(body) -> str:
     """返回规范化的 JSON 文本；不合格抛 ValueError。"""
     if not isinstance(body, dict):
         raise ValueError("body 必须是对象")
-    if body.get("v") not in BODY_VERSIONS:
+    v = body.get("v")
+    if type(v) is not int or v not in BODY_VERSIONS:     # 排除 true、1.0 这类与 1 相等的值
         raise ValueError(f"body.v 只支持 {list(BODY_VERSIONS)}")
     text = json.dumps(body, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     if len(text.encode("utf-8")) > MAX_BODY_BYTES:
@@ -92,6 +93,13 @@ class DrawingStore:
         finally:
             conn.close()
 
+    @contextmanager
+    def _write(self):
+        """写操作：进程内锁加 BEGIN IMMEDIATE，读当前版本与改写在同一写事务里，多进程同时写也不会丢更新。"""
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+
     @staticmethod
     def _get(conn, code, id_):
         return conn.execute("SELECT * FROM drawings WHERE code=? AND id=?", (code, id_)).fetchone()
@@ -106,7 +114,7 @@ class DrawingStore:
     def put(self, code, id_, body, base_revision, *, at=None) -> dict:
         text = validate_body(body)
         now = (at or datetime.now()).isoformat(timespec="seconds")
-        with self._lock, self._connect() as conn:
+        with self._write() as conn:
             current = self._get(conn, code, id_)
             if base_revision is None:
                 if current is not None:
@@ -126,7 +134,7 @@ class DrawingStore:
 
     def delete(self, code, id_, base_revision, *, at=None) -> dict:
         now = (at or datetime.now()).isoformat(timespec="seconds")
-        with self._lock, self._connect() as conn:
+        with self._write() as conn:
             current = self._get(conn, code, id_)
             if current is None:
                 raise NotFound(id_)
@@ -140,6 +148,6 @@ class DrawingStore:
 
     def clear(self, code, *, at=None) -> int:
         now = (at or datetime.now()).isoformat(timespec="seconds")
-        with self._lock, self._connect() as conn:
+        with self._write() as conn:
             return conn.execute("UPDATE drawings SET revision=revision+1, updated_at=?, deleted_at=?"
                                 " WHERE code=? AND deleted_at IS NULL", (now, now, code)).rowcount

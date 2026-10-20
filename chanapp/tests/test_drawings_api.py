@@ -103,7 +103,7 @@ class DrawingsApiTests(unittest.TestCase):
         self.assertFalse((self.tmp / "chanapp.watchlist.drawings.sqlite").exists())
 
     def test_invalid_input_is_not_stored(self):
-        for body in ([1, 2], {"type": "segment"}, {"v": 2}, {"v": 1, "pad": "x" * 20000}):
+        for body in ([1, 2], {"type": "segment"}, {"v": 2}, {"v": True}, {"v": 1.0}, {"v": 1, "pad": "x" * 20000}):
             self.put("sz300308", "line-0001", body, status=422)
         self.put("sz300309x", "line-0001", LINE, status=422)
         self.put("sz300308", "short", LINE, status=422)

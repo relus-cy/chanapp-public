@@ -23,6 +23,7 @@
 | 成笔标准、提示范围、结构层显隐、日夜主题与偏好持久化 | `e2e/chart-controls.e2e.ts` | 真实 demo |
 | 六个均线按钮状态、四种副图指标及样本数值、周期切换 | `e2e/chart-controls.e2e.ts` | 真实 demo；数学边界另见 `test_indicators.js` |
 | 信号依据卡、共振详情、返回焦点、周期变化关闭旧详情 | `e2e/chart-controls.e2e.ts` | 真实 demo |
+| 鼠标画线、保存与重载、复权隐藏与新除权换算、样式记忆、吸附、填充透明度、跨周期与翻历史、未来区锚点、两台设备与冲突、写入失败、快速换标的、键盘、主题、读不懂的记录、清空 | `e2e/drawings.e2e.ts` | 真实 demo，第二台设备用独立浏览器；跨周期映射、港股时段、停牌与前复权换算另见 `test_drawings.js` |
 | 拖动历史、十字线、主副图同步、侧栏与窄屏布局 | `browser_demo_offline.js` | 真实 demo；部分图表观测使用只读探针 |
 | 重拉成功、demo AI 禁用、无后台轮询、无外连 | `browser_demo_offline.js`、`e2e/periods.e2e.ts` | 真实 demo；服务端同时记录外连尝试 |
 | AI 周期组合、展示周期与分析周期的关系 | `browser_period_selection_e2e.js` | 外部 fixture |

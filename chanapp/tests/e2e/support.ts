@@ -1,5 +1,6 @@
 import { test as base } from '@e2e-dev/web';
 import { expect } from 'e2e';
+import { readFile } from 'node:fs/promises';
 
 export { expect };
 
@@ -52,4 +53,10 @@ export async function openChart({ app, browser }, path = '/?code=sz300308&freq=d
   await expect(browser.locator('#status')).toContainText('历史');
   await expect(browser.locator('#chart canvas').first()).toBeVisible();
   await expect(browser.locator('#center')).toHaveAttribute('aria-busy', 'false');
+}
+
+// Read-only probe appended inside app.js's closure (the technique browser_demo_offline.js uses),
+// for facts the canvas cannot show reliably. Route it on the fixture browser or a raw Playwright page.
+export async function probedAppSource(probe: string) {
+  return (await readFile('chanapp/web/app.js', 'utf8')).replace(/\}\)\(\);\s*$/, probe + '})();');
 }

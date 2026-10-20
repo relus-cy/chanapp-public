@@ -95,7 +95,7 @@ async page => {
       structure: {bi: [], xd: [], zs: []}, channels: [], signals: [],
       resonance: [{freq: 'm60', signals: [{...evidence[0], detail: {last_sure_pos: 1}}]}],
       evidence: evidence.map(e => ({...e, text: e.text + ' [' + url.searchParams.get('code') + '/' + url.searchParams.get('freq') + ']'})),
-      meta: {source: 'fixture', fqf: '前复权', fetch_time: '2026-03-21T12:00:00+08:00', bars: 80, first_dt: kline[0].time, last_dt: kline[79].time,
+      meta: {code: url.searchParams.get('code'), freq: url.searchParams.get('freq'), source: 'fixture', fqf: '前复权', fetch_time: '2026-03-21T12:00:00+08:00', bars: 80, first_dt: kline[0].time, last_dt: kline[79].time,
         adjust: url.searchParams.get('adjust'), token: fixtureToken, has_more: historyMore, oldest_dt: kline[0].time,
         analysis_tokens: fixtureAnalysisTokens, analysis_freqs: ['day', 'm60', 'm30'],
         coverage: {qfq_from: null, qfq_through: null, stop_reason: null,
@@ -111,7 +111,8 @@ async page => {
         return;
       }
       json = {status: 'unconfigured', adjust: url.searchParams.get('adjust'), schema_version: 'chanpy_v2', calculation_id: 'fixture-v1', rule_profile: url.searchParams.get('rule_profile'), signal_scope: url.searchParams.get('signal_scope')};
-    } else if (url.pathname === '/api/search') json = [{code:'sh000001',name:'新增自选'}];
+    } else if (url.pathname === '/api/drawings' && request.method() === 'GET') json = {code: url.searchParams.get('code'), drawings: []};   // 本脚本不画线，只放行读取
+    else if (url.pathname === '/api/search') json = [{code:'sh000001',name:'新增自选'}];
     else if (url.pathname === '/api/views') {
       if (request.method() === 'POST') {
         const body = request.postDataJSON();

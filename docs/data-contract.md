@@ -119,9 +119,10 @@
 - `GET/PUT /api/periods`：展示周期勾选，见 [展示周期与分析](periods-and-analysis.md)。
 - 画线：按标的逐条保存，内容由页面定义，服务端只校验后原样存取。路径见 [配置 · 实例目录与数据路径](configuration.md#实例目录与数据路径)，新建文件权限 0600；demo 同样可读写。
   - `GET /api/drawings?code=`：`{code, drawings: [{id, body, revision, updated_at}]}`，只含未删除的画线，按创建先后排列。
-  - `PUT /api/drawings/{code}/{id}`，请求体 `{body, base_revision}`：新建时 `base_revision` 为空，修改时填当前 `revision`；成功返回该画线，`revision` 加 1。`id` 为 8–64 位字母、数字、`-`、`_`。`body` 必须是对象，`v` 为 1，序列化后不超过 16 KB，否则 422；单个标的最多 500 条未删除画线。
+  - `PUT /api/drawings/{code}/{id}`，请求体 `{body, base_revision}`：新建时 `base_revision` 为空，修改时填当前 `revision`；成功返回该画线，`revision` 加 1。`id` 为 8–64 位字母、数字、`-`、`_`。`body` 必须是对象，`v` 为整数 1，序列化后不超过 16 KB，否则 422；单个标的最多 500 条未删除画线。
   - `DELETE /api/drawings/{code}/{id}?base_revision=`：软删除，保留墓碑；已删除的再删返回 200；不存在返回 404。
   - `DELETE /api/drawings/{code}`：把该标的所有未删除画线标为删除，返回 `{code, deleted}`，不检查版本。
+  - `body` 第 1 版字段：`kind`（工具：`trend-line`、`horizontal-line`、`extended-line`、`parallel-channel`、`fib-retracement`、`rectangle`）；`adjust`（画线时的复权模式，`qfq` 或 `raw`）；`anchors`（`[{freq, dt, price}]`：端点所在周期、那根 K 线的标签、价格）；`style`（只含改过默认值的样式键）；`ref`（前复权参照 `{day, close}`，不复权为 `null`）。页面按 `v` 迁移旧格式，服务端不改写。
   - 冲突返回 **409 `{"detail": "画线已被修改", "current": 服务端当前版本或 null}`**：新建时 `id` 已存在（含已删除）、`base_revision` 与当前不符、修改或删除已删除的画线。墓碑占住 `id`，迟到的写入不能复活已删除的画线。存储读写失败返回 503。
 
 ## CSV 导入

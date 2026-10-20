@@ -1068,6 +1068,7 @@
       _list: [],
       setMarkers: function (list) { this._list = list; markerPlugin.setMarkers(structureVisible ? list : []); },
       refresh: function () { markerPlugin.setMarkers(structureVisible ? this._list : []); },
+      shown: function () { return markerPlugin.markers(); },     // 当前画在图上的标记
     };
 
     // 同步时间轴（双向，防回环）；showInd 重建副图 series 期间（subRebuild）库会
@@ -2391,6 +2392,7 @@
     }
     charts.markers.setMarkers(buildMarkers(lastChartData.signals));
     lastChartData = Object.assign({}, lastChartData, { kline: klineData });
+    if (typeof syncDrawings === 'function') syncDrawings();   // 补进更早的 bar：早于原窗口的锚点改按真实 bar 定位
   }
 
   // 图表渲染主路径：fetch 后与主题切换共用（opts.resetRange=false 时保留可视区间）
@@ -2484,6 +2486,7 @@
     legendLatest();
     renderResonance(data.resonance, (data.meta || {}).analysis_freqs);
     updateAxisAnchor();
+    if (typeof syncDrawings === 'function') syncDrawings();   // 画线按新数据重新映射（换标的先读服务端）
   }
 
   function load(options) {
@@ -2757,6 +2760,7 @@
     if (document.hidden) return;
     if (sessionDemo) refreshSession(true);
     if (!periodSaving) loadPeriodPrefs({sync: true});
+    if (typeof drawCtl !== 'undefined' && drawCtl) drawCtl.reload();   // 其他设备可能改过画线；60 秒刷新不重读
   });
 
   // ---------- 侧边栏（Codex 客户端式：pinned 固定展开 / rail 窄栏；窄栏悬停或聚焦自动浮动展开，移开收回） ----------
@@ -3091,6 +3095,170 @@
   el('periodDialog').addEventListener('cancel', function (event) {
     if (periodSaving || (periodPrefs && periodPrefs.notice)) event.preventDefault();
   });
+
+  // ---------- 用户画线（web/drawings.js 控制器 + vendor 画线库；存储 /api/drawings） ----------
+  // 画线按标的存在服务端，跨设备一致；只在画线时的复权模式下显示，跨周期按锚点所在 bar 映射。
+  // 样式记忆、吸附模式是浏览器偏好（localStorage）；「隐藏全部画线」只在本页有效。
+  var drawCtl = null;
+  var DRAW_COLORS = ['#2962ff', '#f23645', '#089981', '#ff9800', '#9c27b0', '#d4a72c', '#00bcd4', '#787b86'];
+  var DRAW_FILL_KINDS = { 'rectangle': true, 'parallel-channel': true, 'fib-retracement': true };
+  var DRAW_FILL_COLOR_KINDS = { 'rectangle': true, 'parallel-channel': true };
+  var MAGNET_LABEL = { weak: '弱', strong: '强', off: '关' };
+  var drawMagnet = 'weak';
+  try { var savedMagnet = localStorage.getItem('chanapp-drawing-magnet'); if (MAGNET_LABEL[savedMagnet]) drawMagnet = savedMagnet; } catch (_) {}
+  var drawStyles = {};
+  try { drawStyles = JSON.parse(localStorage.getItem('chanapp-drawing-style') || '{}') || {}; } catch (_) { drawStyles = {}; }
+  var drawMsg = null, drawMsgTimer = null;
+
+  // 取已渲染那份应答的标的、周期与复权，不取 state：换标的或周期时 state 先变、K 线后到，中间不能拿旧 K 线映射或换算新标的的画线
+  function drawingView() {
+    var m = (lastChartData && lastChartData.meta) || {};
+    if (!m.code || !m.freq || !klineData.length) return null;
+    return { code: m.code, freq: m.freq, market: marketOf(m.code),
+      adjust: isIndexCode(m.code) ? 'raw' : m.adjust || viewState.adjust, bars: klineData, toTime: toTime };
+  }
+
+  function syncDrawings() {
+    if (!drawCtl) {
+      if (!charts || typeof LightweightChartsDrawing === 'undefined' || typeof chanDrawings === 'undefined') return;
+      drawCtl = chanDrawings.createController({
+        Lib: LightweightChartsDrawing, chart: charts.main, series: charts.candleSeries,
+        fetch: function (url, options) { return fetch(url, options); },
+        view: drawingView, magnet: drawMagnet,
+        styleFor: function (kind) { return drawStyles[kind] || null; },
+        onChange: renderDrawUi, notify: drawNotify,
+      });
+    }
+    drawCtl.sync();
+  }
+
+  function drawNotify(msg) {
+    drawMsg = msg;
+    clearTimeout(drawMsgTimer);
+    drawMsgTimer = setTimeout(function () { drawMsg = null; renderDrawUi(); }, 5000);
+    renderDrawUi();
+  }
+
+  function swatches(box, colors, current, attr) {
+    if (!box.children.length) {
+      colors.forEach(function (c) {
+        var b = document.createElement('button');
+        b.type = 'button'; b.dataset[attr] = c; b.style.background = c; b.setAttribute('aria-label', c); b.title = c;
+        box.appendChild(b);
+      });
+    }
+    Array.prototype.forEach.call(box.children, function (b) {
+      b.classList.toggle('active', String(b.dataset[attr]).toLowerCase() === String(current || '').toLowerCase());
+    });
+  }
+
+  function renderDrawUi() {
+    var st = drawCtl ? drawCtl.state() : { tool: null, visible: true, hidden: 0, unsaved: 0 };
+    Array.prototype.forEach.call(el('drawBar').querySelectorAll('[data-tool]'), function (b) {
+      var on = st.tool === b.dataset.tool;
+      b.classList.toggle('active', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    el('drawMagnetMode').textContent = MAGNET_LABEL[drawMagnet];
+    el('drawMagnet').classList.toggle('active', drawMagnet !== 'off');
+    el('drawHide').setAttribute('aria-pressed', st.visible ? 'false' : 'true');
+    el('drawHide').title = st.visible ? '隐藏全部画线' : '显示全部画线';
+    var note = el('drawNote');
+    note.innerHTML = '';
+    var parts = [];
+    if (drawMsg) parts.push(drawMsg);
+    if (st.hidden) parts.push('当前复权下隐藏 ' + st.hidden + ' 条画线');
+    if (st.skipped) parts.push(st.skipped + ' 条画线无法识别，已跳过');
+    if (!st.visible) parts.push('画线已隐藏');
+    parts.forEach(function (t) { var span = document.createElement('span'); span.textContent = t; note.appendChild(span); });
+    if (st.unsaved) {
+      var span = document.createElement('span');
+      span.textContent = st.unsaved + ' 条画线未保存';
+      note.appendChild(span);
+      var retry = document.createElement('button');
+      retry.type = 'button'; retry.textContent = '重试';
+      retry.onclick = function () { drawCtl.retry(); };
+      note.appendChild(retry);
+    }
+    note.hidden = !note.children.length;
+    var d = drawCtl && st.visible ? drawCtl.selected() : null;
+    el('drawStyle').hidden = !d;
+    if (!d) return;
+    var s = d.style;
+    swatches(el('dsColor'), DRAW_COLORS, s.color, 'color');
+    Array.prototype.forEach.call(el('dsWidth').children, function (b) { b.classList.toggle('active', +b.dataset.width === s.width); });
+    Array.prototype.forEach.call(el('dsLine').children, function (b) { b.classList.toggle('active', b.dataset.line === s.lineStyle); });
+    var fill = !!DRAW_FILL_KINDS[d.kind];
+    el('dsFillWrap').hidden = !fill;
+    el('dsFill').checked = !!s.fillBackground;
+    el('dsAlpha').hidden = !fill;
+    el('dsAlpha').value = s.transparency == null ? 80 : s.transparency;
+    el('dsFillColor').hidden = !DRAW_FILL_COLOR_KINDS[d.kind];
+    swatches(el('dsFillColor'), DRAW_COLORS, s.backgroundColor || s.color, 'fill');
+  }
+
+  function patchDrawStyle(patch) {
+    var d = drawCtl && drawCtl.selected();
+    if (!d) return;
+    var diff = drawCtl.setStyle(d.id, patch);
+    if (diff) {
+      drawStyles[d.kind] = diff;     // 同一工具的下一条画线沿用这次样式
+      try { localStorage.setItem('chanapp-drawing-style', JSON.stringify(drawStyles)); } catch (_) {}
+    }
+    renderDrawUi();
+  }
+
+  function wireDrawing() {
+    el('drawBar').addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (!b || !drawCtl) return;
+      if (b.dataset.tool) {
+        drawCtl.setTool(drawCtl.state().tool === b.dataset.tool ? null : b.dataset.tool);
+      } else if (b.id === 'drawMagnet') {
+        drawMagnet = drawMagnet === 'weak' ? 'strong' : drawMagnet === 'strong' ? 'off' : 'weak';
+        try { localStorage.setItem('chanapp-drawing-magnet', drawMagnet); } catch (_) {}
+        drawCtl.setMagnet(drawMagnet);
+      } else if (b.id === 'drawHide') {
+        drawCtl.setVisible(!drawCtl.state().visible);
+      } else if (b.id === 'drawClear') {
+        var st = drawCtl.state();
+        if (!st.count) { drawNotify('当前标的没有画线'); return; }
+        if (window.confirm('清空 ' + st.code + ' 的全部 ' + st.count + ' 条画线？前复权和不复权下画的都会删除。')) drawCtl.clearAll();
+      }
+      renderDrawUi();
+    });
+    el('dsColor').addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (b) patchDrawStyle({ color: b.dataset.color, textColor: b.dataset.color });
+    });
+    el('dsFillColor').addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (b) patchDrawStyle({ backgroundColor: b.dataset.fill, fillBackground: true });
+    });
+    el('dsWidth').addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (b) patchDrawStyle({ width: +b.dataset.width });
+    });
+    el('dsLine').addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (b) patchDrawStyle({ lineStyle: b.dataset.line });
+    });
+    el('dsFill').addEventListener('change', function () { patchDrawStyle({ fillBackground: el('dsFill').checked }); });
+    el('dsAlpha').addEventListener('change', function () { patchDrawStyle({ transparency: +el('dsAlpha').value }); });
+    el('dsDelete').addEventListener('click', function () { if (drawCtl) drawCtl.removeSelected(); renderDrawUi(); });
+    // Escape 先交给画线：退出工具或取消选中，不再连带收起侧栏；浮层或对话框开着时照旧由它们处理
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Escape' || !drawCtl || !drawCtl.consumesEscape()) return;
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target && ev.target.tagName || '')) return;
+      if (el('rulesPop').classList.contains('open') || el('aiPop').classList.contains('open') ||
+          !el('subSegPop').hidden || el('periodDialog').open) return;
+      var dm = drawCtl.manager;
+      if (dm.tool()) dm.setTool(null); else dm.select([]);
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }, true);
+    renderDrawUi();
+  }
+  wireDrawing();
 
   // ---------- 启动 ----------
 

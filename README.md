@@ -9,6 +9,7 @@
 - 查看 30 分、60 分、日线和周线。A 股个股可切换前复权与不复权。
 - 选择严格／宽松成笔、标准／扩展提示，查看依据卡与多周期共振摘要。
 - 使用 MACD、KDJ、RSI、BOLL 副图、自选与标签、搜索查看记录和日夜主题。
+- 在主图上画线段、水平线、延长线、平行通道、斐波那契回撤和矩形；画线存在服务端，换设备打开同一实例也能看到。
 - 在页面勾选展示周期。在线模式下可手动触发 AI 联合分析，需要自备模型服务 key。
 
 ## 选择使用方式
@@ -74,4 +75,4 @@ demo 不联网，也不调用 AI。随包样本不足 520 根分析窗口，页�
 
 ## 许可证
 
-本项目以 [MIT 许可证](LICENSE) 发布。chan.py 子集为 MIT 许可证，固定版本与来源记录见 [计算核心说明](docs/periods-and-analysis.md#缠论规则预设)；lightweight-charts © TradingView，Apache-2.0，见 vendor 文件头。
+本项目以 [MIT 许可证](LICENSE) 发布。chan.py 子集为 MIT 许可证，固定版本与来源记录见 [计算核心说明](docs/periods-and-analysis.md#缠论规则预设)；lightweight-charts © TradingView，Apache-2.0；画线库 lightweight-charts-drawing © deepentropy，MIT。两者的许可与版本见各自 vendor 文件头。
