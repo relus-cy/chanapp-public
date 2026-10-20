@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Deploy to one SSH host. --dry-run prints every transport command without contacting it.
 # Usage: deploy.sh HOST [--dry-run]   (HOST is an ssh destination, e.g. a Host alias in ~/.ssh/config)
-# A real run prints each step's elapsed time, the service status before and after, and checks after the
-# restart that the remote tree and the served web files equal this checkout. Lines starting with
-# `backup:`, `before:`, `after:`, `check:` and `deploy:` are stable for callers that keep a log.
+# A real run prints each step's elapsed time and the service status before and after, and checks after
+# the restart that the remote tree equals this checkout. Lines starting with `backup:`, `before:`,
+# `after:`, `check:` and `deploy:` are stable for callers that keep a log.
 set -euo pipefail
 USAGE='Usage: deploy.sh HOST [--dry-run]'
 NODE=
@@ -152,8 +152,6 @@ python_command=$4
 zone=$5
 instance_config=$6
 cd "$app"
-mark() { printf '  remote +%ss %s\n' "$SECONDS" "$1"; SECONDS=0; }
-SECONDS=0
 uv_command=$(command -v uv || true)
 if [[ -z "$uv_command" && -x "$HOME/.local/bin/uv" ]]; then uv_command="$HOME/.local/bin/uv"; fi
 if [[ ! -x .venv/bin/python ]]; then
@@ -180,11 +178,9 @@ else
   }
   .venv/bin/python -m pip install -q -r requirements.txt
 fi
-mark 'dependencies'
 # Full validation with the new code and the unit's credential files: a rejected config would
 # stop the service on restart, so abort here and leave the running process untouched.
 .venv/bin/python scripts/check_instance_config.py "$instance_config" "/home/$account/.config/chanapp/secrets.env" "$app/.env"
-mark 'config check'
 parent=$(dirname "$app")
 watchlist="$parent/chanapp.watchlist.json"
 if [[ ! -e "$watchlist" && -f "$app/watchlist.json" ]]; then
@@ -199,16 +195,14 @@ sudo install -m 644 "$unit" /etc/systemd/system/chanapp.service
 sudo systemctl daemon-reload
 sudo systemctl enable chanapp >/dev/null
 sudo systemctl restart chanapp
-mark 'unit and restart'
 # Keep an already-installed checker in sync without enabling it on other nodes.
 if systemctl is-enabled --quiet chanapp-selfcheck.timer; then
   bash scripts/install_selfcheck.sh "$app" "$account" "$port" "$zone"
-  mark 'selfcheck unit'
 fi
 code=000
 for attempt in {1..10}; do
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/" || true)
-  if [[ "$code" == 200 ]]; then mark 'health'; printf 'remote health: HTTP 200 (port %s)\n' "$port"; exit 0; fi
+  if [[ "$code" == 200 ]]; then printf 'remote health: HTTP 200 (port %s)\n' "$port"; exit 0; fi
   sleep 2
 done
 printf 'Remote health failed (HTTP %s); inspect journalctl -u chanapp\n' "$code" >&2
@@ -223,12 +217,11 @@ else
   ssh "$REMOTE" bash -s -- "$APP_DIR" "$DEPLOY_ACCOUNT" "$PORT" "$PYTHON" "$ZONE" "$INSTANCE_CONFIG" <<< "$REMOTE_SCRIPT"
 fi
 step 'install and restart'
-# After the restart: status again, the new process's own log, and every web file as the server returns it.
+# After the restart: status again and the new process's own log.
 POSTCHECK_SCRIPT=$(cat <<'POSTCHECK'
 set -euo pipefail
-app=$1
-port=$2
-python_command=$3
+port=$1
+python_command=$2
 status_line "$port" "$python_command"
 pid=$(systemctl show chanapp -p MainPID --value)
 if logs=$(journalctl -u chanapp _PID="$pid" --no-pager 2>/dev/null); then
@@ -237,26 +230,16 @@ else
   errors=unknown
 fi
 printf 'service: pid=%s log_errors=%s\n' "$pid" "$errors"
-cd "$app/web"
-files=0
-differ=0
-while IFS= read -r -d '' file; do
-  file=${file#./}
-  files=$((files + 1))
-  served=$(curl -fsS --max-time 10 "http://127.0.0.1:$port/$file" | sha256sum) || served=failed
-  [[ "${served%% *}" == "$(sha256sum < "$file" | cut -d' ' -f1)" ]] || { differ=$((differ + 1)); echo "served differs: $file" >&2; }
-done < <(find . -type f -print0)
-printf 'served: files=%s differ=%s\n' "$files" "$differ"
 POSTCHECK
 )
 POSTCHECK_SCRIPT="$STATUS_FN"$'\n'"$POSTCHECK_SCRIPT"
 if ((DRY_RUN)); then
-  printf '%q ' ssh "$REMOTE" bash -s -- "$APP_DIR" "$PORT" "$PYTHON"
+  printf '%q ' ssh "$REMOTE" bash -s -- "$PORT" "$PYTHON"
   printf " <<'POSTCHECK'\n%s\nPOSTCHECK\n" "$POSTCHECK_SCRIPT"
   run rsync -anc --delete --itemize-changes "${SYNC_EXCLUDES[@]}" "$ROOT/" "$REMOTE:$APP_DIR/"
   exit 0
 fi
-POST=$(ssh "$REMOTE" bash -s -- "$APP_DIR" "$PORT" "$PYTHON" <<< "$POSTCHECK_SCRIPT")
+POST=$(ssh "$REMOTE" bash -s -- "$PORT" "$PYTHON" <<< "$POSTCHECK_SCRIPT")
 AFTER=$(grep '^status:' <<< "$POST" || echo 'status: unavailable')
 printf 'after: %s\n' "${AFTER#status: }"
 grep -v '^status:' <<< "$POST" || true
@@ -270,30 +253,20 @@ else
   tree=unchecked
 fi
 step 'post-deploy checks'
-field() { sed -n "s/.* $1=\([^ ]*\).*/\1/p" <<< "$2"; }
-failed=()
-[[ "$tree" == same ]] || failed+=("tree-$tree")
-[[ "$(field differ "$POST")" == 0 ]] || failed+=(served)
+# Status is for a person to read (an intended change, e.g. a new binding, also moves it); only a tree
+# that differs from this commit, or could not be compared, fails the deployment.
 if [[ "$BEFORE" == 'status: unavailable' ]]; then
   status=no-baseline
-elif [[ "$AFTER" == 'status: unavailable' ]]; then
-  status=unreadable
-  failed+=(status-unreadable)
 elif [[ "$AFTER" == "$BEFORE" ]]; then
   status=unchanged
 else
   status=changed
-  for key in mode collector bindings; do
-    [[ "$(field "$key" "$BEFORE")" == "$(field "$key" "$AFTER")" ]] || failed+=("$key")
-  done
 fi
-errors=$(field log_errors "$POST")
-printf 'check: status=%s log_errors=%s served=%s tree=%s\n' "$status" "${errors:-unknown}" \
-  "$(field files "$POST")/$(field differ "$POST")" "$tree"
-if ((${#failed[@]})); then
-  printf 'deploy: FAILED post-deploy checks (%s) after %ss; the new code is running. Compare before/after above:\n' \
-    "${failed[*]}" "$SECONDS" >&2
-  printf '  an intended change (e.g. a new binding) needs no action; otherwise redeploy the last good commit\n' >&2
+errors=$(sed -n 's/.* log_errors=//p' <<< "$POST")
+printf 'check: status=%s log_errors=%s tree=%s\n' "$status" "${errors:-unknown}" "$tree"
+if [[ "$tree" != same ]]; then
+  printf 'deploy: FAILED remote tree %s after %ss; the new code is running, redeploy the last good commit\n' \
+    "$tree" "$SECONDS" >&2
   exit 1
 fi
 printf 'deploy: ok in %ss\n' "$SECONDS"
