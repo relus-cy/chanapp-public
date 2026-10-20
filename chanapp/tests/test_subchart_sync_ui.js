@@ -60,6 +60,7 @@ const segBtns = ['macd', 'kdj', 'rsi', 'boll'].map(ind => ({
   dataset: { ind }, classList: { toggle() {} },
 }));
 const context = {
+  structureVisible: true,
   LightweightCharts: LW,
   charts: null,
   el: id => ({ chart: chartEl, sub: subEl, ohlc: ohlcEl, subNote: subNoteEl })[id],

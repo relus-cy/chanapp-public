@@ -80,6 +80,9 @@
   var viewState = { adjust: 'qfq', token: null, analysisTokens: null };
   // 复权模式是用户偏好（指数由服务端恒按不复权返回，偏好不因浏览指数而改变）
   try { if (localStorage.getItem('chanapp-adjust') === 'raw') viewState.adjust = 'raw'; } catch (_) {}
+  // 结构层（笔/段/中枢/通道线/买卖点标记）显隐：只影响主图显示，分析、共振和 AI 照常
+  var structureVisible = true;
+  try { if (localStorage.getItem('chanapp-structure-visible') === '0') structureVisible = false; } catch (_) {}
   var historyState = { loading: false, hasMore: false, reqId: 0 };
   var lastChartData = null;  // 最近一次 /api/chart 响应，主题切换时原路径重渲染
   var loadedTarget = null;   // 当前图表内容归属 {code, freq, adjust}，后台刷新据此判定是否保留可视区间
@@ -833,7 +836,9 @@
     container.appendChild(canvas);
     var overlay = {
       _boxes: [],
+      _visible: structureVisible,
       setBoxes: function (boxes) { this._boxes = boxes; this.redraw(); },
+      setVisible: function (on) { this._visible = on; this.redraw(); },
       redraw: function () {
         var dpr = window.devicePixelRatio || 1;
         var w = container.clientWidth, hgt = container.clientHeight;
@@ -844,6 +849,7 @@
         var ctx = canvas.getContext('2d');
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, w, hgt);
+        if (!overlay._visible) return;
         var ts = chart.timeScale();
         overlay._boxes.forEach(function (b) {
           var x0 = ts.timeToCoordinate(b.t0);
@@ -1015,11 +1021,11 @@
     main.priceScale('right').applyOptions({ scaleMargins: { top: 0.05, bottom: 0.22 } });
 
     var biSeries = main.addSeries(LW.LineSeries, {
-      color: P.bi, lineWidth: 1, crosshairMarkerVisible: false,
+      color: P.bi, lineWidth: 1, crosshairMarkerVisible: false, visible: structureVisible,
       lastValueVisible: false, priceLineVisible: false,
     });
     var xdSeries = main.addSeries(LW.LineSeries, {
-      color: P.gold, lineWidth: 2, crosshairMarkerVisible: false,
+      color: P.gold, lineWidth: 2, crosshairMarkerVisible: false, visible: structureVisible,
       lastValueVisible: false, priceLineVisible: false,
     });
     // forming 笔/段互不相交，逐条独立 series（renderChart 里按数据重建），
@@ -1056,7 +1062,13 @@
       });
     });
 
-    var markers = LW.createSeriesMarkers(candleSeries, []);
+    // 买卖点标记层记住完整列表，结构层隐藏时只清空显示；信号数据（依据卡、共振）不受影响
+    var markerPlugin = LW.createSeriesMarkers(candleSeries, []);
+    var markers = {
+      _list: [],
+      setMarkers: function (list) { this._list = list; markerPlugin.setMarkers(structureVisible ? list : []); },
+      refresh: function () { markerPlugin.setMarkers(structureVisible ? this._list : []); },
+    };
 
     // 同步时间轴（双向，防回环）；showInd 重建副图 series 期间（subRebuild）库会
     // 触发 时间轴 null→自动适配 瞬变，必须抑制同步，否则主图可视区间被拖走。
@@ -2417,7 +2429,7 @@
       c[key].forEach(function (s) { c.main.removeSeries(s); });
       c[key] = segs.map(function (b) {
         var s = c.main.addSeries(LightweightCharts.LineSeries, {
-          color: color, lineWidth: width, lineStyle: LightweightCharts.LineStyle.Dashed,
+          color: color, lineWidth: width, lineStyle: LightweightCharts.LineStyle.Dashed, visible: structureVisible,
           crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
         });
         s.setData([{ time: toTime(b.dt0), value: b.y0 }, { time: toTime(b.dt1), value: b.y1 }]);
@@ -2443,7 +2455,7 @@
         var s = c.main.addSeries(LightweightCharts.LineSeries, {
           // 延长轨只作几何参考，不让投影端点挤压实际价格范围。
           autoscaleInfoProvider: function () { return null; },
-          color: P.goldA,
+          color: P.goldA, visible: structureVisible,
           lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed,
           crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
         });
@@ -2925,9 +2937,12 @@
     Array.prototype.forEach.call(el('signalScope').querySelectorAll('button'), function (b) {
       b.classList.toggle('active', b.dataset.scope === state.signalScope);
     });
+    Array.prototype.forEach.call(el('structureVisible').querySelectorAll('button'), function (b) {
+      b.classList.toggle('active', (b.dataset.visible === '1') === structureVisible);
+    });
     /* res-bar 只留一行只读摘要，两组 seg 收进「图层与规则」浮层；
        摘要随 seg 同函数刷新，任何 state 变更路径（含绕过 click 的）都不会脱节 */
-    el('ruleSummary').textContent = ruleLabelText();
+    el('ruleSummary').textContent = ruleLabelText() + (structureVisible ? '' : ' · 结构层隐藏');
   }
   /* 成笔标准/提示范围的展示文案只有这一份映射：res-bar 摘要与详情副题共用 */
   function ruleLabelText() {
@@ -2954,6 +2969,25 @@
     try { localStorage.setItem('chanapp-signal-scope', scope); } catch (_) {}
     reloadRuleSelection('提示范围');
   });
+  el('structureVisible').addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (!b) return;
+    var on = b.dataset.visible === '1';
+    if (on === structureVisible) return;
+    structureVisible = on;
+    try { localStorage.setItem('chanapp-structure-visible', on ? '1' : '0'); } catch (_) {}
+    syncRuleControl();
+    applyStructureVisible();
+  });
+  function applyStructureVisible() {
+    if (!charts) return;
+    var c = charts;
+    [c.biSeries, c.xdSeries].concat(c.formingBiSegs, c.formingXdSegs, c.channelSeries).forEach(function (s) {
+      s.applyOptions({ visible: structureVisible });
+    });
+    c.zsOverlay.setVisible(structureVisible);
+    c.markers.refresh();
+  }
   function reloadRuleSelection(label) {
     if (!state.code) { syncRuleControl(); return; }
     restoreRange = charts ? {code: state.code, freq: state.freq, range: charts.main.timeScale().getVisibleRange()} : null;

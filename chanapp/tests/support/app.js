@@ -14,7 +14,7 @@ function appContext(extras) {
     periodLoad: null, periodSaving: false,
     periodPrefs: { catalog: [{freq: 'day', label: '日线'}, {freq: 'week', label: '周线'}, {freq: 'm60', label: '60分'}, {freq: 'm30', label: '30分'}], selected: ['day', 'week', 'm60', 'm30'], notice: null, markets: {cn: {available: ['day', 'week', 'm60', 'm30']}, hk: {available: ['day', 'week', 'm60', 'm30']}} },
     viewState: { adjust: 'qfq', token: null, analysisTokens: null },
-    restoreRange: null,
+    restoreRange: null, structureVisible: true,
     chartAbort: null, charts: null, loadedTarget: null, detailKind: null, activeChartVersion: null,
     analysisSlots: {}, analysisIdentity: null, pendingAnalysis: null, ruleSwitchNote: null,
     f10Last: { code: null, ts: 0 }, lastF10: null, lastChartData: null, lastMeta: null,

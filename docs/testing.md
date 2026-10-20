@@ -20,7 +20,7 @@
 | 两支样本的四个周期、前复权／不复权、指数复权边界 | `browser_demo_offline.js`、`e2e/chart-controls.e2e.ts` | 真实 demo |
 | 展示周期取消／保存／清空、冲突、旧分钟链接 | `e2e/periods.e2e.ts` | 真实 demo |
 | 首次选择、来源能力变化、跨页面同步、采集与重启 | `browser_period_selection_e2e.js` | 外部 fixture |
-| 成笔标准、提示范围、日夜主题与偏好持久化 | `e2e/chart-controls.e2e.ts` | 真实 demo |
+| 成笔标准、提示范围、结构层显隐、日夜主题与偏好持久化 | `e2e/chart-controls.e2e.ts` | 真实 demo |
 | 六个均线按钮状态、四种副图指标及样本数值、周期切换 | `e2e/chart-controls.e2e.ts` | 真实 demo；数学边界另见 `test_indicators.js` |
 | 信号依据卡、共振详情、返回焦点、周期变化关闭旧详情 | `e2e/chart-controls.e2e.ts` | 真实 demo |
 | 拖动历史、十字线、主副图同步、侧栏与窄屏布局 | `browser_demo_offline.js` | 真实 demo；部分图表观测使用只读探针 |

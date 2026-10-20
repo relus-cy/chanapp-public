@@ -54,7 +54,8 @@ Object.assign(context, {
  state:{code:'a',freq:'m30',ruleProfile:'strict',signalScope:'expanded'},
  el:id=>nodes[id]||(nodes[id]= id==='ruleProfile'
    ? {querySelectorAll:()=>ruleBtns, addEventListener:(ev,fn)=>{nodes.__ruleHandler=fn;}, classList:{add(){}}, innerHTML:''}
-   : id==='signalScope' ? {querySelectorAll:()=>scopeBtns,addEventListener:(ev,fn)=>{nodes.__scopeHandler=fn;}} : {classList:{add(){}},innerHTML:''}),
+   : id==='signalScope' ? {querySelectorAll:()=>scopeBtns,addEventListener:(ev,fn)=>{nodes.__scopeHandler=fn;}}
+   : {classList:{add(){}},innerHTML:'',querySelectorAll:()=>[],addEventListener(){}}),
  charts:{main:{timeScale:()=>({getVisibleRange:()=>range})}},
  localStorage:{setItem:(k,v)=>saved[k]=v},
  analysisIdentity:'old',analysisSlots:{old:{abort:new AbortController(),inFlight:true,body:null}},
@@ -83,7 +84,7 @@ const lineContext = {
           addSeries(){const s={setData(v){s.data=v;}};(this.added=this.added||[]).push(s);return s;}}},
  data:{structure:{bi:[{dt0:'a',dt1:'b',y0:1,y1:2},{dt0:'b',dt1:'c',y0:2,y1:3,forming:true}],
                   xd:[{dt0:'a',dt1:'b',y0:1,y1:2},{dt0:'x',dt1:'y',y0:5,y1:9,forming:true},{dt0:'p',dt1:'q',y0:7,y1:4,forming:true}]}},
- segsToPoints:x=>x, toTime:x=>x, P:{goldA:'g',biForming:'bf'},
+ segsToPoints:x=>x, toTime:x=>x, P:{goldA:'g',biForming:'bf'}, structureVisible:true,
  LightweightCharts:{LineSeries:function(){},LineStyle:{Dashed:1}}};
 runSlices(lineContext, ['formingLines']);
 assert.equal(lineContext.c.biSeries.v.length,1);

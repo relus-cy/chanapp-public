@@ -2,7 +2,7 @@
 
 ## Sub-features
 
-Theme, six moving averages, MACD/KDJ/RSI/BOLL, strict/relaxed strokes, standard/expanded signals, adjustment, evidence and resonance details.
+Theme, six moving averages, MACD/KDJ/RSI/BOLL, strict/relaxed strokes, standard/expanded signals, structure-layer visibility, adjustment, evidence and resonance details.
 
 ## How to get to it (user POV)
 

@@ -82,6 +82,10 @@
 - 计算核心是 [chan.py](https://github.com/Vespa314/chan.py) 固定提交 `429d6ed3043e27c93a003ba2b10e70a05575e1f5`，以子集形式放在 `chanapp/engine/chanpy_vendor/`，许可证为 MIT（见该目录的 `LICENSE`）。
 - `PROVENANCE.json` 逐文件记录 SHA-256 与改动（只有把导入改成包内绝对路径、删去一处未用声明），`PROFILE_SNAPSHOTS.json` 记录各预设的生效配置快照。
 
+**结构层显隐**
+
+「图层与规则」里的结构层开关整体隐藏或显示主图上的笔、线段、中枢方框、通道线和买卖点标记，选择存在 `localStorage`（`chanapp-structure-visible`）。它只影响显示：接口参数、计算缓存、依据卡、共振摘要和 AI 分析都不变。
+
 ## 形成中的点位
 
 笔未确认、或点位在最后确认位置之后的，状态为 `provisional`（形成中）。形成中的点位会随新 K 线移动或消失；图上端点的时间不是首次可识别的时间。计算窗口为最近 520 根，图表默认显示最近 120 根，向左拖动按需分页读取更早历史。

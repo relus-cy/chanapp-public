@@ -85,6 +85,33 @@ test('stroke rules and signal scope reach the real analysis and survive reload',
   await expect(browser.locator('#ruleSummary')).toHaveText('严格成笔 · 扩展提示');
 });
 
+test('structure layer toggle hides only the drawn analysis and survives reload', async ({ app, browser, screen }) => {
+  // The 60-minute sample has a zhongshu inside the initial visible window; the daily one does not.
+  await openChart({ app, browser }, '/?code=sz300308&freq=m60');
+  const cards = await browser.locator('#cardsCount').textContent();
+  // The zhongshu overlay is the chart's own canvas child; count painted pixels in it.
+  const zsInk = () => browser.evaluate(() => {
+    const canvas = document.querySelector('#chart > canvas') as HTMLCanvasElement;
+    const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    let painted = 0;
+    for (let i = 3; i < pixels.length; i += 4) if (pixels[i]) painted++;
+    return painted;
+  });
+  await expect.poll(zsInk).toBeGreaterThan(0);
+  await screen.getByRole('button', '图层与规则').tap();
+  await screen.getByRole('button', '隐藏').tap();
+  await expect.poll(zsInk).toBe(0);
+  await expect(browser.locator('#ruleSummary')).toHaveText('严格成笔 · 扩展提示 · 结构层隐藏');
+  await expect(browser.locator('#cardsCount')).toHaveText(cards);
+  await chartAction(browser, () => browser.reload(), /\/api\/chart\?/);
+  await expect(browser.locator('#ruleSummary')).toHaveText('严格成笔 · 扩展提示 · 结构层隐藏');
+  await expect.poll(zsInk).toBe(0);
+  await screen.getByRole('button', '图层与规则').tap();
+  await screen.getByRole('button', '显示').tap();
+  await expect.poll(zsInk).toBeGreaterThan(0);
+  await expect(browser.locator('#ruleSummary')).toHaveText('严格成笔 · 扩展提示');
+});
+
 test('adjustment is persistent while an index forces raw without replacing the stock preference', async ({ app, browser, screen }) => {
   await openChart({ app, browser });
   const raw = await chartAction(browser, () => screen.getByRole('button', '不复权').tap(), /\/api\/chart\?.*adjust=raw&/);
