@@ -663,7 +663,8 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #dcSegPop .dc-help { margin: 6px 4px 2px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 11px;
     line-height: 1.55; color: var(--dim); font-family: inherit; }
   #dcSegPop .dc-help p { margin: 0 0 3px; }
-  .dc-legend { overflow: hidden; text-overflow: ellipsis; }
+  /* 唐奇安读数可折行：末尾的信号说明不能被省略号截掉；日期锚点随图例高度下移（app.js placeAxisAnchor） */
+  .dc-legend { white-space: normal; }
   .dc-legend .dot { margin: 0 4px 0 0; vertical-align: 1px; }
   .dc-legend .dc-sig { color: var(--dc); }
   #subNote { font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

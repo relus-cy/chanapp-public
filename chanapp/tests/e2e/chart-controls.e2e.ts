@@ -186,7 +186,8 @@ test('donchian toggle shows the pinned sample channel, ignores the structure lay
   const probe = `window.__dc = function () {
     return [charts.dcEntry, charts.dcExit, charts.dcStop].filter(function (s) {
       return s.options().visible && s.data().length > 0; }).length;
-  };`;
+  };
+  window.__dcStop = function () { return charts.dcOverlay._data && charts.dcOverlay._data.stop; };`;
   const source = await probedAppSource(probe);
   await browser.route(/\/app\.js(\?|$)/, route => route.fulfill({ body: source, contentType: 'application/javascript' }));
   await openChart({ app, browser });
@@ -216,6 +217,7 @@ test('donchian toggle shows the pinned sample channel, ignores the structure lay
   await expect(browser.locator('#ohlc .dc-legend')).toHaveText(latest);
   // Entry and exit lines (no stop line while flat), plus the next-bar dashes and markers on the overlay.
   expect(await dcLines()).toBe(2);
+  expect(await browser.evaluate(() => window.__dcStop())).toBeNull();
   await expect.poll(dcInk).toBeGreaterThan(0);
   await screen.getByRole('button', '图层与规则').tap();
   await screen.getByRole('button', '隐藏').tap();
@@ -232,6 +234,10 @@ test('donchian toggle shows the pinned sample channel, ignores the structure lay
   await browser.keyboard.press('Tab');
   await expect(browser.locator('#dcSegBtn')).toHaveAttribute('aria-expanded', 'false');
   await expect(browser.locator('#dcSegCur')).toHaveText('DC 20/10 · 触价');
+  // The touch-mode rule holds since 2026-09-21 (entry 949.73, stop = 949.73 − 2 × previous N): the stop line
+  // is drawn and also continued one slot right of the last bar on the overlay.
+  expect(await dcLines()).toBe(3);
+  expect(await browser.evaluate(() => window.__dcStop())).toBe(835.9386);
   await chartAction(browser, () => browser.reload(), /\/api\/chart\?.*freq=day&/);
   await expect(browser.locator('#dcSegCur')).toHaveText('DC 20/10 · 触价');
   await expect(browser.locator('#dcSegPop [data-dcmode="touch"]')).toHaveAttribute('aria-checked', 'true');

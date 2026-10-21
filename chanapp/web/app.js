@@ -881,7 +881,8 @@
   }
 
   // ---------- 唐奇安：明日预估虚线与信号标记（覆盖 canvas，与中枢同法） ----------
-  // 虚线只从最后一根向右延伸一格：它是把最后一根也算进去的下一根入场线、离场线，收盘前会变。
+  // 虚线只从最后一根向右延伸一格：它是把最后一根也算进去的下一根入场线、离场线，收盘前会变；
+  // 规则持有时另画一段止损虚线（止损入场后固定，与离场线一起决定下一根的有效离场价）。
   // 标记画在被越过的那条线上（不放在 K 线上下方，免得和缠论买卖点箭头叠在一起）：
   // 买 ▲ 贴在线下、卖 ▼ 贴在线上；两种判定方式都画：实心 = 收盘确认，淡色加 ~ = 盘中触价或形成中，空心 = 假突破。
 
@@ -910,12 +911,16 @@
         var lastX = ts.timeToCoordinate(d.lastTime);
         if (lastX !== null && d.next) {
           var span = Math.max(ts.options().barSpacing || 6, 14);   // 至少 14px，窄间距下也看得出是虚线
-          ctx.strokeStyle = P.dc; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
-          [d.next.entry, d.next.exit].forEach(function (v) {
+          ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+          var dash = function (v, color) {
             var y = v == null ? null : series.priceToCoordinate(v);
             if (y === null) return;
+            ctx.strokeStyle = color;
             ctx.beginPath(); ctx.moveTo(lastX, y); ctx.lineTo(lastX + span, y); ctx.stroke();
-          });
+          };
+          dash(d.next.entry, P.dc); dash(d.next.exit, P.dc);
+          // 规则持有时止损也向右延伸一格：最后一根刚入场时止损线只有一个点，阶梯线画不出来
+          dash(d.stop, P.dcStop);
           ctx.setLineDash([]);
         }
         (d.signals || []).forEach(function (s) {
@@ -1489,6 +1494,7 @@
     syncDcControl();
     c.dcOverlay.set(dc && dc.rows.length ? {
       lastTime: toTime(dc.rows[dc.rows.length - 1].time), next: dc.next,
+      stop: mode.state && mode.state.holding ? mode.state.stop : null,
       signals: chanDonchian.allSignals(dc).map(function (s) { return Object.assign({ t: toTime(s.time) }, s); }),
     } : null);
   }
