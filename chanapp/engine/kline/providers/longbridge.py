@@ -5,8 +5,10 @@
 - m30：长桥是区间起始标签（09:30…15:30），加 30 分钟归一为末端标签。收市竞价 bar 的起始标签等于会话终点
   （常规日 16:00；半日市按同一规则落在 12:00），并入该终点槽：open 取前一根常规 bar，high/low 取两者极值，
   close 取竞价 bar，量额相加。常规日每日 11 根。开/收越出高低超过竞价补齐容差时，取同口径当日日线佐证（开/收等于
-  日线开/收且在日线高低内）后补齐，不成立的留给准入拒收。起始标签不在会话内的行（盘前/盘后）逐行丢弃并记日志，
-  不作废整批（spec §5.3：只隔离已证实错误的行）。
+  日线开/收且在日线高低内）后补齐，不成立的留给准入拒收。个别交易日长桥 m30 从某一时刻起起始标签整体偏离半点
+  （如 13:29、13:59，m5 同样偏移；m1 始终在整分钟上，正常日 m1 按 30 分钟分桶聚合与 m30 逐根相同）：这类日子只
+  多取一次当日同口径 m1，按桶聚合补上缺的半点槽，已在半点上的 m30 保留原值，偏移的行丢弃；m1 也没有的桶留缺。
+  其余起始标签不在会话内的行（盘前/盘后）逐行丢弃并记日志，不作废整批（spec §5.3：只隔离已证实错误的行）。
 - minute_history 记 closed，且只收已过 now 的槽；minute_live 用 candlesticks(count=12)，只留当日行、一律 forming
   （计划 A 决定 8：closed 只来自定稿）。
 - qfq_series：供应商前复权（ForwardAdjust），供港股派生缓存用，标签归一与竞价合并同 raw。
@@ -32,16 +34,17 @@ from chanapp.engine.kline.rows import CalendarRow, RawDayRow, RawMinuteRow, new_
 
 log = logging.getLogger(__name__)
 
-CONTRACT_VERSION = "longbridge-raw-4"         # 2：naive 时间按主机时区解释；竞价价小幅越出时补齐高低；3：新增 calendar；
-                                              # 4：m30 越界超出容差时由当日日线佐证补齐
+CONTRACT_VERSION = "longbridge-raw-5"         # 2：naive 时间按主机时区解释；竞价价小幅越出时补齐高低；3：新增 calendar；
+                                              # 4：m30 越界超出容差时由当日日线佐证补齐；5：起始标签不在半点上的日子由 m1 聚合补槽
 AUCTION_WIDEN_TOL = 0.01
 _WIDENED_LOGGED: set = set()
 HKT = ZoneInfo("Asia/Hong_Kong")
 _CRED_NAMES = ("LONGBRIDGE_APP_KEY", "LONGBRIDGE_APP_SECRET", "LONGBRIDGE_ACCESS_TOKEN")
 LIVE_COUNT = 12
 DAY_LOOKBACK_DAYS = 14          # 为首行 pc 回看的自然日（覆盖港股长假）
-CHUNK_DAYS = {"day": 1000, "m30": 60}   # 按日期分段请求，单段根数低于 SDK 单次上限（约 1000 根）
+CHUNK_DAYS = {"day": 1000, "m30": 60, "m1": 2}   # 按日期分段请求，单段根数低于 SDK 单次上限（约 1000 根）
 _SESSION_ENDS = {end for _, end in sessions.SESSIONS["HK"]}
+_M30_GRID = set(sessions.slots("HK", "m30"))
 CALENDAR_SPAN_DAYS = 28         # trading_days 单次区间（SDK 要求小于一个月，PH4 按 28 日实测）
 CALENDAR_LOOKBACK_DAYS = 365    # trading_days 只回答最近一年
 HALF_DAY_SESSIONS = (sessions.SESSIONS["HK"][0],)   # 半日市只开上午
@@ -87,7 +90,7 @@ class SdkClient:
     @staticmethod
     def _enums(period, adjust):
         from longbridge.openapi import AdjustType, Period
-        periods = {"day": Period.Day, "m30": Period.Min_30, "m5": Period.Min_5}
+        periods = {"day": Period.Day, "m30": Period.Min_30, "m5": Period.Min_5, "m1": Period.Min_1}
         adjusts = {"raw": AdjustType.NoAdjust, "qfq": AdjustType.ForwardAdjust}
         return periods[period], adjusts[adjust]
 
@@ -161,6 +164,37 @@ def _widen_by_day(bar: dict, day: dict, label: str) -> dict:
     log.warning("长桥 m30 %s 开/收越出高低超过容差，经当日日线佐证（竞价成交），高低 %s/%s → %s/%s",
                 label, bar["high"], bar["low"], max(hi, bar["high"]), min(lo, bar["low"]))
     return {**bar, "high": max(hi, bar["high"]), "low": min(lo, bar["low"])}
+
+
+def _hhmm_slot_end(hhmm: str) -> str:
+    h, m = int(hhmm[:2]), int(hhmm[3:5]) + 30
+    return f"{h + m // 60:02d}:{m % 60:02d}"
+
+
+def _off_grid(r: dict) -> bool:
+    """连续交易时段内、起始标签不在半点上的 m30 行（收市竞价与盘前盘后不算）。"""
+    hhmm = r["timestamp"][11:16]
+    in_session = any(start <= hhmm < end for start, end in sessions.SESSIONS["HK"])
+    return in_session and _hhmm_slot_end(hhmm) not in _M30_GRID
+
+
+def _m1_buckets(rows: list[dict]) -> dict[str, dict]:
+    """m1 → 按 30 分钟桶聚合的 m30 形状行（起始标签 → 行）；只聚合落在半点网格上的连续交易桶，收市竞价等不在桶内的行不取。"""
+    groups: dict[str, list[dict]] = {}
+    for r in sorted(rows, key=lambda r: r["timestamp"]):
+        hhmm = r["timestamp"][11:16]
+        start = f"{hhmm[:2]}:{int(hhmm[3:5]) // 30 * 30:02d}"
+        if not any(a <= hhmm < b for a, b in sessions.SESSIONS["HK"]) or _hhmm_slot_end(start) not in _M30_GRID:
+            continue
+        groups.setdefault(f"{r['timestamp'][:10]}T{start}:00", []).append(r)
+    out = {}
+    for ts, g in groups.items():
+        turnover = [r.get("turnover") for r in g]
+        out[ts] = {"timestamp": ts, "open": g[0]["open"], "close": g[-1]["close"],
+                   "high": max((r["high"] for r in g), key=float), "low": min((r["low"] for r in g), key=float),
+                   "volume": sum(float(r["volume"]) for r in g),
+                   "turnover": None if any(t in (None, "") for t in turnover) else sum(float(t) for t in turnover)}
+    return out
 
 
 def _normalize_m30(candles: list[dict]) -> list[tuple[str, dict]]:
@@ -252,13 +286,31 @@ class LongbridgeProvider:
     def _m30_pairs(self, code, adjust, candles) -> list[tuple[str, dict]]:
         """m30 归一（_normalize_m30），再对仍越出高低的 bar 取同口径当日日线佐证（_widen_by_day）。
         只有出现越界 bar 时才请求日线，一次覆盖越界 bar 所在的日期区间。"""
-        pairs = _normalize_m30(candles)
+        pairs = _normalize_m30(self._fill_off_grid(code, adjust, candles))
         dates = sorted({slot[:10] for slot, bar in pairs if _out_of_range(bar)})
         if not dates:
             return pairs
         days = {r["timestamp"][:10]: _bar(r) for r in self._history(code, "day", adjust, dates[0], dates[-1])}
         return [(slot, _widen_by_day(bar, days[slot[:10]], slot)
                  if _out_of_range(bar) and slot[:10] in days else bar) for slot, bar in pairs]
+
+    def _fill_off_grid(self, code, adjust, candles) -> list[dict]:
+        """有起始标签不在半点上的日子：丢掉偏移的行，取当日同口径 m1 按桶聚合，补上该日已取区间内缺的半点槽。"""
+        off = [r for r in candles if _off_grid(r)]
+        if not off:
+            return candles
+        keep = [r for r in candles if not _off_grid(r)]
+        have = {r["timestamp"][:16] for r in keep}
+        for day in sorted({r["timestamp"][:10] for r in off}):
+            span = [r["timestamp"][:16] for r in candles if r["timestamp"][:10] == day]
+            lo, hi = min(span), max(span)
+            filled = [c for ts, c in _m1_buckets(self._history(code, "m1", adjust, day, day)).items()
+                      if lo <= ts[:16] <= hi and ts[:16] not in have]
+            keep.extend(filled)
+            log.warning("长桥 m30 %s 起始标签不在半点上（%s），改由 m1 聚合补槽 %s", day,
+                        [r["timestamp"][11:16] for r in off if r["timestamp"][:10] == day],
+                        [c["timestamp"][11:16] for c in filled])
+        return keep
 
     @staticmethod
     def _check_freq(fact_freq):

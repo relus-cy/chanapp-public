@@ -177,5 +177,46 @@ class HKChainOpeningAuctionTests(unittest.TestCase):
         self.assertFalse(view.stale)
 
 
+class OffGridClient(RecordedClient):
+    """05-14 13:30 起的 m30 起始标签改成 13:29（生产实测形状：6127.HK 2026-10-05），m1 给出该桶（一根等于原 bar）。"""
+
+    def __init__(self):
+        super().__init__()
+        for adjust in ("raw", "qfq"):
+            rows = self.by[("m30", adjust)]
+            bar = next(r for r in rows if r["timestamp"] == "2026-05-14T13:30:00")
+            self.by[("m30", adjust)] = [{**r, "timestamp": "2026-05-14T13:29:00"} if r is bar else r for r in rows]
+            self.by[("m1", adjust)] = [bar]
+
+
+class HKChainOffGridLabelTests(unittest.TestCase):
+    """回归（hk06127 2024-05-29、2024-11-06、2026-10-05 缺槽，所在月份转 known_gap）：不在半点上的起始标签被当作
+    会话外丢弃，该槽永远缺失。改由当日 m1 聚合补槽后，raw 与供应商前复权都有完整 11 根。"""
+
+    @classmethod
+    def setUpClass(cls):
+        _run_chain(cls, OffGridClient())
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+        cls.tmp.cleanup()
+
+    def day_bars(self, adjust):
+        view = views.read_view(self.conn, CODE, "m30", adjust=adjust, limit=5000, now=NOW)
+        return {b["dt"][11:]: b for b in view.bars if b["dt"][:10] == "2026-05-14"}
+
+    def test_raw_slot_filled(self):
+        src = next(r for r in _rows("m30-raw-700.json") if r["timestamp"] == "2026-05-14T13:30:00")
+        bars = self.day_bars("raw")
+        self.assertEqual(len(bars), 11)
+        self.assertEqual((bars["14:00"]["open"], bars["14:00"]["close"], bars["14:00"]["volume"]),
+                         (float(src["open"]), float(src["close"]), float(src["volume"])))
+
+    def test_vendor_qfq_published_with_full_day(self):
+        self.assertEqual((self.vendor["day"], self.vendor["m30"]), (1, 1))
+        self.assertEqual(len(self.day_bars("qfq")), 11)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -138,7 +138,7 @@ class ConformanceTests(unittest.TestCase):
                                     and getattr(v, "CONTRACT_VERSION", None) == version and hasattr(v, "name"))
                 self.assertTrue(provider_cls.name)
         self.assertEqual({m.CONTRACT_VERSION for m in NEW_MODULES},
-                         {"baostock-raw-1", "pytdx-raw-1", "yahoo-raw-1", "longbridge-raw-4"})
+                         {"baostock-raw-1", "pytdx-raw-1", "yahoo-raw-1", "longbridge-raw-5"})
 
     def test_fixtures_carry_no_credentials(self):
         pattern = re.compile(r"(?i)(licence|app_key|app_secret|access_token|authorization|bearer)")

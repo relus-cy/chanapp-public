@@ -46,6 +46,7 @@ def provider(**kw):
 
 class LongbridgeTests(unittest.TestCase):
     NOW = datetime(2026, 5, 18, 9, 0)
+    LATER = datetime(2026, 10, 21, 12, 0)
 
     def m30(self):
         p, c = provider()
@@ -160,6 +161,41 @@ class LongbridgeTests(unittest.TestCase):
             p = longbridge.LongbridgeProvider(client=self._opening_auction_client(day_raw, day_raw))
             rows = p.minute_history("hk06127", "m30", "2024-12-10 09:30", "2024-12-10 16:00", now=self.NOW)
             self.assertEqual((rows[0].open, rows[0].high, rows[0].low), (10.30, 10.18, 9.56))
+
+    @staticmethod
+    def _off_grid_client(drop_m1_bucket=False):
+        rec = json.loads((FIX / "m30-offgrid-6127-20261005.json").read_text())["rows"]
+        by = {(period, adjust): rec[f"{period}-{adjust}"] for period in ("m30", "m1", "day") for adjust in ("raw", "qfq")}
+        if drop_m1_bucket:
+            for adjust in ("raw", "qfq"):
+                by[("m1", adjust)] = [r for r in by[("m1", adjust)] if not "13:30" <= r["timestamp"][11:16] < "14:00"]
+        return FakeClient(by_date=by)
+
+    def test_off_grid_m30_slot_filled_from_m1(self):
+        # 6127.HK 2026-10-05 实测：m30 有一根起始标签 13:29（不在半点上），原先被当作会话外丢弃，14:00 槽缺失
+        client = self._off_grid_client()
+        p = longbridge.LongbridgeProvider(client=client)
+        with self.assertLogs(longbridge.log, "WARNING"):
+            rows = p.minute_history("hk06127", "m30", "2026-10-05 09:30", "2026-10-05 16:00", now=self.LATER)
+        got = {r.slot_end[11:]: (r.open, r.high, r.low, r.close, r.volume) for r in rows}
+        self.assertEqual(list(got), ["10:00", "10:30", "11:00", "11:30", "12:00", "13:30",
+                                     "14:00", "14:30", "15:00", "15:30", "16:00"])
+        self.assertEqual(got["14:00"], (30.52, 30.70, 30.46, 30.66, 37118))     # m1 13:30–13:59 聚合
+        self.assertEqual(got["13:30"], (30.46, 30.66, 30.44, 30.46, 66172))     # 半点上的 m30 保留原值
+        self.assertEqual(got["16:00"], (30.50, 30.64, 30.42, 30.64, 108722 + 22400))   # 收市竞价照常并入
+        self.assertEqual([c[2:4] + c[4:] for c in client.calls if c[2] == "m1"],
+                         [("m1", "raw", "2026-10-05", "2026-10-05")])            # 只多取一次当日 m1
+        qfq = {b["slot_end"][11:]: (b["open"], b["high"], b["low"], b["close"], b["volume"])
+               for b in p.qfq_series("hk06127", "m30", "2026-10-05 09:30", "2026-10-05 16:00")}
+        self.assertEqual(qfq["14:00"], (30.52, 30.70, 30.46, 30.66, 37118))
+        self.assertEqual(len(qfq), 11)
+
+    def test_off_grid_bucket_without_m1_stays_missing(self):
+        p = longbridge.LongbridgeProvider(client=self._off_grid_client(drop_m1_bucket=True))
+        with self.assertLogs(longbridge.log, "WARNING"):
+            rows = p.minute_history("hk06127", "m30", "2026-10-05 09:30", "2026-10-05 16:00", now=self.LATER)
+        slots = [r.slot_end[11:] for r in rows]
+        self.assertEqual((len(slots), "14:00" in slots, "13:30" in slots), (10, False, True))
 
     def test_clean_m30_fetch_requests_no_day_bars(self):
         _, c = self.m30()
