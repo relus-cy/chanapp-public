@@ -2,12 +2,14 @@
 
 口径：
 - 取最近一条已完成线段（forming=False）；没有已完成段时不画通道；
-- 下降段：段内最高两个笔高点（每笔取高端端点 max(y0,y1)）连成上轨，
-  下轨为平行线，过段内相对上轨斜率最靠下的笔端点；上升段镜像；
+- 下降段：上轨过段内最高的笔高点（每笔取高端端点 max(y0,y1)），斜率取使段内
+  其余笔高点都不在它上方的那一条；下轨为平行线，过段内相对上轨斜率最靠下的笔
+  端点；上升段镜像；
 - x1 延伸到最后已知 bar（段内笔的最大 x1），y1 为该处的延长值。
 
 可能出错的方式：没有已完成段时把涨跌两腿混成一段、按末笔方向画；两点连线斜率陡或
-与段方向相反时，过绝对最低（高）点的平行线落到另一轨的对侧，上轨低于下轨。
+与段方向相反时，过绝对最低（高）点的平行线落到另一轨的对侧，上轨低于下轨；只连
+最高两个高点时，后面的高点越过上轨，通道装不下自己的线段。
 """
 import csv
 import unittest
@@ -63,6 +65,17 @@ STEEP_DOWN_BIS = [
     {"x0": 0, "x1": 5, "y0": 100.0, "y1": 50.0, "direction": "down"},
     {"x0": 5, "x1": 10, "y0": 50.0, "y1": 60.0, "direction": "up"},
     {"x0": 10, "x1": 30, "y0": 60.0, "y1": 40.0, "direction": "down"},
+]
+
+
+# 下降段：最高两个高点 100@0、95@10 连线斜率 -0.5，后面的高点 90@50 在它上方 15；
+# 不被越过的上轨过 100@0 与 90@50，斜率 -0.2
+CUT_DOWN_BIS = [
+    {"x0": 0, "x1": 5, "y0": 100.0, "y1": 80.0, "direction": "down"},
+    {"x0": 5, "x1": 10, "y0": 80.0, "y1": 95.0, "direction": "up"},
+    {"x0": 10, "x1": 20, "y0": 95.0, "y1": 70.0, "direction": "down"},
+    {"x0": 20, "x1": 50, "y0": 70.0, "y1": 90.0, "direction": "up"},
+    {"x0": 50, "x1": 60, "y0": 90.0, "y1": 60.0, "direction": "down"},
 ]
 
 
@@ -152,7 +165,7 @@ class TestChannelGeometry(RailOrderMixin, unittest.TestCase):
         ch = channels.build(STEEP_DOWN_BIS, [whole(STEEP_DOWN_BIS, "down")])[-1]
         self.assertEqual(ch["direction"], "down")
         self.assertRailsOrdered(ch)
-        # 上轨仍过最高两个高点 (0,100)-(10,60)；下轨过相对斜率最靠下的端点 (5,50)
+        # 上轨过 (0,100)-(10,60)（段内只有这两个高点）；下轨过相对斜率最靠下的端点 (5,50)
         self.assertEqual((ch["upper"]["x0"], ch["upper"]["x1"]), (0, 30))
         self.assertAlmostEqual(ch["upper"]["y0"], 100.0, places=6)
         self.assertAlmostEqual(ch["upper"]["y1"], -20.0, places=6)
@@ -162,6 +175,27 @@ class TestChannelGeometry(RailOrderMixin, unittest.TestCase):
         for b in STEEP_DOWN_BIS:
             for x, y in ((b["x0"], b["y0"]), (b["x1"], b["y1"])):
                 self.assertGreaterEqual(y, at(ch["lower"], x) - 1e-9)
+
+    def test_upper_rail_not_crossed_by_later_highs(self):
+        ch = channels.build(CUT_DOWN_BIS, [whole(CUT_DOWN_BIS, "down")])[-1]
+        self.assertRailsOrdered(ch)
+        self.assertEqual((ch["upper"]["x0"], ch["upper"]["x1"]), (0, 60))
+        self.assertAlmostEqual(ch["upper"]["y0"], 100.0, places=6)
+        self.assertAlmostEqual(ch["upper"]["y1"], 88.0, places=6)
+        # 下轨过 (60,60)：y + 0.2x 在段内端点中最小
+        self.assertAlmostEqual(ch["lower"]["y0"], 72.0, places=6)
+        self.assertAlmostEqual(ch["lower"]["y1"], 60.0, places=6)
+
+    def test_up_mirror_lower_rail_not_crossed_by_later_lows(self):
+        mirrored = [{**b, "y0": 200 - b["y0"], "y1": 200 - b["y1"],
+                     "direction": "up" if b["direction"] == "down" else "down"} for b in CUT_DOWN_BIS]
+        ch = channels.build(mirrored, [whole(mirrored, "up")])[-1]
+        self.assertEqual(ch["direction"], "up")
+        self.assertRailsOrdered(ch)
+        self.assertAlmostEqual(ch["lower"]["y0"], 100.0, places=6)
+        self.assertAlmostEqual(ch["lower"]["y1"], 112.0, places=6)
+        self.assertAlmostEqual(ch["upper"]["y0"], 128.0, places=6)
+        self.assertAlmostEqual(ch["upper"]["y1"], 140.0, places=6)
 
 
 class TestChannelFixtureSmoke(unittest.TestCase):
@@ -226,6 +260,23 @@ class TestChannelOrderOnFixture(RailOrderMixin, unittest.TestCase):
             chs = channels.build(bis, xds[:i + 1])
             self.assertEqual(len(chs), 1, f"xd {xds[i]['x0']}-{xds[i]['x1']}")
             self.assertRailsOrdered(chs[0], f"xd {xds[i]['x0']}-{xds[i]['x1']}")
+
+    def test_trend_rail_not_crossed_by_segment_endpoints(self):
+        """下降段的笔高点都不在上轨上方，上升段的笔低点都不在下轨下方（另一侧端点不作要求）。"""
+        bis, xds = self.structure["bi"], self.structure["xd"]
+        for i, x in enumerate(xds):
+            if x.get("forming"):
+                continue
+            ch = channels.build(bis, xds[:i + 1])[0]
+            seg_bis = [b for b in bis if b["x0"] >= x["x0"] and b["x1"] <= x["x1"]]
+            for b in seg_bis:
+                hi, lo = (b["x0"], b["y0"]), (b["x1"], b["y1"])
+                if hi[1] < lo[1]:
+                    hi, lo = lo, hi
+                if x["direction"] == "down":
+                    self.assertLessEqual(hi[1], at(ch["upper"], hi[0]) + 1e-6, f"xd {x['x0']}-{x['x1']} @{hi[0]}")
+                else:
+                    self.assertGreaterEqual(lo[1], at(ch["lower"], lo[0]) - 1e-6, f"xd {x['x0']}-{x['x1']} @{lo[0]}")
 
 
 if __name__ == "__main__":
