@@ -163,6 +163,7 @@ def activate(settings: InstanceConfig, cache_dir):
             with worker.writer() as conn:
                 bindings.sync_sources(conn)
             worker.sync_minute_fact_freq()
+            worker.rearm_known_gaps()
         except (collector.CollectorLocked, OSError, sqlite3.Error):
             # 与采集器启动一致：事实库同步失败不挡已入库数据的读取，代次推进留待下次启动
             log.warning("实例绑定未同步到事实库（下次启动再做）", exc_info=True)

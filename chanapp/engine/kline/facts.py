@@ -120,12 +120,15 @@ CREATE VIEW current_minute_bars AS SELECT b.* FROM minute_bars b JOIN (
 """
 # 版本 1 之上的纯增量对象（CREATE ... IF NOT EXISTS，打开时补建，不升 user_version）：回退到不认识它们的旧代码时
 # 旧代码照常打开库、忽略这些对象
-_ADDITIVE_DDL = """
-CREATE TABLE IF NOT EXISTS minute_day_checks(
+# known_gap_origin：缺口转 known_gap 前的原因（finalize、rejected 决定覆盖判定是否严格），重开时据此恢复。
+_ADDITIVE_DDL = {
+    "minute_day_checks": """CREATE TABLE IF NOT EXISTS minute_day_checks(
   code TEXT NOT NULL, trade_date TEXT NOT NULL, fact_freq TEXT NOT NULL, status TEXT NOT NULL,
   reason TEXT NOT NULL, detail TEXT NOT NULL, checked_at TEXT NOT NULL,
-  PRIMARY KEY(code, trade_date, fact_freq))
-"""
+  PRIMARY KEY(code, trade_date, fact_freq))""",
+    "known_gap_origin": """CREATE TABLE IF NOT EXISTS known_gap_origin(
+  gap_id INTEGER PRIMARY KEY, reason TEXT NOT NULL)""",
+}
 _REQUIRED = ("day_bars", "minute_bars", "current_day_bars", "current_minute_bars",
              "series_state", "quarantine", "pending_review", "day_checks", "minute_day_checks", "soft_flags",
              "coverage_gaps", "batches", "calendar", "instruments", "binding_state",
@@ -191,7 +194,8 @@ def _migrate(conn) -> None:
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             state = _schema_state(conn)
         if state == "additive":
-            conn.execute(_ADDITIVE_DDL)
+            for ddl in _ADDITIVE_DDL.values():
+                conn.execute(ddl)
 
 
 def _schema_state(conn) -> str:
@@ -202,10 +206,10 @@ def _schema_state(conn) -> str:
     if version == 0:
         return "empty"
     present = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
-    missing = [name for name in _REQUIRED if name not in present and name != "minute_day_checks"]
+    missing = [name for name in _REQUIRED if name not in present and name not in _ADDITIVE_DDL]
     if missing:
         raise SchemaError(f"事实库缺少对象 {missing}，拒绝按半成品库运行")
-    return "ready" if "minute_day_checks" in present else "additive"
+    return "ready" if all(name in present for name in _ADDITIVE_DDL) else "additive"
 
 
 def _chmod_owner_only(path: Path) -> None:

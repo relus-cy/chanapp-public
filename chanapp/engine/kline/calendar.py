@@ -1,5 +1,6 @@
 """F5 交易日历：过去（CN）由上证指数 final 日线推出，未来由供应商年表给出；港股过去由港股 final 日线推出，
-年表（含未来与半日市）来自供应商 trading_days。日线推导只把该日记为开市，不覆盖供应商给的会话（半日市）。
+年表（含未来与半日市）来自供应商 trading_days。日线推导只把该日记为开市，不覆盖供应商给的会话（半日市）；
+还没有会话的过去港股日子按港交所半日市规则补上午会话（hk_scheduled_half_day）。
 
 过去的休市工作日由相邻两个指数开市日之间的空档推出（指数自身有未解决缺口的区段除外）；
 没有日历行的工作日是未知，前复权链不跨越未知日计算因子。
@@ -69,9 +70,35 @@ def derive_cn_past(conn) -> int:
     return count + _derive_closed(conn, "CN", opened, CN_INDEX)
 
 
-def derive_hk_past(conn) -> int:
-    return _derive(conn, "HK", "SELECT DISTINCT trade_date FROM current_day_bars"
-                   " WHERE code LIKE 'hk%' AND provenance='final' AND sf=0", ())
+# 港交所半日市：圣诞前夕、新年前夕、农历新年前夕逢工作日只开上午（前夕逢周末则当年没有半日市）。供应商年表
+# trading_days 只回答最近一年（采集器每天取今年与去年），更早的半日市只能靠这条规则补会话。规则对今天以前、还没有
+# 会话的全部开市日生效，不按年表回答范围截断：启动重开 known_gap 时只推导不联网，年表一年以内的半日市可能还没取到。
+# 年表给出的会话与规则一致，规则之外的特殊会话仍以年表为准（不改已有会话）。农历新年日期表到 2030 年。
+# 核对：事实库 2023-09-28 至 2026-10-21 全部港股都没有下午 m30 的日子恰为
+# 2024-02-09、2024-12-24、2024-12-31、2025-01-28、2025-12-24、2025-12-31、2026-02-16。
+_LUNAR_NEW_YEAR = ("2023-01-22", "2024-02-10", "2025-01-29", "2026-02-17", "2027-02-06", "2028-01-26",
+                   "2029-02-13", "2030-02-03")
+HK_HALF_DAY_SESSIONS = (sessions.SESSIONS["HK"][0],)
+
+
+def hk_scheduled_half_day(day: str) -> bool:
+    d = date.fromisoformat(day)
+    if d.weekday() >= 5:
+        return False
+    eves = {f"{d.year}-12-24", f"{d.year}-12-31"} | {
+        (date.fromisoformat(lny) - timedelta(days=1)).isoformat() for lny in _LUNAR_NEW_YEAR}
+    return day in eves
+
+
+def derive_hk_past(conn, today: date | None = None) -> int:
+    count = _derive(conn, "HK", "SELECT DISTINCT trade_date FROM current_day_bars"
+                    " WHERE code LIKE 'hk%' AND provenance='final' AND sf=0", ())
+    for row in conn.execute("SELECT date FROM calendar WHERE market='HK' AND is_open=1 AND sessions='[]'"
+                            " AND date<?", ((today or date.today()).isoformat(),)).fetchall():
+        if hk_scheduled_half_day(row["date"]):
+            conn.execute("UPDATE calendar SET sessions=? WHERE market='HK' AND date=?",
+                         (json.dumps([list(x) for x in HK_HALF_DAY_SESSIONS]), row["date"]))
+    return count
 
 
 def trading_days(conn, market, start, end) -> list:

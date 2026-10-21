@@ -16,7 +16,8 @@
   _TODAY_SLOT_SETTLE_S 的槽且库内未覆盖时才发，至多一个请求）；
 - 覆盖按槽位判定：缺口只有在提交后该区间实际可读覆盖达标（日线逐交易日有 final 行，分钟逐日覆盖会话槽位，
   隔离槽与停牌日除外）时才关闭；取回为空、全部被拒或槽位不全都计一次尝试；
-- 同一缺口因标的级失败或覆盖不达标尝试 5 次后记 known_gap，不再自动重试，由 status 暴露；
+- 同一缺口因标的级失败或覆盖不达标尝试 5 次后记 known_gap，不再自动重试，由 status 暴露；来源契约变化后
+  启动时重开一轮（rearm_known_gaps）；
   连接类失败与写失败不消耗次数；
 - 跟踪与查看分开（目标 2026-09-29 第二阶段）：跟踪集合 = 自选 ∪ 系统依赖上证指数（tracked_codes）；资格按数据集
   （eligible：自选全部数据集，不在自选的上证指数只有日线，含调度线程的当日日线定稿），在每个会发请求的步骤前复核，
@@ -1258,7 +1259,50 @@ class Collector:
     def _fail_gap(conn, gap, error) -> None:
         facts.fail_gap(conn, gap["gap_id"], error)
         if gap["attempts"] + 1 >= MAX_GAP_ATTEMPTS:
+            # 原因决定覆盖判定是否严格（finalize、rejected），记下供来源契约变化后重开时恢复
+            conn.execute("INSERT OR REPLACE INTO known_gap_origin(gap_id, reason) VALUES (?,?)",
+                         (gap["gap_id"], gap["reason"]))
             conn.execute("UPDATE coverage_gaps SET reason='known_gap' WHERE gap_id=?", (gap["gap_id"],))
+
+    _REARM_KEY = "known_gap_rearm_contracts"
+
+    def rearm_known_gaps(self) -> int:
+        """来源契约（bindings.contract_hash）与上次记录不同时，重开该来源负责的数据集里的 known_gap：恢复转入前的
+        原因（known_gap_origin；更早转入、没有记录的按范围推断：单日为 finalize，多日为 backfill），尝试次数清零，
+        交续传重新取数。provider 修掉已知缺陷后部署一次即重试一轮，仍取不到的照常 5 次后再转 known_gap。
+        没有记录（首次运行）按已变化处理。启动时执行、幂等；返回重开的缺口数。"""
+        with self.writer() as conn:
+            with facts.write_txn(conn):        # 先按现行规则补港股历史日历会话（半日市），重开后的覆盖判定才用对口径
+                calendar.derive_hk_past(conn, self.now().date())
+            stored = facts.setting(conn, self._REARM_KEY, {})
+            gaps = conn.execute("SELECT g.*, o.reason AS origin FROM coverage_gaps g"
+                                " LEFT JOIN known_gap_origin o ON o.gap_id = g.gap_id"
+                                " WHERE g.reason='known_gap' AND g.resolved_at IS NULL").fetchall()
+            sources = {}
+            for b in bindings.BINDINGS:
+                if b.item in (FetchItem.DAY_HISTORY, FetchItem.MINUTE_HISTORY):
+                    sources[(b.market, b.kind, b.item)] = bindings.active(conn, b.market, b.kind, b.item)[0]
+            hashes = {}
+            for source in set(sources.values()):
+                try:
+                    hashes[source] = bindings.contract_hash(source)
+                except Exception:  # noqa: BLE001 — 取不到契约的来源不重开，也不覆盖其记录
+                    log.warning("来源契约哈希不可用，跳过 known_gap 重开 source=%s", source, exc_info=True)
+            changed = {s for s, h in hashes.items() if stored.get(s) != h}
+            rearmed = []
+            for g in gaps:
+                item = FetchItem.DAY_HISTORY if g["dataset"] == "day" else FetchItem.MINUTE_HISTORY
+                if sources.get((market_of(g["code"]), kind_of(g["code"]), item)) in changed:
+                    rearmed.append(g)
+            with facts.write_txn(conn):
+                for g in rearmed:
+                    reason = g["origin"] or ("finalize" if g["start"][:10] == g["end"][:10] else "backfill")
+                    conn.execute("UPDATE coverage_gaps SET reason=?, attempts=0 WHERE gap_id=?", (reason, g["gap_id"]))
+                    conn.execute("DELETE FROM known_gap_origin WHERE gap_id=?", (g["gap_id"],))
+                facts.set_setting(conn, self._REARM_KEY, {**stored, **hashes})
+        if rearmed:
+            log.warning("来源契约已变化（%s），重开 known_gap %d 个", sorted(changed), len(rearmed))
+        return len(rearmed)
 
     def ensure_window(self, code, freq, bars=config.DEFAULT_WINDOW, *, wait=None) -> bool:
         """首次打开（视图为空或不足窗口时门面同步调用）：搜索查看的代码只补所请求周期的分析窗口，不登记缺口、
@@ -2683,7 +2727,8 @@ class Collector:
 
     def refresh_calendar(self, market, now) -> None:
         source, _ = bindings.active(self.conn(), market, "any", FetchItem.SESSION_CALENDAR)
-        years = {now.year} | ({now.year + 1} if now.month == 12 else set())
+        # 港股过去的半日市只有年表给得出：连去年一起取，日子老出年表一年的回答范围之前会话已记下（A 股过去由指数推出）
+        years = {now.year} | ({now.year + 1} if now.month == 12 else set()) | ({now.year - 1} if market == "HK" else set())
         for year in sorted(years):
             try:
                 rows = self._call(f"calendar-{market}", source, lambda p: p.calendar(year),
@@ -2693,7 +2738,7 @@ class Collector:
             with self.writer() as conn, facts.write_txn(conn):
                 calendar.store_rows(conn, rows, source=source)
         with self.writer() as conn, facts.write_txn(conn):
-            (calendar.derive_cn_past if market == "CN" else calendar.derive_hk_past)(conn)
+            calendar.derive_cn_past(conn) if market == "CN" else calendar.derive_hk_past(conn, now.date())
 
     # ---- 查看集合与调度 ----
     def touch_viewing(self, code) -> None:
@@ -3029,8 +3074,9 @@ class Collector:
             return False
         try:
             self.sync_minute_fact_freq()
+            self.rearm_known_gaps()
         except CollectorLocked:
-            log.warning("分钟事实粒度切换未执行：另一个写者持有写者锁（下次启动再做）")
+            log.warning("分钟事实粒度切换或 known_gap 重开未执行：另一个写者持有写者锁（下次启动再做）")
         alive = lambda t: t is not None and t.is_alive()   # noqa: E731
         if alive(self._thread) and alive(self._history_thread):
             return False

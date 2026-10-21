@@ -62,6 +62,38 @@ class HkCalendarRefreshTests(unittest.TestCase):
         row = conn.execute("SELECT source FROM calendar WHERE market='HK' AND date='2025-12-24'").fetchone()
         self.assertEqual(row["source"], "index_day", "开市事实仍以日线为准")
 
+    def test_past_hk_half_days_before_vendor_calendar_get_morning_session(self):
+        # 回归（2026-10-21）：供应商年表只回答最近一年，更早的半日市只有日线推出的开市行、没有会话，
+        # 覆盖判定按全日要 11 槽，含半日市的月份永远不达标、转 known_gap，页面把这些日子标成不完整
+        conn = self.c.conn()
+        days = ("2024-02-09", "2024-12-23", "2024-12-24", "2024-12-31", "2025-01-28", "2025-12-24", "2025-12-31")
+        facts.commit_day_rows(conn, [hk_day(d) for d in days], market="HK", kind="stock", item="day_history",
+                              source="longbridge", binding_gen=1, today="2026-09-28")
+        self.c.refresh_calendar("HK", self.now)          # 今年与去年的年表 + 日线推导 + 一年以前按规则
+        morning = lambda d: {f"{d} {t}" for t in ("10:00", "10:30", "11:00", "11:30", "12:00")}   # noqa: E731
+        for d in ("2024-02-09", "2024-12-24", "2024-12-31", "2025-01-28"):     # 一年以前：按港交所规则
+            self.assertEqual(calendar.required_slots(conn, "HK", "m30", d), morning(d), d)
+        for d in ("2025-12-24", "2025-12-31"):                                   # 一年以内：去年年表给出
+            self.assertEqual(calendar.required_slots(conn, "HK", "m30", d), morning(d), d)
+        self.assertEqual(len(calendar.required_slots(conn, "HK", "m30", "2024-12-23")), 11)
+
+    def test_startup_rearm_recognizes_recent_half_day_before_any_calendar_fetch(self):
+        # 回归（2026-10-21）：启动重开 known_gap 只推导、不取年表；一年以内的去年半日市（年表还没取到）若不靠规则，
+        # 重开的 2025-12 月份在当天日历刷新前就按 11 槽判定，再白耗 5 次尝试转回 known_gap
+        conn = self.c.conn()
+        facts.commit_day_rows(conn, [hk_day(d) for d in ("2025-12-23", "2025-12-24", "2025-12-31")], market="HK",
+                              kind="stock", item="day_history", source="longbridge", binding_gen=1,
+                              today="2026-09-28")
+        self.c.rearm_known_gaps()
+        for d in ("2025-12-24", "2025-12-31"):
+            self.assertEqual(calendar.required_slots(conn, "HK", "m30", d),
+                             {f"{d} {t}" for t in ("10:00", "10:30", "11:00", "11:30", "12:00")}, d)
+        self.assertEqual(len(calendar.required_slots(conn, "HK", "m30", "2025-12-23")), 11)
+
+    def test_scheduled_half_day_rule_skips_weekend_eves(self):
+        self.assertEqual([d for d in ("2022-12-24", "2023-12-29", "2024-12-24", "2027-02-05", "2028-12-31")
+                          if calendar.hk_scheduled_half_day(d)], ["2024-12-24", "2027-02-05"])
+
 
 if __name__ == "__main__":
     unittest.main()

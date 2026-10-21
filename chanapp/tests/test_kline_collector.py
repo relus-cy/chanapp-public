@@ -1115,6 +1115,62 @@ class CollectorTests(unittest.TestCase):
         gap = conn.execute("SELECT attempts, reason FROM coverage_gaps").fetchone()
         self.assertEqual((gap["attempts"], gap["reason"]), (5, "known_gap"))
 
+    def _exhaust(self, c):
+        for _ in range(8):
+            c.code_backoff.until.clear()
+            c.source_breaker.until.clear()
+            c.drain_gaps(max_requests=10)
+
+    def _gaps(self, conn):
+        return {(g["start"], g["reason"], g["attempts"]) for g in conn.execute(
+            "SELECT start, reason, attempts FROM coverage_gaps WHERE resolved_at IS NULL")}
+
+    def test_known_gap_rearmed_with_original_reason_when_source_contract_changes(self):
+        # 回归（hk06127 2026-10-21）：provider 修好后 known_gap 永不重试，修复补得回的槽一直缺；
+        # 转入前的原因决定覆盖判定是否严格，重开须恢复，不能一律当回填
+        c = self.make(FakeProvider(fail=True))
+        conn = facts.open_facts(self.dir / facts.DB_NAME)
+        self.addCleanup(conn.close)
+        with facts.write_txn(conn):
+            facts.record_gap(conn, "sh600036", FACT, "2026-08-01 09:30", "2026-08-31 15:00", "backfill")
+            facts.record_gap(conn, "sh600036", FACT, "2026-09-01 09:30", "2026-09-01 15:00", "finalize")
+        self._exhaust(c)
+        self.assertEqual(self._gaps(conn), {("2026-08-01 09:30", "known_gap", 5), ("2026-09-01 09:30", "known_gap", 5)})
+        self.assertEqual(c.rearm_known_gaps(), 2)                   # 首次运行没有契约记录：按已变化处理
+        self.assertEqual(self._gaps(conn), {("2026-08-01 09:30", "backfill", 0), ("2026-09-01 09:30", "finalize", 0)})
+        self._exhaust(c)
+        self.assertEqual(c.rearm_known_gaps(), 0)                   # 契约没变：不重开
+        self.assertEqual({r for _, r, _ in self._gaps(conn)}, {"known_gap"})
+        with unittest.mock.patch.object(bindings, "contract_hash", lambda source: "changed"):
+            self.assertEqual(c.rearm_known_gaps(), 2)
+        self.assertEqual(self._gaps(conn), {("2026-08-01 09:30", "backfill", 0), ("2026-09-01 09:30", "finalize", 0)})
+
+    def test_rearmed_gap_is_filled_by_fixed_provider(self):
+        broken = self.make(FakeProvider(fail=True))
+        conn = facts.open_facts(self.dir / facts.DB_NAME)
+        self.addCleanup(conn.close)
+        with facts.write_txn(conn):
+            facts.record_gap(conn, "sh600036", FACT, "2026-09-01 09:30", "2026-09-01 15:00", "finalize")
+        self._exhaust(broken)
+        broken.conn().close()
+        fixed = self.make(FullFake())
+        self.assertEqual(fixed.rearm_known_gaps(), 1)
+        self._exhaust(fixed)
+        self.assertEqual(self._gaps(conn), set())
+        self.assertEqual(len(facts.read_minute_rows(conn, "sh600036", FACT, "2026-09-01 00:00", "2026-09-02 00:00")),
+                         len(sessions.slots("CN", FACT)))
+
+    def test_legacy_known_gap_without_origin_reason_inferred_from_range(self):
+        # 本改动前转入的 known_gap 没有原因记录：单日按 finalize（严格），多日按 backfill
+        c = self.make(FakeProvider(fail=True))
+        conn = facts.open_facts(self.dir / facts.DB_NAME)
+        self.addCleanup(conn.close)
+        with facts.write_txn(conn):
+            facts.record_gap(conn, "sh600036", FACT, "2026-08-01 09:30", "2026-08-31 15:00", "known_gap")
+            facts.record_gap(conn, "sh600036", FACT, "2026-09-01 09:30", "2026-09-01 15:00", "known_gap")
+        self.assertEqual(c.rearm_known_gaps(), 2)
+        self.assertEqual(self._gaps(conn), {("2026-08-01 09:30", "backfill", 0), ("2026-09-01 09:30", "finalize", 0)})
+
     def test_minute_backfill_starts_at_first_day_bar_when_list_date_unknown(self):
         # 次新股：上市日未知（instrument 不可用），但日线回填已证明更早没有交易，分钟缺口不往前登记
         c = self.make(FakeProvider())
