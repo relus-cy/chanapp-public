@@ -36,7 +36,7 @@ Use `expect` or `expect.poll` to wait for the observable result. Mutate user sta
 
 ## Evidence
 
-Record the command, exit code, test names and report path. Default evidence is `.e2e/report.json` with linked screenshots/traces; legacy records are in `.e2e/logs/` and `tmp/demo-offline-browser/demo.png`. Use `--output .e2e/<name>` for a named proof run; auxiliary logs follow into that directory's `logs/`. The old demo screenshot keeps its fixed path. Do not infer untested online availability from local success.
+Record the command, exit code, test names and report path. Default evidence is `.e2e/report.json` with linked screenshots, plus traces for failed tests (add `--trace on` to keep them for passing tests); legacy records are in `.e2e/logs/` and `tmp/demo-offline-browser/demo.png`. Use `--output .e2e/<name>` for a named proof run; auxiliary logs follow into that directory's `logs/`. The old demo screenshot keeps its fixed path. Do not infer untested online availability from local success.
 
 For a defect, run its regression before the fix and retain that failure, then run it after the fix. For acceptance, finish all checks required by [CONTRIBUTING](../../../CONTRIBUTING.md#测试), including the existing browser and manual regression requirements.
 

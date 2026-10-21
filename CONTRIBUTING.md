@@ -52,7 +52,7 @@ npm run test:e2e -- chanapp/tests/e2e/watchlist.e2e.ts
 
 本地改动时跑受影响的流程文件即可；完整流程由 CI 在每次 push 时运行，合并或发布前以 CI 结果为准。
 
-报告、截图和失败用例的 trace 保存在 `.e2e/`（通过的用例也要 trace 时加 `--trace on`）。覆盖清单、真实业务 API 与前端 mock 的区别见 [流程覆盖与验证边界](docs/testing.md)。Agent 可按 [verify-chanapp](.agents/skills/verify-chanapp/SKILL.md) 选择流程并保存证据。该入口补充上述既有本地检查；CI 的 browser job 使用 Node 24，把完整流程分三片并行执行，每片在成功或失败后各自上传测试证据，保留 14 天；Python 测试同样分三片，由 `chanapp/scripts/unittest_shard.py` 按用例切分。
+报告、截图和失败用例的 trace 保存在 `.e2e/`（通过的用例也要 trace 时加 `--trace on`；既有前端回归流程的 trace 每次都录）。覆盖清单、真实业务 API 与前端 mock 的区别见 [流程覆盖与验证边界](docs/testing.md)。Agent 可按 [verify-chanapp](.agents/skills/verify-chanapp/SKILL.md) 选择流程并保存证据。该入口补充上述既有本地检查；CI 的 browser job 使用 Node 24，把完整流程分三片并行执行，每片在成功或失败后各自上传测试证据，保留 14 天；Python 测试同样分三片，由 `chanapp/scripts/unittest_shard.py` 按用例切分。
 
 ## 约束
 
