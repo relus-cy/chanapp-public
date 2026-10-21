@@ -883,7 +883,7 @@
   // ---------- 唐奇安：明日预估虚线与信号标记（覆盖 canvas，与中枢同法） ----------
   // 虚线只从最后一根向右延伸一格：它是把最后一根也算进去的下一根入场线、离场线，收盘前会变。
   // 标记画在被越过的那条线上（不放在 K 线上下方，免得和缠论买卖点箭头叠在一起）：
-  // 买 ▲ 贴在线下、卖 ▼ 贴在线上；实心 = 已确认，淡色加 ~ = 形成中，空心 = 假突破。
+  // 买 ▲ 贴在线下、卖 ▼ 贴在线上；两种判定方式都画：实心 = 收盘确认，淡色加 ~ = 盘中触价或形成中，空心 = 假突破。
 
   function makeDcOverlay(container, chart, series) {
     var canvas = document.createElement('canvas');
@@ -1489,7 +1489,7 @@
     syncDcControl();
     c.dcOverlay.set(dc && dc.rows.length ? {
       lastTime: toTime(dc.rows[dc.rows.length - 1].time), next: dc.next,
-      signals: (mode.signals || []).map(function (s) { return Object.assign({ t: toTime(s.time) }, s); }),
+      signals: chanDonchian.allSignals(dc).map(function (s) { return Object.assign({ t: toTime(s.time) }, s); }),
     } : null);
   }
 

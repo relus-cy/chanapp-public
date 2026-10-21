@@ -67,23 +67,23 @@ def _simulate(bars, entry, exit_, n, nxt, mode):
         forming = bool(b.get("forming"))
         if pos is None:
             line = entry[i]
-            if line is None:
+            # 入场要算止损，N 还没有值（预热期）的 bar 不判定，也不标假突破
+            n_at = n[i] if mode == "close" else (n[i - 1] if i else None)
+            if line is None or n_at is None:
                 continue
             if mode == "close":
-                if b["close"] > line and n[i] is not None:
-                    pos = {"i": i, "price": b["close"], "stop": b["close"] - 2 * n[i]}
+                if b["close"] > line:
+                    pos = {"i": i, "price": b["close"], "stop": b["close"] - 2 * n_at}
                     emit(i, "buy", "close", b["close"], line)
                     last_change_forming = forming
                 elif b["high"] > line:
                     emit(i, "buy", "touch" if forming else "false_break", line, line)
-            elif b["high"] > line and i and n[i - 1] is not None:
+            elif b["high"] > line:
                 price = max(b["open"], line)
-                pos = {"i": i, "price": price, "stop": price - 2 * n[i - 1]}
+                pos = {"i": i, "price": price, "stop": price - 2 * n_at}
                 emit(i, "buy", "touch", price, line)
                 last_change_forming = forming
-            continue
-        if i == pos["i"]:
-            continue
+            continue                     # 空仓的 bar（含刚入场那根）不判离场
         level = max(exit_[i], pos["stop"])
         if mode == "close":
             if b["close"] < level:

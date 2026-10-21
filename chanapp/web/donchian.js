@@ -35,13 +35,32 @@
     return out;
   }
 
-  // 标记样式：假突破空心；形成中（盘中、未定稿）淡色并加 ~；其余实心
+  // 标记样式：假突破空心；盘中触价与形成中（盘中、未定稿）的信号淡色并加 ~；收盘确认的实心
   function markerStyle(sig) {
+    var soft = sig.kind === 'touch' || sig.status === 'provisional';
     return {
       up: sig.side === 'buy',
-      fill: sig.kind === 'false_break' ? 'hollow' : sig.status === 'provisional' ? 'faint' : 'solid',
-      tilde: sig.status === 'provisional',
+      fill: sig.kind === 'false_break' ? 'hollow' : soft ? 'faint' : 'solid',
+      tilde: soft,
     };
+  }
+
+  // 两种判定方式的信号都画（判定方式靠标记样式区分；规则状态与止损线才跟随所选方式）。
+  // 同根同方向同类同线位的只留一个；淡色先画、空心其次、实心最后，实心压在上面
+  var FILL_ORDER = { faint: 0, hollow: 1, solid: 2 };
+  function allSignals(dc) {
+    var seen = {}, out = [];
+    ['close', 'touch'].forEach(function (m) {
+      (((dc && dc.modes) || {})[m] || {}).signals && dc.modes[m].signals.forEach(function (s) {
+        var k = s.time + '|' + s.side + '|' + s.kind + '|' + s.level;
+        if (!seen[k]) { seen[k] = true; out.push(s); }
+      });
+    });
+    return out.map(function (s, i) { return { s: s, i: i, r: FILL_ORDER[markerStyle(s).fill] }; })
+      .sort(function (a, b) {   // time 为同格式字符串，字典序即时间序
+        return a.r - b.r || (a.s.time < b.s.time ? -1 : a.s.time > b.s.time ? 1 : 0) || a.i - b.i;
+      })
+      .map(function (x) { return x.s; });
   }
 
   var KIND_TEXT = {
@@ -58,7 +77,7 @@
 
   // 图例：第 i 根的入场线、离场线、N；最后一根写明规则状态（按规则假设的持有／空仓，不是实际持仓）；
   // 规则状态持有且在入场之后显示止损；最后一根追加建议仓位与明日预估线；
-  // 该根有信号时追加信号说明。返回 [{label, value}]，由 app.js 拼 HTML
+  // 该根有信号时追加信号说明（两种判定方式的都列，所选方式在前，文字相同的只列一次）。返回 [{label, value}]，由 app.js 拼 HTML
   function legendParts(dc, i, mode) {
     if (!dc || !dc.rows || i == null || !dc.rows[i]) return [];
     var r = dc.rows[i], last = i === dc.rows.length - 1;
@@ -75,14 +94,19 @@
       parts.push({ label: '建议仓位', value: (dc.suggestion.weight * 100).toFixed(1) + '%（风险' +
         +(dc.suggestion.risk_budget * 100).toFixed(2) + '%）' });
     }
-    (m.signals || []).forEach(function (s) {
-      if (s.time === r.time) parts.push({ label: '', value: signalText(s) });
+    var texts = {};
+    [mode, mode === 'close' ? 'touch' : 'close'].forEach(function (k) {   // 所选方式的信号在前
+      (((dc.modes || {})[k] || {}).signals || []).forEach(function (s) {
+        var t = signalText(s);
+        if (s.time === r.time && !texts[t]) { texts[t] = true; parts.push({ label: '', value: t }); }
+      });
     });
     return parts;
   }
 
   var api = { KEYS: KEYS, MODES: MODES, STORE_KEY: STORE_KEY, STORE_MODE: STORE_MODE, readSettings: readSettings,
-    lineData: lineData, stopData: stopData, markerStyle: markerStyle, signalText: signalText, legendParts: legendParts };
+    lineData: lineData, stopData: stopData, markerStyle: markerStyle, allSignals: allSignals, signalText: signalText,
+    legendParts: legendParts };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.chanDonchian = api;
 })(this);

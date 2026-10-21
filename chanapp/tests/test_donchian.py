@@ -10,6 +10,9 @@
 - 形成中的 bar 上的信号没标 provisional；收盘确认模式下盘中触到但收盘没站上的 bar 没标出来；
 - 明日预估线没把最后一根算进去；
 - 建议仓位没设上限或 N 为 0 时除零。
+- 离场比较用了 <=；盘中触价跳空低开时按离场价而不是开盘价成交；盘中触价的止损用了当根 N；
+- 规则状态的有效离场价没取止损，或最后一根形成中时没用当根的离场线；
+- N 还没有值时把收盘突破误标成假突破；按日期而不是按根数取窗口（停牌、新股）。
 """
 import unittest
 
@@ -61,6 +64,20 @@ class LinesTests(unittest.TestCase):
         self.assertEqual(ns[:2], [None, None])
         self.assertAlmostEqual(ns[2], 2.0)                               # 首值 = 前 3 根 TR 均值
         self.assertAlmostEqual(ns[3], (2.0 * 2 + 2.5) / 3)               # Wilder：(前值×2 + TR)/3
+
+    def test_n_seed_is_mean_of_first_true_ranges(self):
+        # TR 依次 1、2、3：首值是均值 2，不是第一根的 1
+        out = calc([(10, 10.5, 9.5, 10), (10, 11, 9, 10), (10, 11.5, 8.5, 10)])
+        self.assertAlmostEqual(out["rows"][2]["n"], 2.0)
+
+    def test_windows_count_bars_not_calendar_days(self):
+        # 停牌跳过多日：窗口仍是前 3 根
+        bars = bars_from(FLAT + [(10, 12, 9.5, 11.5)])
+        for b, dt in zip(bars, ["2026-01-02", "2026-01-05", "2026-02-20", "2026-02-23"]):
+            b["dt"] = dt
+        out = donchian.compute(bars, params=P32, atr_n=3)["3/2"]
+        self.assertEqual(out["rows"][3]["entry"], 11)
+        self.assertEqual(out["modes"]["close"]["signals"][0]["time"], "2026-02-23")
 
 
 class CloseModeTests(unittest.TestCase):
@@ -124,13 +141,37 @@ class CloseModeTests(unittest.TestCase):
         rows = [(10, 10.2, 9.8, 10)] * 3 + [(10, 10.5, 9.9, 10.4), (10.4, 10.45, 9.0, 10.3), (10.3, 10.3, 9.2, 9.3)]
         out = calc(rows)
         sig = out["modes"]["close"]["signals"]
-        stop = 10.4 - 2 * out["rows"][3]["n"]
+        stop = 9.466667                                                   # TR 0.4×3 后 0.6：N = (0.4×2+0.6)/3，止损 10.4 − 2N
         self.assertEqual([(s["time"], s["side"], s["kind"]) for s in sig],
                          [("2026-01-04", "buy", "close"),
                           ("2026-01-05", "sell", "false_break"),           # 深探 9.0 跌破离场线 9.8 但收回
                           ("2026-01-06", "sell", "close")])
-        self.assertAlmostEqual(sig[2]["level"], stop)                       # max(离场线 9.0, 止损 9.467)
+        self.assertAlmostEqual(sig[2]["level"], stop, places=6)             # max(离场线 9.0, 止损 9.467)
         self.assertEqual(sig[2]["price"], 9.3)
+        # 离场前一根：规则状态的有效离场价也取止损（离场线已被拉低到 9.0）
+        before = calc(rows[:5])["modes"]["close"]["state"]
+        self.assertAlmostEqual(before["effective_exit"], stop, places=6)
+
+    def test_exit_equal_to_level_is_not_an_exit(self):
+        # 入场后第 5 根最低与收盘都恰好等于有效离场价 9：两种方式都不离场、也不算假跌破
+        out = calc(FLAT + [(10, 12, 9.5, 11.5), (10, 11, 9, 9)])
+        for mode in ("close", "touch"):
+            self.assertEqual([s["side"] for s in out["modes"][mode]["signals"]], ["buy"], mode)
+            self.assertTrue(out["modes"][mode]["state"]["holding"], mode)
+
+    def test_state_exit_on_forming_last_bar_is_that_bars_line(self):
+        rows = FLAT + [(10, 12, 9.5, 11.5), (11.5, 12.5, 10.5, 12)]
+        # 最后一根形成中：接下来判定的就是它，离场线 = 第 3、4 根最低 min(9, 9.5)
+        self.assertEqual(calc(rows, forming_last=True)["modes"]["close"]["state"]["effective_exit"], 9)
+        # 已收盘：判定的是下一根，离场线 = 第 4、5 根最低 min(9.5, 10.5)
+        self.assertEqual(calc(rows)["modes"]["close"]["state"]["effective_exit"], 9.5)
+
+    def test_no_signal_before_n_exists(self):
+        # 入场线已有值（3 根）但 N 要 20 根：不入场，也不把收盘突破标成假突破
+        out = donchian.compute(bars_from(FLAT + [(10, 12, 9.5, 11.5)]), params=P32, atr_n=20)["3/2"]
+        self.assertEqual(out["rows"][3]["entry"], 11)
+        self.assertEqual(out["modes"]["close"]["signals"], [])
+        self.assertEqual(out["modes"]["touch"]["signals"], [])
 
     def test_exit_touch_without_close_is_false_break(self):
         rows = FLAT + [(10, 12, 9.5, 11.5), (11.5, 12, 8.9, 11)]
@@ -152,6 +193,19 @@ class TouchModeTests(unittest.TestCase):
         st = gap["modes"]["touch"]["state"]
         self.assertAlmostEqual(st["stop"], 11.8 - 2 * 2.0)                 # 盘中下单时只知道上一根的 N
 
+    def test_touch_stop_uses_previous_bars_n(self):
+        # 入场那根 TR = 4，N 从 2 升到 8/3；止损按上一根的 N=2：11.8 − 4 = 7.8
+        out = calc(FLAT + [(11.8, 14, 11.6, 13)])
+        self.assertAlmostEqual(out["rows"][3]["n"], 8 / 3)
+        self.assertAlmostEqual(out["modes"]["touch"]["state"]["stop"], 7.8)
+
+    def test_touch_exit_gap_down_fills_at_open(self):
+        # 第 4 根触价入场（价 11，止损 7）；第 5 根低开 8.5 在离场线 9 之下：按开盘价离场
+        out = calc(FLAT + [(10, 12, 9.5, 11.5), (8.5, 9, 8, 8.8)])
+        self.assertEqual(out["modes"]["touch"]["signals"][-1],
+                         {"time": "2026-01-05", "side": "sell", "kind": "touch", "status": "confirmed",
+                          "price": 8.5, "level": 9})
+
     def test_touch_on_forming_bar_is_provisional(self):
         out = calc(FLAT + [(10, 12, 9.5, 10.5)], forming_last=True)
         self.assertEqual(out["modes"]["touch"]["signals"][0]["status"], "provisional")
@@ -167,11 +221,16 @@ class TouchModeTests(unittest.TestCase):
 class SuggestionTests(unittest.TestCase):
     def test_weight_is_risk_budget_over_stop_distance(self):
         out = calc(FLAT + [(10, 12, 9.5, 11.5)])
-        n = out["rows"][-1]["n"]
         s = out["suggestion"]
-        self.assertAlmostEqual(s["stop_distance"], 2 * n / 11.5)
-        self.assertAlmostEqual(s["weight"], 0.01 / (2 * n / 11.5))
+        self.assertAlmostEqual(s["stop_distance"], 0.376812, places=6)   # 2N = 13/3，÷ 收盘 11.5
+        self.assertAlmostEqual(s["weight"], 0.026538, places=6)          # 1% ÷ 0.376812
         self.assertEqual(s["risk_budget"], 0.01)
+
+    def test_weight_capped_when_stop_is_tighter_than_budget(self):
+        # TR 0.2 → 止损距离 0.4%，1% ÷ 0.4% = 2.5，封顶 1
+        out = calc([(100, 100.1, 99.9, 100)] * 4)
+        self.assertAlmostEqual(out["suggestion"]["stop_distance"], 0.004)
+        self.assertEqual(out["suggestion"]["weight"], 1.0)
 
     def test_weight_capped_and_zero_n_safe(self):
         out = calc([(10, 10, 10, 10)] * 4)
