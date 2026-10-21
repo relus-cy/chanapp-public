@@ -353,7 +353,7 @@
       var out = { v: 1, kind: d.kind, adjust: view.adjust, anchors: anchors, style: styleDiff(d.kind, d.style),
         ref: view.adjust === 'qfq' ? refFor(view.bars, view.freq) : null };
       if (prev && prev.locked === true) out.locked = true;      // 「锁定全部」只是本页的显示状态，不写进画线
-      if (prev && prev.alert) out.alert = prev.alert;
+      if (prev && d.kind === ALERT_KIND && prev.alert && ALERT_DIRECTIONS[prev.alert.direction]) out.alert = { direction: prev.alert.direction };
       return out;
     }
     function ownBody(rec) { return rec.local || readBody(rec.body); }

@@ -127,6 +127,18 @@ class AlertLinesApiTests(unittest.TestCase):
                          {"price": 400.0, "price_time": None, "stale": True})
         self.assertEqual([x["drawing_id"] for x in self.alert_lines("?code=hk00700")], ["hk-line-001"])
 
+    def test_line_drawn_after_the_last_ex_rights_keeps_its_price(self):
+        # 09-24 前复权收盘 20.03 × 16.77 / 20.0 = 16.795155；页面记下的参照是图表上的 4 位小数 16.7952。
+        # 之后没有新除权，线价应原样给出，不因参照与当前收盘的位数不同出现 999.9973
+        with engine_data._collector().writer() as conn:
+            facts.commit_day_rows(conn, [day_row("sz000002", "2026-09-24", 20.03, 20.0),
+                                         day_row("sz000002", "2026-09-25", 20.0, 20.03)], market="CN", kind="stock",
+                                  item="day_history", source="mairui", binding_gen=1, today=TODAY)
+            facts.commit_day_rows(conn, [day_row("sz000002", TODAY, None, 16.77, prov="preopen")], market="CN",
+                                  kind="stock", item="preopen_ref", source="mairui", binding_gen=1, today=TODAY)
+        self.put("sz000002", "same-basis1", hline(1000.0, ref={"day": "2026-09-24", "close": 16.7952}))
+        self.assertEqual([(x["price"], x["drawn_price"]) for x in self.alert_lines()], [(1000.0, 1000.0)])
+
     def test_deleted_unmarked_and_invalid_lines_are_left_out(self):
         self.put("sh600926", "plain-line1", hline(19.0, adjust="raw", alert=None))
         gone = self.put("sh600926", "gone-line01", hline(19.1, adjust="raw"))

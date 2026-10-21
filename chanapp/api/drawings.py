@@ -120,7 +120,8 @@ def alert_lines(lines, quotes, closes) -> list:
         if body["adjust"] == "qfq" and kind_of(code) != "index":
             day, ref_close = _ref_close(body)
             now_close = (closes.get(code) or {}).get(day) if day else None
-            price = drawn * now_close / ref_close if now_close else None
+            # 页面记下的参照收盘是图表上 4 位小数的价：当前收盘同样舍入，没有新除权时比例恰为 1
+            price = drawn * round(now_close, 4) / ref_close if now_close else None
         q = quotes.get(code) or {}
         out.append({"code": code, "drawing_id": line["id"], "direction": body["alert"]["direction"],
                     "price": price, "drawn_adjust": body["adjust"], "drawn_price": drawn,
@@ -184,8 +185,13 @@ class DrawingStore:
         out = []
         for r in rows:
             body = json.loads(r["body"])
-            if body.get("kind") == ALERT_KIND and isinstance(body.get("alert"), dict):
-                out.append({"code": r["code"], "id": r["id"], "body": body})
+            if "alert" not in body:
+                continue
+            try:
+                _validate_alert(body)               # 校验之前存下的坏记录跳过，不拖垮其余提醒线
+            except ValueError:
+                continue
+            out.append({"code": r["code"], "id": r["id"], "body": body})
         return out
 
     def put(self, code, id_, body, base_revision, *, at=None) -> dict:
