@@ -36,6 +36,7 @@
     p.upA = hexA(up, .45); p.downA = hexA(down, .45); p.goldA = hexA(gold, .55);
     p.zsFill = hexA(gold, chart.zsFillA); p.zsLine = hexA(gold, chart.zsLineA);
     [5, 13, 20, 60, 144, 250].forEach(function (n) { p['ma' + n] = v('--ma' + n); });
+    p.dc = v('--dc'); p.dcStop = v('--dc-stop');
     return p;
   }
 
@@ -83,6 +84,10 @@
   // 结构层（笔/段/中枢/通道线/买卖点标记）显隐：只影响主图显示，分析、共振和 AI 照常
   var structureVisible = true;
   try { if (localStorage.getItem('chanapp-structure-visible') === '0') structureVisible = false; } catch (_) {}
+  // 唐奇安通道显示设置（参数组 off/20/10/55/20、判定方式 close/touch）：只影响主图显示，数值随 /api/chart 下发
+  var dcSettings = typeof chanDonchian !== 'undefined'
+    ? chanDonchian.readSettings(function (k) { return localStorage.getItem(k); }) : { key: 'off', mode: 'close' };
+  var dcIndex = {};          // 原始 time → donchian.rows 下标（图例按 bar 取值）
   var historyState = { loading: false, hasMore: false, reqId: 0 };
   var lastChartData = null;  // 最近一次 /api/chart 响应，主题切换时原路径重渲染
   var loadedTarget = null;   // 当前图表内容归属 {code, freq, adjust}，后台刷新据此判定是否保留可视区间
@@ -875,6 +880,70 @@
     return overlay;
   }
 
+  // ---------- 唐奇安：明日预估虚线与信号标记（覆盖 canvas，与中枢同法） ----------
+  // 虚线只从最后一根向右延伸一格：它是把最后一根也算进去的下一根入场线、离场线，收盘前会变。
+  // 标记画在被越过的那条线上（不放在 K 线上下方，免得和缠论买卖点箭头叠在一起）：
+  // 买 ▲ 贴在线下、卖 ▼ 贴在线上；实心 = 已确认，淡色加 ~ = 形成中，空心 = 假突破。
+
+  function makeDcOverlay(container, chart, series) {
+    var canvas = document.createElement('canvas');
+    canvas.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:5;';
+    container.appendChild(canvas);
+    var overlay = {
+      _data: null,
+      set: function (data) { this._data = data; deferred(); },
+      redraw: function () {
+        var dpr = window.devicePixelRatio || 1;
+        var w = container.clientWidth, hgt = container.clientHeight;
+        if (canvas.width !== w * dpr || canvas.height !== hgt * dpr) {
+          canvas.width = w * dpr; canvas.height = hgt * dpr;
+          canvas.style.width = w + 'px'; canvas.style.height = hgt + 'px';
+        }
+        var ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, hgt);
+        var d = overlay._data;
+        if (!d) return;
+        var ts = chart.timeScale();
+        ctx.save();
+        ctx.beginPath(); ctx.rect(0, 0, ts.width(), hgt); ctx.clip();   // 不画进价格轴
+        var lastX = ts.timeToCoordinate(d.lastTime);
+        if (lastX !== null && d.next) {
+          var span = ts.options().barSpacing || 6;
+          ctx.strokeStyle = P.dc; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+          [d.next.entry, d.next.exit].forEach(function (v) {
+            var y = v == null ? null : series.priceToCoordinate(v);
+            if (y === null) return;
+            ctx.beginPath(); ctx.moveTo(lastX, y); ctx.lineTo(lastX + span, y); ctx.stroke();
+          });
+          ctx.setLineDash([]);
+        }
+        (d.signals || []).forEach(function (s) {
+          var x = ts.timeToCoordinate(s.t), y = series.priceToCoordinate(s.level);
+          if (x === null || y === null) return;
+          var st = chanDonchian.markerStyle(s), color = st.up ? P.up : P.down;
+          var r = 4.5, tip = st.up ? y + 2 : y - 2, base = st.up ? tip + 7 : tip - 7;
+          ctx.beginPath(); ctx.moveTo(x, tip); ctx.lineTo(x - r, base); ctx.lineTo(x + r, base); ctx.closePath();
+          if (st.fill === 'hollow') {
+            ctx.fillStyle = P.bg; ctx.fill();
+            ctx.lineWidth = 1.25; ctx.strokeStyle = color; ctx.stroke();
+          } else {
+            ctx.fillStyle = st.fill === 'faint' ? hexA(color, 0.45) : color; ctx.fill();
+          }
+          if (st.tilde) {
+            ctx.fillStyle = hexA(color, 0.8); ctx.font = '10px ' + 'ui-monospace, Menlo, monospace';
+            ctx.textBaseline = 'middle'; ctx.fillText('~', x + r + 1, (tip + base) / 2);
+          }
+        });
+        ctx.restore();
+      },
+    };
+    var deferred = function () { requestAnimationFrame(function () { overlay.redraw(); }); };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(deferred);
+    new ResizeObserver(deferred).observe(container);
+    return overlay;
+  }
+
   // ---------- 十字光标图例（主图左上角，默认显示最新一根） ----------
 
   // 成交量单位是股（所有市场、所有周期统一），图例换算为万股/亿股
@@ -971,7 +1040,32 @@
       ' 低<b>' + bar.low.toFixed(2) + '</b>' +
       ' 收<b>' + bar.close.toFixed(2) + '</b>' +
       ' <span class="' + pctCls + '">' + pct + '</span>' +
-      ' <span class="dim">量' + fmtVol(bar.volume) + '</span>' + since;
+      ' <span class="dim">量' + fmtVol(bar.volume) + '</span>' + since + dcLegend(bar);
+    placeAxisAnchor();
+  }
+
+  // 唐奇安读数单独占一行：日期锚点让到图例下方（只往下让，不改没有唐奇安时的位置）。
+  // 图例内容变化与窗口宽度变化（图例折行变高）都要重算，后者由 ResizeObserver 触发
+  function placeAxisAnchor() {
+    var anchor = el('axisAnchor');
+    if (!anchor || !legendEl) return;
+    anchor.style.top = '';
+    var need = legendEl.offsetTop + legendEl.offsetHeight + 4;
+    if (legendEl.querySelector('.dc-legend') && need > anchor.offsetTop) anchor.style.top = need + 'px';
+  }
+
+  // 图例尾部的唐奇安读数：开关打开时显示该根的入场线、离场线、N 等；本视图不提供（不复权个股）时说明原因
+  function dcLegend(bar) {
+    if (dcSettings.key === 'off' || !lastChartData) return '';
+    var dc = lastChartData.donchian && lastChartData.donchian[dcSettings.key];
+    if (!dc) return '<div class="dc-legend dim">唐奇安仅前复权下显示</div>';
+    var i = dcIndex[bar.time];
+    if (i == null) return '';
+    var parts = chanDonchian.legendParts(dc, i, dcSettings.mode);
+    return '<div class="dc-legend"><i class="dot" aria-hidden="true"></i>DC' + esc(dcSettings.key) +
+      parts.map(function (p) {
+        return p.label ? ' ' + esc(p.label) + '<b>' + esc(p.value) + '</b>' : ' <span class="dc-sig">' + esc(p.value) + '</span>';
+      }).join('') + '</div>';
   }
 
   function legendLatest() {
@@ -1032,6 +1126,15 @@
     // 不能像确认结构那样拼成单条折线——否则不相交的段之间会被直线连接。
 
     var zsOverlay = makeZsOverlay(el('chart'), main, candleSeries);
+    // 唐奇安：入场线、离场线为阶梯实线（当根全天不变），止损线只在规则状态持有时画；不受结构层显隐影响
+    function dcLine() {
+      return main.addSeries(LW.LineSeries, {
+        lineWidth: 1, lineType: LW.LineType.WithSteps, visible: false,
+        crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+      });
+    }
+    var dcEntry = dcLine(), dcExit = dcLine(), dcStop = dcLine();
+    var dcOverlay = makeDcOverlay(el('chart'), main, candleSeries);
 
     // 十字线主副图联动：指针所在图（源）的十字线停在某根 bar，另一图在同一时间画竖线，图例与副图读数跟随该 bar；
     // 移出回落到最新一根。跟随一侧关掉横线与价格标签（那里的纵轴不是同一量纲）。
@@ -1040,6 +1143,7 @@
     // charts 只建一次，订阅一次即可；数据经 klineData/klineByTime 按 load 更新。
     // 指针在哪张图由 wireChartPointer 跟踪（crossPointer）。
     legendEl = el('ohlc');
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(placeAxisAnchor).observe(legendEl);
     function followCrosshair(src, dst, param, place) {
       if (crossPointer !== src) return;
       var hit = param.time != null ? klineByTime[param.time] : null;
@@ -1096,6 +1200,7 @@
       volumeSeries: volumeSeries, biSeries: biSeries, xdSeries: xdSeries,
       formingBiSegs: [], formingXdSegs: [],
       zsOverlay: zsOverlay, markers: markers, channelSeries: [],
+      dcEntry: dcEntry, dcExit: dcExit, dcStop: dcStop, dcOverlay: dcOverlay,
     };
     return charts;
   }
@@ -1357,6 +1462,79 @@
         e.stopImmediatePropagation();  // 已消费 Esc：下层浮层（aiPop/rulesPop）不再同键连关
       }
     });
+  }
+
+  // ---------- 唐奇安通道（主图叠加；数值来自 /api/chart 的 donchian 字段） ----------
+
+  function currentDc() {
+    var all = lastChartData && lastChartData.donchian;
+    return dcSettings.key !== 'off' && all ? all[dcSettings.key] || null : null;
+  }
+
+  // 按当前设置重画唐奇安的线、虚线与标记。调用方若在缠论买卖点标记之后调用，须随后 charts.markers.refresh()
+  // （markers 插件对其后的 series setData 敏感，见 renderChart 注释）
+  function renderDonchian() {
+    if (!charts) return;
+    var c = charts, dc = currentDc();
+    var mode = dc ? (dc.modes || {})[dcSettings.mode] || {} : {};
+    dcIndex = {};
+    if (dc) dc.rows.forEach(function (r, i) { dcIndex[r.time] = i; });
+    c.dcEntry.applyOptions({ color: P.dc, visible: !!dc });
+    c.dcExit.applyOptions({ color: P.dc, visible: !!dc });
+    c.dcStop.applyOptions({ color: P.dcStop, visible: !!dc });
+    c.dcEntry.setData(dc ? chanDonchian.lineData(dc.rows, 'entry', toTime) : []);
+    c.dcExit.setData(dc ? chanDonchian.lineData(dc.rows, 'exit', toTime) : []);
+    c.dcStop.setData(dc ? chanDonchian.stopData(dc.rows, mode.state, toTime) : []);
+    c.dcOverlay.set(dc && dc.rows.length ? {
+      lastTime: toTime(dc.rows[dc.rows.length - 1].time), next: dc.next,
+      signals: (mode.signals || []).map(function (s) { return Object.assign({ t: toTime(s.time) }, s); }),
+    } : null);
+  }
+
+  function syncDcControl() {
+    var on = dcSettings.key !== 'off';
+    el('dcSeg').classList.toggle('on', on);
+    el('dcSegCur').textContent = on ? 'DC ' + dcSettings.key + (dcSettings.mode === 'touch' ? ' · 触价' : '') : '唐奇安';
+    document.querySelectorAll('#dcSegPop [data-dc]').forEach(function (b) {
+      b.setAttribute('aria-checked', b.dataset.dc === dcSettings.key ? 'true' : 'false');
+    });
+    document.querySelectorAll('#dcSegPop [data-dcmode]').forEach(function (b) {
+      b.setAttribute('aria-checked', b.dataset.dcmode === dcSettings.mode ? 'true' : 'false');
+    });
+  }
+
+  function wireDcSeg() {
+    var wrap = el('dcSeg'), btn = el('dcSegBtn'), pop = el('dcSegPop');
+    function setOpen(open) {
+      pop.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    btn.addEventListener('click', function () { setOpen(pop.hidden); });
+    // 选项不关菜单：参数组与判定方式常一起调，看着图切换
+    pop.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.dc) {
+        dcSettings.key = b.dataset.dc;
+        try { localStorage.setItem(chanDonchian.STORE_KEY, dcSettings.key); } catch (_) {}
+      } else if (b.dataset.dcmode) {
+        dcSettings.mode = b.dataset.dcmode;
+        try { localStorage.setItem(chanDonchian.STORE_MODE, dcSettings.mode); } catch (_) {}
+      } else return;
+      syncDcControl();
+      renderDonchian();
+      if (charts) charts.markers.refresh();
+      legendLatest();
+    });
+    document.addEventListener('click', function (e) {
+      if (!pop.hidden && !wrap.contains(e.target)) setOpen(false);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !pop.hidden) {
+        setOpen(false); btn.focus();
+        e.stopImmediatePropagation();
+      }
+    });
+    syncDcControl();
   }
 
   // ---------- 多级别共振角标 ----------
@@ -2478,7 +2656,9 @@
       c.macdChart.timeScale().setVisibleLogicalRange(range);
     }
 
-    // 信号箭头必须在同一任务内所有 series 更新（K线/MA/通道/可视区间）之后设置：
+    renderDonchian();
+
+    // 信号箭头必须在同一任务内所有 series 更新（K线/MA/通道/唐奇安/可视区间）之后设置：
     // lightweight-charts 5.0.9 markers 插件对其后的 series setData 敏感（上游 issue #1990），
     // 否则新 bar 到达时箭头按旧索引落位并持续错位，直到下一次重绘才跳回
     c.markers.setMarkers(buildMarkers(data.signals));
@@ -3019,6 +3199,7 @@
   }
   wireMaSeg();
   wireSubSeg();
+  wireDcSeg();
   wireChartPointer();
   wireCardsNav();
 
@@ -3083,7 +3264,7 @@
     });
     document.addEventListener('keydown', function (ev) {
       if (ev.key !== 'Escape' || !pop.classList.contains('open')) return;
-      if (el('aiPop').classList.contains('open') || !el('subSegPop').hidden) return;  // 上层浮层先消费 Esc（其 handler 已 stopImmediatePropagation，此处仅兜底）
+      if (el('aiPop').classList.contains('open') || !el('subSegPop').hidden || !el('dcSegPop').hidden) return;  // 上层浮层先消费 Esc（其 handler 已 stopImmediatePropagation，此处仅兜底）
       setOpen(false, true);
     });
   }
@@ -3582,7 +3763,7 @@
       if (!drawCtl || !drawCtl.consumesEscape()) return;
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target && ev.target.tagName || '')) return;
       if (el('rulesPop').classList.contains('open') || el('aiPop').classList.contains('open') ||
-          !el('subSegPop').hidden || el('periodDialog').open) return;
+          !el('subSegPop').hidden || !el('dcSegPop').hidden || el('periodDialog').open) return;
       var dm = drawCtl.manager;
       if (dm.tool()) dm.setTool(null); else dm.select([]);
       ev.preventDefault();

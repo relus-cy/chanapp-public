@@ -181,3 +181,30 @@ test('evidence and resonance details return focus and close on a period change',
   await expect(browser.locator('#aiPop')).toHaveAttribute('aria-hidden', 'true');
   await expect(browser.locator('#cardsDock')).not.toHaveAttribute('inert');
 });
+
+test('donchian toggle shows the pinned sample channel, keeps its choice across reload and explains raw', async ({ app, browser, screen }) => {
+  await openChart({ app, browser });
+  await expect(browser.locator('#dcSegCur')).toHaveText('唐奇安');
+  await expect(browser.locator('#ohlc .dc-legend')).toHaveCount(0);
+  await browser.locator('#dcSegBtn').tap();
+  await browser.locator('#dcSegPop [data-dc="20/10"]').tap();
+  // The menu stays open for the mode choice; Esc closes it without touching the drawing tools.
+  await expect(browser.locator('#dcSegPop')).toBeVisible();
+  await browser.keyboard.press('Escape');
+  await expect(browser.locator('#dcSegBtn')).toHaveAttribute('aria-expanded', 'false');
+  await screen.getByRole('button', '切换日间/夜间主题').hover();
+  // Literal oracle for the bundled 2026-09-24 qfq daily sample, computed outside the app:
+  // previous-20 high, previous-10 low, Wilder ATR(20), 1% / (2N / close).
+  const latest = 'DC20/10 入974.99 出858.00 N53.19 下一根入 974.99 出 858.00 建议仓位8.4%';
+  await expect(browser.locator('#ohlc .dc-legend')).toHaveText(latest);
+  await browser.locator('#dcSegBtn').tap();
+  await browser.locator('#dcSegPop [data-dcmode="touch"]').tap();
+  await browser.keyboard.press('Escape');
+  await expect(browser.locator('#dcSegCur')).toHaveText('DC 20/10 · 触价');
+  await chartAction(browser, () => browser.reload(), /\/api\/chart\?.*freq=day&/);
+  await expect(browser.locator('#dcSegCur')).toHaveText('DC 20/10 · 触价');
+  await expect(browser.locator('#dcSegPop [data-dcmode="touch"]')).toHaveAttribute('aria-checked', 'true');
+  await chartAction(browser, () => screen.getByRole('button', '不复权').tap(), /\/api\/chart\?.*adjust=raw&/);
+  await screen.getByRole('button', '切换日间/夜间主题').hover();
+  await expect(browser.locator('#ohlc .dc-legend')).toHaveText('唐奇安仅前复权下显示');
+});

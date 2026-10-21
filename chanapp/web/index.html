@@ -28,6 +28,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     --up: #d63f33;
     --down: #2e8ca3;
     --ma5: #6a7079; --ma13: #7d5f0c; --ma20: #2e8ca3; --ma60: #d63f33; --ma144: #8a72b8; --ma250: #4f7fb8;
+    --dc: #b03a8c; --dc-stop: #c25e12;   /* 唐奇安通道线、止损线：避开金（结构）、红青（涨跌）与均线色 */
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
     /* 圆角同心：内层 = 外层 − 内边距（分段 4 = 轨道 6 − 2；浮层内行 8 = 浮层 12 − 4） */
     --radius-xs: 4px;   /* 分段胶囊、小标签 */
@@ -64,6 +65,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     --up: #df4b3e;
     --down: #3aa6b9;
     --ma5: #9aa2ad; --ma13: #c9a24d; --ma20: #3aa6b9; --ma60: #df4b3e; --ma144: #a58fd6; --ma250: #6f9fd8;
+    --dc: #da78c0; --dc-stop: #e8873d;
     /* 夜间浮起的面要比所在面亮一级，不能沿用比面板还暗的 --overlay */
     --material: rgba(30,33,40,.86);
     --material-solid: #1c1f25;
@@ -459,14 +461,14 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
      可见（同步可聚焦）。 */
   /* 浮层统一材质（图层与规则、展示周期对话框、搜索候选、副图指标菜单）：同圆角、描边、阴影、半透明模糊底，
      打开时同一段轻微下落淡入；不支持 backdrop-filter 时退回不透明底保证可读 */
-  .rules-pop, .period-dialog, #sidebar .wl-drop, #subSegPop {
+  .rules-pop, .period-dialog, #sidebar .wl-drop, #subSegPop, #dcSegPop {
     background: var(--material); -webkit-backdrop-filter: saturate(1.5) blur(16px); backdrop-filter: saturate(1.5) blur(16px);
     border: 1px solid var(--line2); border-radius: var(--radius-l); box-shadow: var(--shadow-float);
   }
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    .rules-pop, .period-dialog, #sidebar .wl-drop, #subSegPop { background: var(--material-solid); }
+    .rules-pop, .period-dialog, #sidebar .wl-drop, #subSegPop, #dcSegPop { background: var(--material-solid); }
   }
-  .rules-pop.open, .period-dialog[open], #sidebar .wl-drop:not([hidden]), #subSegPop:not([hidden]) {
+  .rules-pop.open, .period-dialog[open], #sidebar .wl-drop:not([hidden]), #subSegPop:not([hidden]), #dcSegPop:not([hidden]) {
     animation: popIn var(--dur) var(--ease);
   }
   @keyframes popIn { from { opacity: 0; transform: translateY(-4px) scale(.985); } to { opacity: 1; transform: none; } }
@@ -632,6 +634,34 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   }
   #subSeg #subSegPop button.active { background: var(--raise); color: var(--gold); }
   @media (hover:hover) { #subSeg #subSegPop button:hover { background: var(--raise); } }
+  /* 唐奇安：主图叠加，按钮 + 菜单（参数组、判定方式两组单选，选了不关菜单） */
+  #dcSeg { position: relative; }
+  #dcSeg #dcSegBtn { gap: 4px; }
+  #dcSeg.on #dcSegBtn { color: var(--dc); background: var(--capsule); box-shadow: var(--shadow-raise); }
+  #dcSegBtn svg { width: 9px; height: 9px; flex-shrink: 0; }
+  #dcSeg .dot, .dc-legend .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--dc); }
+  #dcSeg .dot { margin-right: 2px; }
+  /* 副图栏在主图下沿，菜单较高：向上展开，落在主图上，不被视口底边裁掉 */
+  #dcSegPop {
+    position: absolute; bottom: calc(100% + 6px); left: -1px; z-index: 30; width: 236px;
+    display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  }
+  #dcSegPop[hidden] { display: none; }
+  #dcSegPop .dc-head { font-size: 10px; color: var(--faint); padding: 6px 10px 2px; font-family: inherit; }
+  #dcSeg #dcSegPop button {
+    display: flex; align-items: center; justify-content: space-between; width: 100%; height: auto; text-align: left;
+    padding: 5px 10px; border-radius: var(--radius-m); box-shadow: none; background: transparent;
+  }
+  #dcSeg #dcSegPop button[aria-checked="true"] { background: var(--raise); color: var(--dc); }
+  #dcSegPop button .ck { width: 12px; height: 12px; visibility: hidden; }
+  #dcSegPop button[aria-checked="true"] .ck { visibility: visible; }
+  @media (hover:hover) { #dcSeg #dcSegPop button:hover { background: var(--raise); } }
+  #dcSegPop .dc-help { margin: 6px 4px 2px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 11px;
+    line-height: 1.55; color: var(--dim); font-family: inherit; }
+  #dcSegPop .dc-help p { margin: 0 0 3px; }
+  .dc-legend { overflow: hidden; text-overflow: ellipsis; }
+  .dc-legend .dot { margin: 0 4px 0 0; vertical-align: 1px; }
+  .dc-legend .dc-sig { color: var(--dc); }
   #subNote { font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #sub { flex: 1; min-height: 0; position: relative; }
 
@@ -808,7 +838,8 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   @container (max-width: 700px) {
     .res-bar { height: auto; flex-basis: auto; flex-wrap: wrap; gap: 6px 12px; }
     .resonance { flex-basis: 100%; }
-    #subBar { display: grid; grid-template-columns: 1fr; justify-items: start; height: 86px; gap: 4px; }
+    #subBar { display: grid; grid-template-columns: auto 1fr; justify-items: start; height: 86px; gap: 4px 8px; }
+    #maSeg, #subNote { grid-column: 1 / -1; }
     #subNote { max-width: 100%; height: 16px; }
     .legend { white-space: normal; max-width: calc(100% - 85px); line-height: 1.5; }
     #axisAnchor { top: 66px; }
@@ -836,7 +867,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     #sidebar, #page, .sb-btn, .seg button, .freq button,
     #center .resonance, #center #chartWrap, #rail, #aiPop { transition: none; }
     .rules-pop, .soft-btn, .rule-option button, #ruleSummary, .hd-btn, #themeBtn, #aiRefresh, #loadBar { transition: none; }
-    .rules-pop.open, .period-dialog[open], #sidebar .wl-drop:not([hidden]), #subSegPop:not([hidden]) { animation: none; }
+    .rules-pop.open, .period-dialog[open], #sidebar .wl-drop:not([hidden]), #subSegPop:not([hidden]), #dcSegPop:not([hidden]) { animation: none; }
     /* 加载细线不移动：静态低对比整条 */
     #loadBar::before { animation: none; transform: none; width: 100%; background: var(--gold); opacity: .35; }
     #sidebar .item, #sidebar .wl-add, #sidebar .item .del, #sidebar .item .star, #sidebar .item .add, .hd-btn { transition: none; }
@@ -979,6 +1010,26 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
           <button data-ma="144"><i class="dot" style="background:var(--ma144)"></i>MA144</button>
           <button data-ma="250"><i class="dot" style="background:var(--ma250)"></i>MA250</button>
         </div>
+        <div class="seg" id="dcSeg">
+          <button id="dcSegBtn" aria-haspopup="true" aria-expanded="false" aria-controls="dcSegPop" title="唐奇安通道（海龟交易法）：主图叠加入场线、离场线与突破标记"><i class="dot" aria-hidden="true"></i><span id="dcSegCur">唐奇安</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+          <div id="dcSegPop" role="group" aria-label="唐奇安通道设置" hidden>
+            <div class="dc-head" id="dcHeadParams">参数（入场 / 离场）</div>
+            <div role="radiogroup" aria-labelledby="dcHeadParams">
+              <button type="button" role="radio" data-dc="off" aria-checked="true">关闭<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+              <button type="button" role="radio" data-dc="20/10" aria-checked="false">20 / 10<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+              <button type="button" role="radio" data-dc="55/20" aria-checked="false">55 / 20<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+            </div>
+            <div class="dc-head" id="dcHeadMode">判定方式</div>
+            <div role="radiogroup" aria-labelledby="dcHeadMode">
+              <button type="button" role="radio" data-dcmode="close" aria-checked="true">收盘确认<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+              <button type="button" role="radio" data-dcmode="touch" aria-checked="false">盘中触价<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+            </div>
+            <div class="dc-help">
+              <p>实线当天不变；短虚线是把最新一根算进去的下一根线位，收盘前会变。</p>
+              <p>▲▼ 实心为已确认，淡色带 ~ 为形成中，空心为假突破。橙线为规则止损，只在规则持有时显示，与实际持仓无关。</p>
+            </div>
+          </div>
+        </div>
         <div class="seg" id="subSeg" title="副图指标（单选）">
           <button id="subSegBtn" aria-haspopup="true" aria-expanded="false"><span id="subSegCur">MACD</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
           <div id="subSegPop" hidden>
@@ -1050,6 +1101,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
 </div>
 <script src="/vendor/lightweight-charts.standalone.production.js"></script>
 <script src="/indicators.js"></script>
+<script src="/donchian.js"></script>
 <script src="/vendor/lightweight-charts-drawing.umd.js"></script>
 <script src="/drawings.js"></script>
 <script src="/app.js"></script>

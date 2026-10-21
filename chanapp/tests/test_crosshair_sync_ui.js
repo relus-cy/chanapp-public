@@ -55,7 +55,7 @@ function env() {
   const context = {
     structureVisible: true,
     LightweightCharts: {
-      CandlestickSeries: 'candle', HistogramSeries: 'hist', LineSeries: 'line', LineStyle: { Dashed: 1 },
+      CandlestickSeries: 'candle', HistogramSeries: 'hist', LineSeries: 'line', LineStyle: { Dashed: 1 }, LineType: { WithSteps: 1 },
       createChart(container) { const c = fakeChart(made.length ? 'sub' : 'main'); made.push(c); return c; },
       createSeriesMarkers: () => ({ setMarkers() {} }),
     },
@@ -63,6 +63,8 @@ function env() {
     el: id => nodes[id] || (nodes[id] = mkEl()),
     document: { querySelectorAll: () => [] },
     makeZsOverlay: () => ({ setBoxes() {} }),
+    makeDcOverlay: () => ({ set() {} }),
+    placeAxisAnchor() {},
     P: new Proxy({}, { get: (_, k) => String(k) }),
     chanIndicators,
     axisTick() {}, axisLabel() {}, updateAxisAnchor() {},

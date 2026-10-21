@@ -52,7 +52,7 @@ function fakeChart() {
 const chartEl = mkEl(), subEl = mkEl(), ohlcEl = mkEl(), subNoteEl = mkEl();
 const made = [];
 const LW = {
-  CandlestickSeries: 'c', HistogramSeries: 'h', LineSeries: 'l', LineStyle: { Dashed: 1 },
+  CandlestickSeries: 'c', HistogramSeries: 'h', LineSeries: 'l', LineStyle: { Dashed: 1 }, LineType: { WithSteps: 1 },
   createChart(el) { const c = fakeChart(); c._el = el; made.push(c); return c; },
   createSeriesMarkers: () => ({ setMarkers() {} }),
 };
@@ -66,6 +66,8 @@ const context = {
   el: id => ({ chart: chartEl, sub: subEl, ohlc: ohlcEl, subNote: subNoteEl })[id],
   document: { querySelectorAll: sel => (sel === '#subSeg [data-ind]' ? segBtns : []) },
   makeZsOverlay: () => ({ setBoxes() {}, redraw() {} }),
+  makeDcOverlay: () => ({ set() {} }),
+  placeAxisAnchor() {},
   ResizeObserver: function () { this.observe = () => {}; },
   requestAnimationFrame: fn => fn(),
   P: new Proxy({}, { get: () => '#000' }),

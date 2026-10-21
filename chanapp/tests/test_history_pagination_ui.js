@@ -71,10 +71,11 @@ function renderHarness(token, opts, freq, meta) {
       { time: '2026-09-03' }, { time: '2026-09-04' },
     ],
     P: { upA: 'up', downA: 'down', goldA: 'g', biForming: 'bf' },
-    LightweightCharts: { LineSeries: function () {}, LineStyle: { Dashed: 1 } },
+    LightweightCharts: { LineSeries: function () {}, LineStyle: { Dashed: 1 }, LineType: { WithSteps: 1 } },
     DISPLAY_BARS: 120, curInd: 'macd',
     computeMAs() {}, refreshMaSeries() {}, showInd() {},
     legendLatest() {}, renderResonance() {}, updateAxisAnchor() {},
+    renderDonchian() { stub.events.push('donchian'); },
     buildMarkers: signals => (signals || []).map(s => s.time),
   });
   runSlices(context, ['helpers', 'renderChart']);

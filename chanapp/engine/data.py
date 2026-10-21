@@ -20,7 +20,8 @@
 - configure_instance()：应用生命周期；配置了实例目录时 CACHE_DIR 改由它派生（engine/instance_paths.py），退出恢复。
 - 返回体：{code, freq, adjust, bars, token, source, degraded, degraded_note, fqf, fetch_time, from_cache,
   stale, stale_age_s, data_version, incomplete_days, volume_unit, coverage, notices, has_more, oldest_dt}；
-  bars 元素 {dt, open, high, low, close, volume}，volume 恒为股。
+  bars 元素 {dt, open, high, low, close, volume, forming}，volume 恒为股；forming 为该 bar 尚未走完（盘中的当日、
+  收盘后未定稿的当日日线、未收的分钟槽、未走完的周）。
 - 读连接按线程各开一条（只读事务），写入一律经采集器的单写者锁。
 - 导入时向 engine/session.py 注册交易日历钩子。
 """
@@ -42,7 +43,7 @@ N_BARS = config.DEFAULT_WINDOW
 FREQS = views.PERIODS
 ADJUSTS = views.ADJUSTS
 WINDOW_RETRY_S = 600          # 短窗口补取节流：新上市等确实没有更早数据的标的不每次请求都触发
-_BAR_KEYS = ("dt", "open", "high", "low", "close", "volume")
+_BAR_KEYS = ("dt", "open", "high", "low", "close", "volume", "forming")
 
 _local = threading.local()
 _clock = time.monotonic

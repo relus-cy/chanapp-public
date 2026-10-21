@@ -12,6 +12,8 @@ from chanapp.engine import period_preferences
 from chanapp.engine import channels as engine_channels
 from chanapp.engine import compute_cache as engine_compute_cache
 from chanapp.engine import data as engine_data
+from chanapp.engine import donchian as engine_donchian
+from chanapp.engine.kline.rows import kind_of
 from chanapp.engine.chanpy_profiles import profile_identity
 
 log = logging.getLogger(__name__)
@@ -29,6 +31,14 @@ def round_floats(obj):
     if isinstance(obj, (list, tuple)):
         return [round_floats(v) for v in obj]
     return obj
+
+
+def donchian_for(code: str, dataset: dict) -> dict | None:
+    """唐奇安通道（engine/donchian.py）。不复权的个股不给：除权日价格整体下移会被当成跌破离场线。
+    指数恒为原始价且没有除权，照常给。"""
+    if dataset.get("adjust") == "raw" and kind_of(code) != "index":
+        return None
+    return engine_donchian.compute(dataset["bars"])
 
 
 def analysis_periods(code: str) -> tuple[str, ...]:
@@ -241,6 +251,7 @@ def build_chart_payload(code: str, freq: str, dataset: dict | None = None,
         "signals": sig["signals"],
         "evidence": evidence,
         "channels": channels,
+        "donchian": donchian_for(code, dataset),
         "resonance": resonance,
         "meta": meta,
     }

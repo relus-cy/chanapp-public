@@ -43,4 +43,6 @@ GitHub Actions 的 browser job 执行完整流程，包含三组既有浏览器�
 
 副图读数共用浮点尾差显示处理，覆盖 MACD、KDJ、RSI 和 BOLL；它只格式化显示文本，不修改指标数组。这不是通用十进制半入算法。固定样本的四组完整读数由 `e2e/chart-controls.e2e.ts` 验证，其中 BOLL 中轨 `884.955` 显示为 `884.96`。
 
+唐奇安通道的计算口径（线位不含当前根、Wilder N、两种判定方式、假突破、止损与建议仓位）由 `test_donchian.py` 的手算样本验证，经 `/api/chart` 下发与形成中 bar 的 `provisional` 由 `test_donchian_api.py` 验证；同一固定样本的最新一根图例读数、开关在重载后保留、不复权个股的提示由 `e2e/chart-controls.e2e.ts` 验证。
+
 本套件采用主流 Playwright 浏览器驱动与独立实例隔离，按 [Playwright 最佳实践](https://playwright.dev/docs/best-practices) 从用户行为断言并等待可观察状态。新采用的 [tester-army/e2e](https://github.com/tester-army/e2e) 负责确定性测试组织与证据记录；当前用例通过精确操作执行，无模型步骤。

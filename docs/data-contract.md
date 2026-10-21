@@ -29,7 +29,7 @@
 | --- | --- |
 | `code`、`freq` | 请求参数 |
 | `adjust` | 实际生效的模式；指数恒为 `raw` |
-| `bars` | `[{dt, open, high, low, close, volume}]`，按时间升序。日线、周线的 `dt` 为 `YYYY-MM-DD`，分钟为 `YYYY-MM-DD HH:MM`，一律是区间末端标签（A 股上午最后一根标 11:30）。`volume` 恒以股计；前复权只缩放价格，`volume` 与不复权相同（送转前的量不按送转比例调整） |
+| `bars` | `[{dt, open, high, low, close, volume, forming}]`，按时间升序。日线、周线的 `dt` 为 `YYYY-MM-DD`，分钟为 `YYYY-MM-DD HH:MM`，一律是区间末端标签（A 股上午最后一根标 11:30）。`volume` 恒以股计；前复权只缩放价格，`volume` 与不复权相同（送转前的量不按送转比例调整）。`forming` 为 `true` 表示这根 bar 还没走完：盘中的当日日线、收盘后尚未定稿的当日日线、未收盘的分钟 bar、未走完的当前周 |
 | `token` | 视图令牌，见下文 |
 | `source` | 页内最新一根 bar 所属批次的来源名；CSV 导入的批次为 `import` |
 | `degraded`、`degraded_note` | 页内有任一 bar 来自冷备来源时为 `true` 与 `冷备来源`，否则为 `false` 与空串 |
@@ -70,7 +70,7 @@
 - 盘中尚未收盘的分钟 bar（形成中，`forming`）正常更新不换令牌，所以向左翻页不会被盘中写入打断。
 - 首页与分页必须使用同一令牌。令牌不符时，门面抛 `TokenMismatch`，HTTP 返回 **409**，客户端应整窗重载，不要把新旧数据拼在一起。
 
-**形成中**有三处含义：分钟事实的 `state=forming` 是今天尚未收盘的 bar（只能由采集写入，CSV 导入一律记为已收盘）；周线的当前周；缠论结构里尚未确认的笔与点位（`provisional`），它们会随新 K 线移动或消失。
+**形成中**有三处含义：分钟事实的 `state=forming` 是今天尚未收盘的 bar（只能由采集写入，CSV 导入一律记为已收盘）；周线的当前周；缠论结构里尚未确认的笔与点位（`provisional`），它们会随新 K 线移动或消失。前两处在门面 `bars` 上统一表现为 `forming=true`，唐奇安信号据此标 `provisional`。
 
 **degraded** 只表示数据来自冷备来源；**stale** 只表示新鲜度。取数失败时服务最后可信的数据，不会自动换用其他来源。
 
@@ -101,8 +101,13 @@
 
 完整字段以 `chanapp/api/main.py`、`chanapp/api/analysis.py` 为准，这里只列与数据契约相关的行为。
 
-- `GET /api/chart?code=&freq=&adjust=`：`freq` 取 `week`、`day`、`m60`、`m30`；`m15`、`m5` 在读取前返回 400。未勾选或当前市场不能合成的周期返回 400。当前周期首次取数失败返回 502。响应为 `{kline, macd, structure, signals, evidence, channels, resonance, meta, ...}`，`kline` 元素为 `{time, open, high, low, close, volume}`；`meta` 是门面返回体去掉 `bars`，另加 `bars`（根数）、`first_dt`、`last_dt`、`analysis_freqs`、`analysis_tokens`、`analysis_calculation_id`。响应另含 `quotes`：自选各项与当前代码的报价行（结构同 `/api/quotes`），与 `kline` 同一次读取，页面的价格卡与自选各行用它，保证与图中末根 bar 同快照；两个市场相同。响应里的浮点数（前复权价、结构价位、MACD、特征等）统一保留 4 位小数，历史分页同。带弱 ETag，`If-None-Match` 命中返回 304。带 `refetch=1` 时先手动重拉，结果放在响应头 `X-Refetch-Status`。
+- `GET /api/chart?code=&freq=&adjust=`：`freq` 取 `week`、`day`、`m60`、`m30`；`m15`、`m5` 在读取前返回 400。未勾选或当前市场不能合成的周期返回 400。当前周期首次取数失败返回 502。响应为 `{kline, macd, structure, signals, evidence, channels, donchian, resonance, meta, ...}`，`kline` 元素为 `{time, open, high, low, close, volume}`；`donchian` 见下文「唐奇安通道」；`meta` 是门面返回体去掉 `bars`，另加 `bars`（根数）、`first_dt`、`last_dt`、`analysis_freqs`、`analysis_tokens`、`analysis_calculation_id`。响应另含 `quotes`：自选各项与当前代码的报价行（结构同 `/api/quotes`），与 `kline` 同一次读取，页面的价格卡与自选各行用它，保证与图中末根 bar 同快照；两个市场相同。响应里的浮点数（前复权价、结构价位、MACD、特征等）统一保留 4 位小数，历史分页同。带弱 ETag，`If-None-Match` 命中返回 304。带 `refetch=1` 时先手动重拉，结果放在响应头 `X-Refetch-Status`。
 - `GET /api/chart?...&before=&limit=&token=`：历史分页，`limit` 为 1–2000（默认 520），`token` 取首页的 `meta.token`。令牌不符或缺失返回 **409 `{"detail": "数据已更新", "token": 当前令牌}`**；标的没有事实返回 503。
+- `/api/chart` 的 `donchian`（唐奇安通道，计算在 `chanapp/engine/donchian.py`）：不复权的个股为 `null`（除权日价格整体下移会被误判为跌破），前复权和指数都给。其余情况为 `{"20/10": 组, "55/20": 组}`，键是入场／离场回看根数，覆盖首页窗口的全部 bar；历史分页不带它，更早的 bar 上不画通道。每组：
+  - `rows`：与 `kline` 逐根对齐的 `[{time, entry, exit, n}]`。`entry` 是前 20（或 55）根的最高价，`exit` 是前 10（或 20）根的最低价，都不含当前根，根数不足为 `null`；`n` 是 Wilder 平滑的 20 根真实波幅（海龟交易法的 N），从窗口起点起算。
+  - `next`：`{entry, exit}`，把最后一根也算进去的下一根线位；最后一根形成中时会随它变化。
+  - `modes`：`close`（收盘确认）与 `touch`（盘中触价）两种判定方式各一份 `{signals, state}`，都从窗口起点空仓开始按规则推演，不是用户的实际持仓。`signals` 元素为 `{time, side, kind, status, price, level}`：`side` 取 `buy`、`sell`；`kind` 取 `close`、`touch`、`false_break`（盘中越过、收盘没越过的已收盘 bar）；`status` 在 bar 的 `forming` 为真时取 `provisional`，否则取 `confirmed`；`level` 是被越过的线位（卖出时为有效离场价）。`state` 为 `{holding, entry_time, entry_price, stop, effective_exit, provisional}`：`stop` 是入场价减 2N（收盘确认取入场那根的 N，盘中触价取上一根的 N），入场后固定；`effective_exit = max(离场线, stop)`，对应下一根要判定的线位。
+  - `suggestion`：`{weight, stop_distance, risk_budget}` 或 `null`。`stop_distance = 2N ÷ 收盘`，`weight = min(1, risk_budget ÷ stop_distance)`，`risk_budget` 为 0.01，即止损触发时亏损约为总资金的 1%。只是建议，不读取实际持仓。
 - `GET /api/analysis?code=&freq=&adjust=&rule_profile=&signal_scope=&tokens=`：`tokens` 是 URL 编码的 JSON 对象，取自图表的 `meta.analysis_tokens`；`freq` 不影响分析内容。按以下顺序判断，命中即返回：
   1. `freq` 为 `m15`、`m5` 返回 400；`week` 等不在 `day`、`m60`、`m30` 内的值由参数校验返回 422；
   2. demo 返回 200 `status: "disabled"`；

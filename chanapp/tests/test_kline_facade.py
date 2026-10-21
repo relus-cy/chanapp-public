@@ -89,7 +89,8 @@ class FacadeContractTests(FacadeBase):
         self.assertEqual((out["adjust"], out["fqf"], out["volume_unit"], out["from_cache"]),
                          ("raw", "不复权", "share", True))
         self.assertEqual(out["bars"][-1]["volume"], 100000)          # 1000 手 → 股
-        self.assertEqual(set(out["bars"][-1]), {"dt", "open", "high", "low", "close", "volume"})
+        self.assertEqual(set(out["bars"][-1]), {"dt", "open", "high", "low", "close", "volume", "forming"})
+        self.assertFalse(out["bars"][-1]["forming"])                  # 开盘前：上一交易日已定稿
         self.assertIsNotNone(out["fetch_time"])
         self.assertEqual(out["fetch_time"], self.last_commit_at("day"))
         self.assertEqual((out["stale"], out["stale_age_s"]), (False, None))   # 上一交易日已定稿
@@ -109,6 +110,8 @@ class FacadeContractTests(FacadeBase):
         self.commit_minutes(self.today, state="forming")
         out = engine_data.get_bars(CODE, "day", adjust="raw")
         self.assertEqual(out["fetch_time"], self.last_commit_at(FACT))
+        self.assertEqual((out["bars"][-1]["dt"], out["bars"][-1]["forming"]), (self.today, True))   # 盘中当日 bar 形成中
+        self.assertFalse(out["bars"][-2]["forming"])
         self.assertNotEqual(out["fetch_time"], self.last_commit_at("day"))
 
     def test_missing_symbol_with_collector_off_is_data_unavailable(self):
