@@ -182,10 +182,27 @@ test('evidence and resonance details return focus and close on a period change',
   await expect(browser.locator('#cardsDock')).not.toHaveAttribute('inert');
 });
 
-test('donchian toggle shows the pinned sample channel, keeps its choice across reload and explains raw', async ({ app, browser, screen }) => {
+test('donchian toggle shows the pinned sample channel, ignores the structure layer, keeps its choice across reload and explains raw', async ({ app, browser, screen }) => {
+  const probe = `window.__dc = function () {
+    return [charts.dcEntry, charts.dcExit, charts.dcStop].filter(function (s) {
+      return s.options().visible && s.data().length > 0; }).length;
+  };`;
+  const source = await probedAppSource(probe);
+  await browser.route(/\/app\.js(\?|$)/, route => route.fulfill({ body: source, contentType: 'application/javascript' }));
   await openChart({ app, browser });
+  // The chart's own canvas children are overlays: the zhongshu one first, the Donchian one second.
+  const dcInk = () => browser.evaluate(() => {
+    const canvas = document.querySelectorAll('#chart > canvas')[1] as HTMLCanvasElement;
+    const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    let painted = 0;
+    for (let i = 3; i < pixels.length; i += 4) if (pixels[i]) painted++;
+    return painted;
+  });
+  const dcLines = () => browser.evaluate(() => window.__dc());
   await expect(browser.locator('#dcSegCur')).toHaveText('唐奇安');
   await expect(browser.locator('#ohlc .dc-legend')).toHaveCount(0);
+  expect(await dcLines()).toBe(0);
+  await expect.poll(dcInk).toBe(0);
   await browser.locator('#dcSegBtn').tap();
   await browser.locator('#dcSegPop [data-dc="20/10"]').tap();
   // The menu stays open for the mode choice; Esc closes it without touching the drawing tools.
@@ -194,12 +211,26 @@ test('donchian toggle shows the pinned sample channel, keeps its choice across r
   await expect(browser.locator('#dcSegBtn')).toHaveAttribute('aria-expanded', 'false');
   await screen.getByRole('button', '切换日间/夜间主题').hover();
   // Literal oracle for the bundled 2026-09-24 qfq daily sample, computed outside the app:
-  // previous-20 high, previous-10 low, Wilder ATR(20), 1% / (2N / close).
-  const latest = 'DC20/10 入974.99 出858.00 N53.19 下一根入 974.99 出 858.00 建议仓位8.4%';
+  // previous-20 high, previous-10 low, Wilder ATR(20), 1% / (2N / close); the close-mode rule is flat.
+  const latest = 'DC20/10 入974.99 出858.00 N53.19 规则状态空仓 下一根入 974.99 出 858.00 建议仓位8.4%（风险1%）';
   await expect(browser.locator('#ohlc .dc-legend')).toHaveText(latest);
-  await browser.locator('#dcSegBtn').tap();
-  await browser.locator('#dcSegPop [data-dcmode="touch"]').tap();
+  // Entry and exit lines (no stop line while flat), plus the next-bar dashes and markers on the overlay.
+  expect(await dcLines()).toBe(2);
+  await expect.poll(dcInk).toBeGreaterThan(0);
+  await screen.getByRole('button', '图层与规则').tap();
+  await screen.getByRole('button', '隐藏').tap();
+  await expect(browser.locator('#ruleSummary')).toContainText('结构层隐藏');
+  expect(await dcLines()).toBe(2);
+  await expect.poll(dcInk).toBeGreaterThan(0);
+  await screen.getByRole('button', '显示').tap();
   await browser.keyboard.press('Escape');
+  // Keyboard: arrows move the choice within a radio group; tabbing out of the menu closes it.
+  await browser.locator('#dcSegBtn').tap();
+  await browser.locator('#dcSegPop [data-dcmode="close"]').tap();
+  await browser.keyboard.press('ArrowDown');
+  await expect(browser.locator('#dcSegPop [data-dcmode="touch"]')).toHaveAttribute('aria-checked', 'true');
+  await browser.keyboard.press('Tab');
+  await expect(browser.locator('#dcSegBtn')).toHaveAttribute('aria-expanded', 'false');
   await expect(browser.locator('#dcSegCur')).toHaveText('DC 20/10 · 触价');
   await chartAction(browser, () => browser.reload(), /\/api\/chart\?.*freq=day&/);
   await expect(browser.locator('#dcSegCur')).toHaveText('DC 20/10 · 触价');
@@ -207,4 +238,7 @@ test('donchian toggle shows the pinned sample channel, keeps its choice across r
   await chartAction(browser, () => screen.getByRole('button', '不复权').tap(), /\/api\/chart\?.*adjust=raw&/);
   await screen.getByRole('button', '切换日间/夜间主题').hover();
   await expect(browser.locator('#ohlc .dc-legend')).toHaveText('唐奇安仅前复权下显示');
+  await expect(browser.locator('#dcSegCur')).toHaveText('DC 20/10 · 仅前复权');
+  expect(await dcLines()).toBe(0);
+  await expect.poll(dcInk).toBe(0);
 });

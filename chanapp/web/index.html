@@ -656,6 +656,10 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #dcSegPop button .ck { width: 12px; height: 12px; visibility: hidden; }
   #dcSegPop button[aria-checked="true"] .ck { visibility: visible; }
   @media (hover:hover) { #dcSeg #dcSegPop button:hover { background: var(--raise); } }
+  @media (pointer:coarse) { #dcSeg #dcSegPop button { min-height: 40px; } }
+  /* 已打开但当前视图不提供（不复权个股）：按钮去掉强调色 */
+  #dcSeg.on.na #dcSegBtn { color: var(--dim); }
+  #dcSeg.na .dot { opacity: .4; }
   #dcSegPop .dc-help { margin: 6px 4px 2px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 11px;
     line-height: 1.55; color: var(--dim); font-family: inherit; }
   #dcSegPop .dc-help p { margin: 0 0 3px; }
@@ -1026,7 +1030,8 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
             </div>
             <div class="dc-help">
               <p>实线当天不变；短虚线是把最新一根算进去的下一根线位，收盘前会变。</p>
-              <p>▲▼ 实心为已确认，淡色带 ~ 为形成中，空心为假突破。橙线为规则止损，只在规则持有时显示，与实际持仓无关。</p>
+              <p>▲▼ 实心为已确认，淡色带 ~ 为形成中，空心为假突破。</p>
+              <p>规则状态与橙色止损线是按规则假设的持有，与实际持仓无关；建议仓位按 1% 风险预算折算。</p>
             </div>
           </div>
         </div>

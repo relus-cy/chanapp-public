@@ -56,12 +56,14 @@ assert.strictEqual(dc.signalText({ side: 'buy', kind: 'close', status: 'provisio
     [{ label: '入', value: '11.00' }, { label: '出', value: '9.00' }, { label: 'N', value: '2.00' }]);
   assert.deepStrictEqual(dc.legendParts(payload, 2, 'close'),
     [{ label: '入', value: '11.00' }, { label: '出', value: '9.50' }, { label: 'N', value: '2.10' },
-     { label: '止', value: '7.40' }, { label: '', value: '收盘突破入场线' }]);
+     { label: '止损', value: '7.40' }, { label: '', value: '收盘突破入场线' }]);
   assert.deepStrictEqual(dc.legendParts(payload, 3, 'close'),
     [{ label: '入', value: '12.00' }, { label: '出', value: '10.00' }, { label: 'N', value: '2.20' },
-     { label: '止', value: '7.40' }, { label: '下一根', value: '入 12.50 出 10.20' }, { label: '建议仓位', value: '7.9%' }]);
-  // 盘中触价模式下空仓：不显示止损
-  assert.deepStrictEqual(dc.legendParts(payload, 3, 'touch').map((p) => p.label), ['入', '出', 'N', '下一根', '建议仓位']);
+     { label: '规则状态', value: '持有' }, { label: '止损', value: '7.40' },
+     { label: '下一根', value: '入 12.50 出 10.20' }, { label: '建议仓位', value: '7.9%（风险1%）' }]);
+  // 盘中触价模式下空仓：最新一根写明规则状态空仓，不显示止损
+  assert.deepStrictEqual(dc.legendParts(payload, 3, 'touch').slice(3, 5),
+    [{ label: '规则状态', value: '空仓' }, { label: '下一根', value: '入 12.50 出 10.20' }]);
   assert.deepStrictEqual(dc.legendParts(null, 0, 'close'), []);
   assert.deepStrictEqual(dc.legendParts(payload, 9, 'close'), []);
 }

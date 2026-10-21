@@ -56,7 +56,8 @@
 
   function fmt(v) { return v == null ? '—' : (+v).toFixed(2); }
 
-  // 图例：第 i 根的入场线、离场线、N；规则状态持有且在入场之后显示止损；最后一根追加建议仓位与明日预估线；
+  // 图例：第 i 根的入场线、离场线、N；最后一根写明规则状态（按规则假设的持有／空仓，不是实际持仓）；
+  // 规则状态持有且在入场之后显示止损；最后一根追加建议仓位与明日预估线；
   // 该根有信号时追加信号说明。返回 [{label, value}]，由 app.js 拼 HTML
   function legendParts(dc, i, mode) {
     if (!dc || !dc.rows || i == null || !dc.rows[i]) return [];
@@ -64,12 +65,15 @@
     var m = (dc.modes || {})[mode] || {};
     var st = m.state || {};
     var parts = [{ label: '入', value: fmt(r.entry) }, { label: '出', value: fmt(r.exit) }, { label: 'N', value: fmt(r.n) }];
-    if (st.holding && st.entry_time && r.time >= st.entry_time) parts.push({ label: '止', value: fmt(st.stop) });
+    if (last && m.state) parts.push({ label: '规则状态', value: st.holding ? '持有' : '空仓' });
+    if (st.holding && st.entry_time && r.time >= st.entry_time) parts.push({ label: '止损', value: fmt(st.stop) });
     if (last && dc.next && (dc.next.entry != null || dc.next.exit != null)) {
       parts.push({ label: '下一根', value: '入 ' + fmt(dc.next.entry) + ' 出 ' + fmt(dc.next.exit) });
     }
     if (last && dc.suggestion) {
-      parts.push({ label: '建议仓位', value: (dc.suggestion.weight * 100).toFixed(1) + '%' });
+      // 写明风险预算：分钟周期 N 小、止损近，同样 1% 风险折出的仓位会大得多
+      parts.push({ label: '建议仓位', value: (dc.suggestion.weight * 100).toFixed(1) + '%（风险' +
+        +(dc.suggestion.risk_budget * 100).toFixed(2) + '%）' });
     }
     (m.signals || []).forEach(function (s) {
       if (s.time === r.time) parts.push({ label: '', value: signalText(s) });

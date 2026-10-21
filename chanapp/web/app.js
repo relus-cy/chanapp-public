@@ -909,7 +909,7 @@
         ctx.beginPath(); ctx.rect(0, 0, ts.width(), hgt); ctx.clip();   // 不画进价格轴
         var lastX = ts.timeToCoordinate(d.lastTime);
         if (lastX !== null && d.next) {
-          var span = ts.options().barSpacing || 6;
+          var span = Math.max(ts.options().barSpacing || 6, 14);   // 至少 14px，窄间距下也看得出是虚线
           ctx.strokeStyle = P.dc; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
           [d.next.entry, d.next.exit].forEach(function (v) {
             var y = v == null ? null : series.priceToCoordinate(v);
@@ -929,6 +929,7 @@
             ctx.lineWidth = 1.25; ctx.strokeStyle = color; ctx.stroke();
           } else {
             ctx.fillStyle = st.fill === 'faint' ? hexA(color, 0.45) : color; ctx.fill();
+            ctx.lineWidth = 1; ctx.strokeStyle = P.bg; ctx.stroke();   // 底色描边：落在同色 K 线上也分得开
           }
           if (st.tilde) {
             ctx.fillStyle = hexA(color, 0.8); ctx.font = '10px ' + 'ui-monospace, Menlo, monospace';
@@ -1485,21 +1486,28 @@
     c.dcEntry.setData(dc ? chanDonchian.lineData(dc.rows, 'entry', toTime) : []);
     c.dcExit.setData(dc ? chanDonchian.lineData(dc.rows, 'exit', toTime) : []);
     c.dcStop.setData(dc ? chanDonchian.stopData(dc.rows, mode.state, toTime) : []);
+    syncDcControl();
     c.dcOverlay.set(dc && dc.rows.length ? {
       lastTime: toTime(dc.rows[dc.rows.length - 1].time), next: dc.next,
       signals: (mode.signals || []).map(function (s) { return Object.assign({ t: toTime(s.time) }, s); }),
     } : null);
   }
 
+  // 按钮标签与单选状态；na = 已打开但当前视图不提供（不复权个股）。单选组用 roving tabindex：只有选中项可 Tab 到
   function syncDcControl() {
     var on = dcSettings.key !== 'off';
+    var na = on && !!lastChartData && !lastChartData.donchian;
     el('dcSeg').classList.toggle('on', on);
-    el('dcSegCur').textContent = on ? 'DC ' + dcSettings.key + (dcSettings.mode === 'touch' ? ' · 触价' : '') : '唐奇安';
+    el('dcSeg').classList.toggle('na', na);
+    el('dcSegCur').textContent = !on ? '唐奇安'
+      : 'DC ' + dcSettings.key + (na ? ' · 仅前复权' : dcSettings.mode === 'touch' ? ' · 触价' : '');
     document.querySelectorAll('#dcSegPop [data-dc]').forEach(function (b) {
-      b.setAttribute('aria-checked', b.dataset.dc === dcSettings.key ? 'true' : 'false');
+      var sel = b.dataset.dc === dcSettings.key;
+      b.setAttribute('aria-checked', sel ? 'true' : 'false'); b.tabIndex = sel ? 0 : -1;
     });
     document.querySelectorAll('#dcSegPop [data-dcmode]').forEach(function (b) {
-      b.setAttribute('aria-checked', b.dataset.dcmode === dcSettings.mode ? 'true' : 'false');
+      var sel = b.dataset.dcmode === dcSettings.mode;
+      b.setAttribute('aria-checked', sel ? 'true' : 'false'); b.tabIndex = sel ? 0 : -1;
     });
   }
 
@@ -1511,8 +1519,22 @@
     }
     btn.addEventListener('click', function () { setOpen(pop.hidden); });
     // 选项不关菜单：参数组与判定方式常一起调，看着图切换
-    pop.addEventListener('click', function (e) {
-      var b = e.target.closest('button'); if (!b) return;
+    pop.addEventListener('click', function (e) { choose(e.target.closest('button')); });
+    // 单选组内方向键移动并选中（WAI-ARIA radio 模式）；焦点移出菜单即收起
+    pop.addEventListener('keydown', function (e) {
+      var step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+      var group = step && e.target.closest('[role="radiogroup"]');
+      if (!group) return;
+      var items = Array.prototype.slice.call(group.querySelectorAll('[role="radio"]'));
+      var next = items[(items.indexOf(e.target) + step + items.length) % items.length];
+      e.preventDefault();
+      choose(next); next.focus();
+    });
+    wrap.addEventListener('focusout', function (e) {
+      if (!pop.hidden && e.relatedTarget && !wrap.contains(e.relatedTarget)) setOpen(false);
+    });
+    function choose(b) {
+      if (!b) return;
       if (b.dataset.dc) {
         dcSettings.key = b.dataset.dc;
         try { localStorage.setItem(chanDonchian.STORE_KEY, dcSettings.key); } catch (_) {}
@@ -1524,7 +1546,7 @@
       renderDonchian();
       if (charts) charts.markers.refresh();
       legendLatest();
-    });
+    }
     document.addEventListener('click', function (e) {
       if (!pop.hidden && !wrap.contains(e.target)) setOpen(false);
     });
