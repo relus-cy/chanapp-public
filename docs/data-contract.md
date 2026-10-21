@@ -100,7 +100,7 @@
 
 ## HTTP 接口要点
 
-完整字段以 `chanapp/api/main.py`、`chanapp/api/analysis.py` 为准，这里只列与数据契约相关的行为。
+完整字段以 `chanapp/api/main.py`、`chanapp/api/analysis.py` 为准，这里只列与数据契约相关的行为。给 AI 与脚本的读取说明（每个字段的含义与用途）由实例在 `/llms.txt` 提供，源文件 `chanapp/web/llms.txt`；`chanapp/tests/test_llms_txt.py` 保证它列出全部 `/api` 接口和 `/api/chart` 的字段。
 
 - `GET /api/chart?code=&freq=&adjust=`：`freq` 取 `week`、`day`、`m60`、`m30`；`m15`、`m5` 在读取前返回 400。未勾选或当前市场不能合成的周期返回 400。当前周期首次取数失败返回 502。响应为 `{kline, macd, structure, signals, evidence, channels, donchian, resonance, meta, ...}`，`kline` 元素为 `{time, open, high, low, close, volume}`；`donchian` 见下文「唐奇安通道」；`meta` 是门面返回体去掉 `bars`，另加 `bars`（根数）、`first_dt`、`last_dt`、`analysis_freqs`、`analysis_tokens`、`analysis_calculation_id`。响应另含 `quotes`：自选各项与当前代码的报价行（结构同 `/api/quotes`），与 `kline` 同一次读取，页面的价格卡与自选各行用它，保证与图中末根 bar 同快照；两个市场相同。响应里的浮点数（前复权价、结构价位、MACD、特征等）统一保留 4 位小数，历史分页同。带弱 ETag，`If-None-Match` 命中返回 304。带 `refetch=1` 时先手动重拉，结果放在响应头 `X-Refetch-Status`。
 - `GET /api/chart?...&before=&limit=&token=`：历史分页，`limit` 为 1–2000（默认 520），`token` 取首页的 `meta.token`。令牌不符或缺失返回 **409 `{"detail": "数据已更新", "token": 当前令牌}`**；标的没有事实返回 503。

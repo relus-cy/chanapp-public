@@ -1,0 +1,130 @@
+# chanapp 数据读取说明（给 AI 与脚本）
+
+chanapp 是一个缠论分析 Web 应用。本文说明它的 HTTP 接口有哪些数据、每个字段是什么意思、读来做什么用。
+本文由运行中的实例在 `/llms.txt` 提供，接口与本文同源，路径都是相对路径（例如本机 `http://127.0.0.1:8899/api/chart`）。
+字段的完整定义见公开仓库 https://github.com/relus-cy/chanapp-public 的 `docs/data-contract.md`。
+
+## 先读这几条
+
+- **只读即可。** 所有数据都能用 GET 读到。chanapp 不判定提醒、不发通知：是否触发、去重、推送，都由读取方自己决定。
+- **代码格式**：`sh600000`、`sz000001`、`hk00700`（市场前缀 + 数字）。指数如 `sh000001`。
+- **时间标签**：日线、周线为 `YYYY-MM-DD`，分钟为 `YYYY-MM-DD HH:MM`，一律是区间**末端**（A 股上午最后一根标 11:30）。时区为东八区。
+- **数值**：浮点统一保留 4 位小数；成交量单位为股。
+- **复权**：个股默认前复权（`adjust=qfq`），每次除权后历史价格整体变化，不要拿以前记下的前复权价和现在的价比。要与最新价比较时，用本次响应里的数，或用已经换算好的 `/api/alert-lines`。指数恒为不复权。
+- **三种「未定」**，读数前先分清：
+  - `stale`：数据过期，数值可能落后。交易时段内是分钟数据太久没有成功提交；收盘后过了定稿截止时间、当天仍未定稿，或开盘前上一交易日仍未定稿，也算过期。demo 恒为 false。
+  - 形成中的 K 线：盘中当天、收盘后还没定稿的当天，以及未走完的分钟槽和本周，最后一根还会变。`kline` 没有逐根的形成中标记，判断方法见下文 `kline`。
+  - `provisional`（与 `forming: true` 同义）：缠论结构或信号尚未确认，会随新 K 线移动或消失；`confirmed` 才是已确认。
+- **计算窗口**：缠论结构、信号、MACD、唐奇安都在首页窗口（最近最多 520 根）上计算；翻页读到的更早历史只有 K 线。
+
+## 推荐读取顺序
+
+1. `GET /api/session`：现在两个市场是否在交易时段。
+2. `GET /api/watchlist`：用户关注的标的。
+3. `GET /api/chart`：每个标的、每个周期的主数据（K 线、缠论结构、信号、通道、唐奇安、多周期摘要）。
+4. `GET /api/alert-lines`：用户在图上标为提醒线的价位，已换算到当前价格口径。
+5. 只要最新价时用 `GET /api/quotes`，比 `/api/chart` 轻得多。
+6. 需要基本面或资金流时用 `GET /api/f10`。
+
+## `GET /api/chart` — 主数据
+
+参数：
+- `code`（必填）。
+- `freq`：`week`、`day`、`m60`、`m30`。必须是实例已勾选、且该市场能提供的周期，否则返回 400（见 `GET /api/periods`）。`m15`、`m5` 已下线，返回 400。
+- `adjust`：`qfq`（默认，前复权）或 `raw`（不复权）。
+- `rule_profile`：`strict`（默认，严格成笔）或 `relaxed`（宽松成笔）。
+- `signal_scope`：`expanded`（默认，笔级买卖点的中枢门槛放宽为 0）或 `standard`（上游默认门槛）。
+- 翻页：`before`（游标时间）、`limit`（1–2000，默认 520）、`token`（取首页的 `meta.token`）。翻页响应为 `{code, freq, adjust, kline, meta}`，`meta` 只有 `history`（恒为 true）、`token`、`has_more`、`oldest_dt`、`incomplete_days`、`notices`、`coverage`、`fqf`、`stale`。令牌不符返回 409，响应体带回当前 `token`，此时重读首页。
+- `refetch=1` 会让服务端先向上游重新取数，结果在响应头 `X-Refetch-Status`（`ok`、`partial`、`failed`、`busy`、`disabled`）。它消耗数据源额度，**例行读取不要带**；带 `before` 时不生效。
+- 缓存：响应带弱 `ETag`，轮询时带 `If-None-Match`，数据没变返回 304，省流量。
+
+响应的顶层字段：
+
+### `kline`
+`[{time, open, high, low, close, volume}]`，按时间升序。元素没有 `forming` 字段，最后一根是否定稿要看 `meta.coverage.data_status`：`phase` 为 `live` 或 `awaiting_final`、且最后一根的日期等于 `data_status.day` 时，最后一根还会变；`phase` 为 `final` 时已定稿（周线的本周与分钟线的当前槽在走完前仍会变）。
+
+### `macd`
+`{rows: [{time, dif, dea, hist}]}`，参数 (12, 26, 9)，`hist = 2 × (dif − dea)`。笔级买卖点的力度比较用它。MACD 在窗口内从第一根起递推（第一根 `dif`、`dea` 为 0），所以窗口前段的值与行情软件不同，后段才一致。
+
+### `structure` — 缠论结构
+- `bi`：笔。每项 `{index, direction, dt0, dt1, x0, x1, y0, y1, status, forming}`：从 `dt0`（价 `y0`）到 `dt1`（价 `y1`），`direction` 为 `up` 或 `down`；`x0`、`x1` 是该点在 `kline` 里的下标。
+- `xd`：线段，字段同 `bi`。
+- `zs`：笔中枢；`zs_xd`：线段中枢。每项 `{dt0, dt1, x0, x1, zg, zd, gg, dd, status, forming}`：`zg`、`zd` 是中枢上沿、下沿（最重要的支撑阻力区间），`gg`、`dd` 是中枢期间的最高点、最低点。
+- `forming`：最后一笔尚未确认时为那一笔，否则为 null。
+- `counts`：各类元素的数量（`cl_kline` 为包含处理后的 K 线数、`fx` 分型数、`bi`、`xd`、`bi_zs`、`xd_zs`）。
+
+关键价位通常取：最近中枢的 `zg`、`zd`、`gg`、`dd`，最近笔和线段的端点，以及下面的通道线和唐奇安线。
+
+### `signals` — 缠论买卖点
+每项字段：
+- `label`：可读标签，如 `B1`、`S2`、`B2/B3b`。`B` 为买、`S` 为卖；数字为类别：`1` 一类、`1p` 盘整背驰的一类、`2` 二类、`2s` 类二类、`3a` 三类（中枢在一类点之后）、`3b` 三类（中枢在一类点之前）。一个点可同时属于多类，用 `/` 连接。线段级的点前缀 `段:`。
+- `side`（`buy` 或 `sell`）、`types`（类别列表）、`level`（`bi` 笔级，`seg` 线段级）。
+- `dt`、`price`：点所在时间与价格（笔的端点）；`x` 为 `kline` 下标。
+- `status`（`confirmed` 或 `provisional`）与 `forming`：形成中的点会移动或消失，不能当作已发生。
+- `strength`：`{metric, value, state}`，只有 `1`、`1p` 类点有值，其余类别恒为 `unavailable`。`value` 是本段与前一段的力度比，`metric` 为算法：笔级 `peak`（MACD 同向柱峰值），线段级 `slope`（价格变化斜率）。`state` 只是比值和 1 的比较：`weaker`（小于 1）、`stronger`（大于 1）、`equal`、`unavailable`。**`weaker` 不等于确认背驰**：本实例不按力度过滤买卖点，点位出现也不代表通过了背驰检验。
+- `related_bsp1`：二类、三类点关联的一类点 `{dt, price, index, x, types}`，没有为 null。
+- `context`：`{parent_segment_index, zs_count, origin, origin_source, related_bsp1_context}`，所在父段（笔级点的父段是线段，线段级点的父段是线段的线段）的序号和中枢数。`origin` 为 `zero_center`（无中枢）、`centered`（有中枢）或 `unavailable`；一类点看自身父段（`origin_source` 为 `self`），二类、三类点看关联一类点的父段（`origin_source` 为 `related_bsp1`，此时自身的 `zs_count` 可能为 null）。
+- `features`：上游计算的原始特征（如笔幅、回撤比例）；`structure_ref`：`{level, index}`，指向 `structure.bi`（`level` 为 `bi`）或 `structure.xd`（`seg`）里 `index` 相同的那一项；`macd_algo`、`last_sure_pos`：计算口径与最后确认位置。
+
+### `evidence` — 信号依据卡
+与 `signals` 一一对应，每项带中文 `text`，把形态、力度、来源用一句话讲清楚，适合直接引用；另有 `type`、`label`、`dt`、`price`、`side`、`level`、`status`、`forming`、`types` 和结构化的 `detail`。
+
+### `channels` — 通道线
+最近一条已完成线段的上下轨：`[{direction, upper: {t0, y0, t1, y1}, lower: {t0, y0, t1, y1}}]`，笔不足时为空列表。还没有已完成线段时，把全部笔当作一段，方向取最后一笔的方向。下降段的上轨连段内最高的两个笔高点，下轨过段内最低点画平行线；上升段镜像。两轨延伸到最后一笔的终点（`t1`），不是最后一根 K 线；要取当前价位，按 `t0`→`t1` 的斜率自行外推。
+
+### `donchian` — 唐奇安通道（海龟交易法）
+不复权的个股为 null（除权会被误判为跌破），其余为 `{"20/10": 组, "55/20": 组}`，键是入场／离场回看根数。每组：
+- `rows`：与 `kline` 逐根对齐的 `[{time, entry, exit, n}]`。`entry` 入场线 = 前 20（或 55）根最高价，`exit` 离场线 = 前 10（或 20）根最低价，都不含当前根；`n` 是 20 根 Wilder 平滑的真实波幅（海龟的 N）。
+- `next`：`{entry, exit}`，把最后一根算进去的**下一根线位**。最后一根形成中时会随它变化。
+- `modes`：`close`（收盘确认）与 `touch`（盘中触价）两种判定方式，各有：
+  - `signals`：`[{time, side, kind, status, price, level}]`。`kind` 为 `close` 收盘越过、`touch` 盘中越过、`false_break` 假突破（盘中越过、收盘没越过，只在 `close` 模式出现）。`touch` 在 `touch` 模式里就是入场或离场；在 `close` 模式里只出现在形成中的 K 线上，表示盘中已越过、等收盘确认，不改变持仓；`level` 为被越过的线位；`status` 在形成中的 K 线上为 `provisional`。
+  - `state`：按规则从窗口起点空仓推演的**假设持仓**，不是用户的真实持仓：`{holding, entry_time, entry_price, stop, effective_exit, provisional}`。`stop` 为入场价 − 2N，入场后固定；`effective_exit` = max(离场线, `stop`)，是接下来那根要判定的离场价。
+- `suggestion`：`{weight, stop_distance, risk_budget}`：按 1% 风险预算折算的建议仓位，`weight = min(1, risk_budget ÷ stop_distance)`，`stop_distance = 2N ÷ 收盘`。只是建议，不读取实际持仓。
+
+### `resonance` — 多周期摘要
+日线、60 分、30 分中实例可用的各一项（周线不参与）：`{freq, signals, zs, structure_short, rule_profile, signal_scope, calculation_id, schema_version}`。`signals` 为该周期笔级、线段级各自最新的一个信号（字段同上）；`zs` 为最近一个笔中枢 `{zg, zd, inside}`，`inside` 表示最新收盘在中枢内；`structure_short` 为真表示该周期数据不足 520 根，结构可能不完整。
+
+### `quotes`
+`{code: 报价行}`，覆盖自选各项与当前代码，字段同 `/api/quotes`，与 `kline` 同一次读取。
+
+### `meta`
+- 标的与口径：`code`、`freq`、`adjust`、`fqf`（`前复权`、`不复权` 或 `前复权（供应商口径）`）、`volume_unit`（恒为 `share`）。
+- 范围：`bars`（根数）、`first_dt`、`last_dt`、`has_more`（是否还有更早历史）、`oldest_dt`。
+- 新鲜度：`stale`、`stale_age_s`（距最近一次成功提交的秒数，只在 `stale` 为真时有值，否则为 null）、`fetch_time`（最近一次成功提交的时刻，不是行情时间）、`from_cache`、`source`（最新一根的数据来源名，CSV 导入为 `import`）、`degraded` 与 `degraded_note`（来自冷备来源）。
+- `coverage`：`{qfq_from, qfq_through, stop_reason, data_status}`。`data_status.phase` 为 `live`（交易中）、`awaiting_final`（已收盘待定稿）、`final`（已定稿）、`none`（无数据）、`historical`（demo）。
+- `notices`：`[{code, text}]` 提示，例如 `structure_short`（结构输入不足 520 根）、`today_unconfirmed`（今日除权待确认，前复权只显示到上一确认日）、`qfq_from`（更早历史只能不复权查看）、`backfill_pending`（更早分钟历史加载中）、`unsupported`（该市场不提供这个周期）。
+- `incomplete_days`：分钟数据的质量标记（未收盘、槽位不足、待核验）。
+- 版本与令牌：`token`（翻页令牌）、`data_version`（数据指纹）、`analysis_freqs`、`analysis_tokens`、`analysis_calculation_id`（`/api/analysis` 用）。
+
+顶层另有 `rule_profile`、`signal_scope`、`schema_version`、`calculation_id`，标明本次结构的计算口径。
+
+## 其他读取接口
+
+- `GET /api/quotes`：`?code=` 可选。返回 `{data_version, quotes: {code: {name, price, pct, limit_up, price_time, price_label, stale, price_unavailable}}}`，覆盖自选各项和 `code`。价格为不复权原始价。`price_label` 为 `最新`、`昨收` 或 `历史`（demo）；`pct` 为涨跌幅百分数，`price_label` 为 `昨收` 时为 null；`limit_up` 为是否涨停，港股和指数恒为 false；没有数据时 `price_unavailable` 为真。
+- `GET /api/quote`：`?code=`，单个代码 `{code, quote, degraded}`，`quote` 为同结构报价行（保留兼容）。
+- `GET /api/session`：`{checked_at, markets: {cn: {open}, hk: {open}}}`（demo 另有 `mode: "demo"`，两个市场恒为 false），`open` 为此刻是否在交易时段（含交易日历）。
+- `GET /api/status`：采集状态 `{mode, enabled, checked_at, datasets, probes, budget, upstream, calendar_export}`。`datasets` 逐项给出新鲜度、缺口与待核验数；`upstream` 列出因凭据或额度错误而停发请求的来源。用来判断数据源是否异常。
+- `GET /api/watchlist`：`[{code, name, starred, tags}]`，用户的自选，星标在前。
+- `GET /api/alert-lines`：`?code=` 可选。返回 `{alert_lines: [{code, drawing_id, direction, price, drawn_adjust, drawn_price, latest: {price, price_time, stale}}]}`：用户在图上标为提醒线的水平线。`direction` 为 `below`（关注跌破）或 `above`（关注突破）；`price` 已换算到**当前原始价口径**，可直接与 `latest.price` 比较；拿不到换算依据时 `price` 为 null。
+- `GET /api/drawings`：`?code=`，该标的的全部画线 `{code, drawings: [{id, body, revision, updated_at}]}`。`body` 的价位是画线时的复权口径，比较价位请用 `/api/alert-lines`。
+- `GET /api/periods`：实例勾选的展示周期与各市场可用周期 `{selected, catalog, markets, notice, revision}`；`/api/chart` 只接受其中的周期。
+- `GET /api/search`：`?q=`，代码或名称联想 `[{code, name, type}]`。
+- `GET /api/views`：最近查看过的标的 `{recent: [{code, name, freq, adjust, first_viewed_at, last_viewed_at, views, watched}]}`。
+- `GET /api/f10`：`?code=`，基本面与资金流 `{f10, flow, industry_pct, degraded, fetch_time, data_version, meta}`。金额一律为该市场原币（A 股人民币元，港股港元）。`f10` 含价格、成交额、内外盘、量比、市值、市盈率 TTM、市净率、换手率与振幅（百分数）、涨跌停价、行业、概念；内外盘按来源原样给出、单位未统一，只适合比较两者大小，可能为 null。`flow` 为主力、超大单、大单、中单、小单净流入，取不到时为空，此时 `meta.flow_note` 为「资金流暂不可用」；`industry_pct` 为所属板块涨跌幅（百分数）。`degraded` 为真表示本次返回的是过期缓存。
+- `GET /api/analysis`：`?code=&freq=&adjust=&rule_profile=&signal_scope=&tokens=`，由大模型对缠论结构做多周期「完全分类」，返回 `{status, current_state, scenarios, ...}`。**未命中缓存时会调用模型并产生费用**；`tokens` 取 `/api/chart` 的 `meta.analysis_tokens`（URL 编码的 JSON），不符返回 409。demo 返回 `status: "disabled"`，没有配置模型返回 `unconfigured`。只读结构数据的读取方一般不需要调用它。
+
+## 写入接口（页面使用，读取方通常不要调用）
+
+- `PUT /api/periods`：改展示周期勾选。
+- `POST /api/watchlist`、`DELETE /api/watchlist/{code}`、`POST /api/watchlist/{code}/star`、`PUT /api/watchlist/{code}/tags`：改自选。
+- `POST /api/views`：记一次查看。
+- `PUT /api/drawings/{code}/{drawing_id}`、`DELETE /api/drawings/{code}/{drawing_id}`、`DELETE /api/drawings/{code}`：改或删画线。
+
+## 错误
+
+- 304：带 `If-None-Match` 且数据没变。
+- 400：周期未勾选、该市场不提供、已下线的周期，或 `before` 格式不对。
+- 409：翻页令牌或分析令牌与当前数据不符，响应体带回当前令牌（`token` 或 `tokens`），重读首页后再请求。
+- 422：参数取值不合法（例如 `freq=m1`、`adjust=hfq`）。
+- 502：首次取数或计算失败；报价、F10、搜索、提醒线读取失败；大模型调用失败（失败结果缓存 10 分钟）。
+- 503：标的正在更新、历史分页或存储暂不可用。

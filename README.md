@@ -69,6 +69,7 @@ demo 不联网，也不调用 AI。随包样本不足 520 根分析窗口，页�
 | 判断是否适合自己的使用场景 | [支持清单](docs/support-and-limits.md#支持清单)、[默认额度估算](docs/support-and-limits.md#默认额度能支撑多少自选)、[已知限制](docs/support-and-limits.md#已知限制) |
 | 部署、备份或排查更新状态 | [部署与更新](docs/operations.md#部署与更新)、[备份](docs/operations.md#备份)、[状态检查](docs/operations.md#状态检查) |
 | 调用接口或接入其他来源 | [门面函数](docs/data-contract.md#门面函数)、[HTTP 接口](docs/data-contract.md#http-接口要点)、[接入其他在线来源](docs/data-contract.md#接入其他在线来源) |
+| 让 AI 或脚本读取指标数据 | 运行中的实例在 `/llms.txt` 提供数据读取说明（源文件 [chanapp/web/llms.txt](chanapp/web/llms.txt)）：有哪些接口、每个字段的含义与用途 |
 
 ## 参与贡献
 
