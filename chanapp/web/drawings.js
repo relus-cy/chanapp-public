@@ -1,11 +1,13 @@
 /* 用户画线：存储格式与图表之间的换算（纯函数）和同步控制器。
    与 app.js 同为 classic script（页面在 app.js 前加载，挂 chanDrawings 全局；node 测试直接 require 纯函数）。
 
-   存储格式（服务端只校验 v 与大小，语义归这里）：
+   存储格式（服务端只校验 v、大小和 alert，其余语义归这里）：
      {v: 1, kind, adjust: 'qfq'|'raw', anchors: [{freq, dt, price}], style: {用户改过的样式键}, ref: {day, close}|null,
-      locked?: true}
+      locked?: true, alert?: {direction: 'below'|'above'}}
    - style 只存与默认样式不同的键，默认样式由 installDefaults 统一设定（改默认值会改变没改过样式的旧画线的外观）；
      locked 只在锁定时出现，锁定的画线不能拖动、不能用键盘删除。
+     alert 只在水平线标为提醒线时出现（服务端只在水平线上接受）：GET /api/alert-lines 把线价换算到当前原始价口径
+     给外部读取，页面本身不判定触发、不发通知。
    - 锚点记画线时所在周期与该 bar 的原始标签 dt（区间末端），不存图表时间值：日线、周线是日期字符串，分钟线是秒数，
      跨周期不能直接比较。显示时按「锚点 bar 的起始时刻 → 当前周期第一根末端晚于它的 bar」映射；
      晚于最后一根的锚点按交易时段数第 k 根未来槽位，早于已加载数据的按日历时间近似（左拉补历史后重新映射）。
@@ -222,6 +224,7 @@
 
   // 读服务端记录：按 v 迁移到当前格式（目前只有 v1）；缺字段、未知版本返回 null，由调用方跳过并告警
   var FREQS = { week: 1, day: 1, m60: 1, m30: 1, m15: 1, m5: 1 };
+  var ALERT_KIND = 'horizontal-line', ALERT_DIRECTIONS = { below: 1, above: 1 };
   function readBody(body) {
     if (!body || typeof body !== 'object' || body.v !== 1) return null;
     if (typeof body.kind !== 'string' || (body.adjust !== 'qfq' && body.adjust !== 'raw')) return null;
@@ -235,6 +238,7 @@
     var style = body.style && typeof body.style === 'object' && !Array.isArray(body.style) ? body.style : {};
     var out = { v: 1, kind: body.kind, adjust: body.adjust, anchors: body.anchors, style: style, ref: ref };
     if (body.locked === true) out.locked = true;
+    if (body.kind === ALERT_KIND && body.alert && ALERT_DIRECTIONS[body.alert.direction]) out.alert = { direction: body.alert.direction };
     return out;
   }
 
@@ -349,6 +353,7 @@
       var out = { v: 1, kind: d.kind, adjust: view.adjust, anchors: anchors, style: styleDiff(d.kind, d.style),
         ref: view.adjust === 'qfq' ? refFor(view.bars, view.freq) : null };
       if (prev && prev.locked === true) out.locked = true;      // 「锁定全部」只是本页的显示状态，不写进画线
+      if (prev && prev.alert) out.alert = prev.alert;
       return out;
     }
     function ownBody(rec) { return rec.local || readBody(rec.body); }
@@ -622,6 +627,21 @@
         changed();
       },
       isLocked: function (id) { var rec = records[id], body = rec && ownBody(rec); return !!(body && body.locked); },
+      // 提醒线方向写进画线（null 取消）；只有水平线可设
+      setAlert: function (id, direction) {
+        var rec = records[id], body = rec && ownBody(rec);
+        if (!body || body.kind !== ALERT_KIND) return;
+        body = JSON.parse(JSON.stringify(body));
+        if (ALERT_DIRECTIONS[direction]) body.alert = { direction: direction }; else delete body.alert;
+        rec.local = body;
+        if (rec.state !== 'saving') rec.state = 'dirty';
+        schedule(rec);
+        changed();
+      },
+      alertOf: function (id) {
+        var rec = records[id], body = rec && ownBody(rec);
+        return body && body.alert ? body.alert.direction : null;
+      },
       setLockAll: function (on) {
         lockAll = !!on;
         quiet(function () {

@@ -16,7 +16,8 @@
 - get_bars_history(code, freq, before, limit, *, adjust, token)：先比令牌，不符抛 TokenMismatch(当前令牌)；
   标的没有任何事实返回 None。
 - refetch_window(code, freq="day")：手动重拉主图周期与共振依赖的分析窗口（不改变关注状态），回报 ok/partial/failed/busy 等。
-- quote(code)、quotes(codes)（同一次读事务）、status(codes)、record_calc_run(...)、start_collector(watchlist_fn)、stop_collector()。
+- quote(code)、quotes(codes)（同一次读事务）、quotes_with_qfq_closes(codes, days_by_code)（报价加指定日子的当前
+  前复权日收盘，同一次读事务；提醒线换算用）、status(codes)、record_calc_run(...)、start_collector(watchlist_fn)、stop_collector()。
 - configure_instance()：应用生命周期；配置了实例目录时 CACHE_DIR 改由它派生（engine/instance_paths.py），退出恢复。
 - 返回体：{code, freq, adjust, bars, token, source, degraded, degraded_note, fqf, fetch_time, from_cache,
   stale, stale_age_s, data_version, incomplete_days, volume_unit, coverage, notices, has_more, oldest_dt}；
@@ -300,6 +301,15 @@ def quotes(codes) -> dict:
     if is_demo():
         return {code: demo.quote(_reader(), code) for code in dict.fromkeys(codes)}
     return views.quotes(_reader(), codes)
+
+
+def quotes_with_qfq_closes(codes, days_by_code: dict) -> tuple[dict, dict]:
+    """(quotes(codes), {code: {day: 当前前复权日收盘或 None}})：真实模式同一次读事务；demo 样本静态，逐代码读取。"""
+    if is_demo():
+        conn = _reader()
+        return ({code: demo.quote(conn, code) for code in dict.fromkeys(codes)},
+                {code: views.qfq_day_closes(conn, code, days) for code, days in days_by_code.items()})
+    return views.quotes_with_qfq_closes(_reader(), codes, days_by_code)
 
 
 def search_samples(q: str) -> list[dict]:

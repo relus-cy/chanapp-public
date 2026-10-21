@@ -3605,6 +3605,17 @@
     el('dsAlphaOut').textContent = alpha + '%';
     el('dsFillColor').hidden = !('backgroundColor' in s);
     swatches(el('dsFillColor'), DRAW_COLORS, s.backgroundColor || s.color, 'fill');
+    // 提醒线只给水平线：方向写进画线，外部脚本经 /api/alert-lines 读取
+    var alertable = d.kind === 'horizontal-line', alert = alertable ? drawCtl.alertOf(d.id) : null;
+    el('dsAlertBtn').hidden = !alertable;
+    if (!alertable && drawPop && drawPop.pop === el('dsAlertPop')) closeDrawPop();
+    if (alert) el('dsAlertBtn').dataset.alert = alert; else delete el('dsAlertBtn').dataset.alert;
+    var alertName = alert ? '提醒线：' + DRAW_ALERT[alert] : '设为提醒线';
+    el('dsAlertBtn').setAttribute('aria-label', alertName);
+    el('dsAlertBtn').dataset.tip = alertName + '（供外部脚本读取，本页不发通知）';
+    Array.prototype.forEach.call(el('dsAlertPop').children, function (b) {
+      b.setAttribute('aria-checked', b.dataset.alert === (alert || '') ? 'true' : 'false');
+    });
     var all = st.lockAll;
     el('dsLock').setAttribute('aria-pressed', own || all ? 'true' : 'false');
     el('dsLock').disabled = all;
@@ -3615,6 +3626,8 @@
     // 内容（填充按钮等）定下来后再量宽度定位，免得贴到价格轴
     if (wasHidden || floatFor !== d.id) placeFloat(d.id);
   }
+
+  var DRAW_ALERT = { below: '跌破时提醒', above: '突破时提醒' };
 
   function patchDrawStyle(patch) {
     var d = drawCtl && drawCtl.selected();
@@ -3727,7 +3740,8 @@
       renderDrawUi();
     });
     // 浮动样式条
-    var popFor = { dsColorBtn: 'dsColorPop', dsWidthBtn: 'dsWidthPop', dsLineBtn: 'dsLinePop', dsFillBtn: 'dsFillPop' };
+    var popFor = { dsColorBtn: 'dsColorPop', dsWidthBtn: 'dsWidthPop', dsLineBtn: 'dsLinePop', dsFillBtn: 'dsFillPop',
+      dsAlertBtn: 'dsAlertPop' };
     Object.keys(popFor).forEach(function (id) {
       el(id).addEventListener('click', function () { toggleDrawPop(el(id), el(popFor[id])); });
     });
@@ -3739,6 +3753,12 @@
     onSwatch(el('dsFillColor'), function (b) { patchDrawStyle({ backgroundColor: b.dataset.fill, fillBackground: true }); });
     onSwatch(el('dsWidthPop'), function (b) { patchDrawStyle({ width: +b.dataset.width }); closeDrawPop(); });
     onSwatch(el('dsLinePop'), function (b) { patchDrawStyle({ lineStyle: b.dataset.line }); closeDrawPop(); });
+    onSwatch(el('dsAlertPop'), function (b) {
+      var d = drawCtl && drawCtl.selected();
+      if (d) drawCtl.setAlert(d.id, b.dataset.alert || null);
+      closeDrawPop();
+      renderDrawUi();
+    });
     el('dsHex').addEventListener('keydown', function (ev) {
       if (ev.key !== 'Enter') return;
       var v = el('dsHex').value.trim().replace(/^#?/, '#');

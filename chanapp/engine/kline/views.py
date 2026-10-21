@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -618,3 +619,22 @@ def quotes(conn, codes, *, now=None) -> dict:
     now = now or datetime.now()
     with facts.read_txn(conn):
         return {code: quote(conn, code, now=now) for code in dict.fromkeys(codes)}
+
+
+def qfq_day_closes(conn, code, days, *, now=None) -> dict:
+    """{day: 该日当前的前复权日收盘或 None}，与前复权日线视图同一口径：A 股按因子链（覆盖区外为 None），
+    港股取供应商前复权缓存（缓存未建为 None），指数为原始价。"""
+    with facts.read_txn(conn):
+        ctx = _Ctx(conn, code, "qfq", now)
+        bars = _vendor_bars(ctx, "day", None, sys.maxsize)[0] if ctx.vendor else _day_bars(ctx)
+    closes = {b["dt"]: b["close"] for b in bars}
+    return {day: closes.get(day) for day in days}
+
+
+def quotes_with_qfq_closes(conn, codes, days_by_code, *, now=None) -> tuple[dict, dict]:
+    """quotes() 加 days_by_code {code: 日子} 各日的 qfq_day_closes()，同一次读事务、同一个 now（提醒线换算用：
+    线价换算与最新价出自同一快照）。"""
+    now = now or datetime.now()
+    with facts.read_txn(conn):
+        return (quotes(conn, codes, now=now),
+                {code: qfq_day_closes(conn, code, days, now=now) for code, days in days_by_code.items()})

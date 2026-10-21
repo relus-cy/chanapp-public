@@ -33,6 +33,10 @@ GET /api/views → {recent: [{code, name, freq, adjust, first_viewed_at, last_vi
 用户画线（chanapp/api/drawings.py）：GET /api/drawings?code=，PUT /api/drawings/{code}/{id} {body, base_revision}，
 DELETE /api/drawings/{code}/{id}?base_revision=（软删除），DELETE /api/drawings/{code}（清空该标的）；
 条件写不符回 409 {"detail", "current"}。路径 DRAWINGS_PATH，否则随 WATCHLIST_PATH / 实例目录 / 缓存目录。
+提醒线：GET /api/alert-lines?code=（code 可省，省略为全部标的）→ {alert_lines: [{code, drawing_id, direction, price,
+drawn_adjust, drawn_price, latest {price, price_time, stale}}]}：带 alert 的未删除水平线，price 换算到当前原始价口径
+（换算见 chanapp/api/drawings.py:alert_lines），latest 与 /api/quotes 同口径，换算与报价同一次读事务。chanapp 不判定
+触发、不发通知，由读取方决定；/api/chart 不含这些数据。
 
 /api/chart?refetch=1 先整段重取主图周期与共振依赖的分析窗口再读取，结果在响应头 X-Refetch-Status
 （ok / partial / failed / busy / disabled；busy 为同一标的已有重拉或追赶在途、本次没有重取；
@@ -513,6 +517,21 @@ def clear_drawings(code: DrawingCode) -> dict:
         return {"code": code, "deleted": _drawing_store().clear(code)}
     except sqlite3.Error as exc:
         raise HTTPException(status_code=503, detail="画线未能清空，请重试") from exc
+
+
+@app.get("/api/alert-lines")
+def list_alert_lines(code: Annotated[str | None, Query(pattern=_CODE_PATTERN)] = None) -> JSONResponse:
+    try:
+        lines = _drawing_store().alert_items(code)
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail="画线读取失败") from exc
+    try:
+        quotes, closes = engine_data.quotes_with_qfq_closes([x["code"] for x in lines],
+                                                            api_drawings.qfq_ref_days(lines))
+    except Exception as e:  # 数据层错误统一成 502
+        raise HTTPException(status_code=502, detail="报价暂不可用") from e
+    items = engine_chart_payload.round_floats(api_drawings.alert_lines(lines, quotes, closes))
+    return JSONResponse({"alert_lines": items}, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/watchlist")

@@ -665,6 +665,60 @@ test('a locked drawing cannot be dragged or deleted with the keyboard, stays loc
   expect('locked' in (await first()).body).toBe(false);
 });
 
+test('a horizontal line marked as an alert line keeps its direction after reload and is read from /api/alert-lines', async ({ app, browser, screen }) => {
+  const round4 = (x: number) => Math.round(x * 1e4) / 1e4;
+  await openWide({ app, browser });
+  // Only a horizontal line offers the control.
+  await screen.getByRole('button', '线段').tap();
+  await clickAt(browser, await chartPoint(browser, 0.3, 0.75));
+  await clickAt(browser, await chartPoint(browser, 0.6, 0.7));
+  await expect.poll(async () => (await drawings(app)).length).toBe(1);
+  await expect(browser.locator('#drawStyle')).toBeVisible();
+  await expect(browser.locator('#dsAlertBtn')).toBeHidden();
+  await browser.keyboard.press('Escape');
+
+  await chooseTool(browser, 'horizontal-line');
+  const at = await chartPoint(browser, 0.5, 0.4);
+  await clickAt(browser, at);
+  await expect.poll(async () => (await drawings(app)).length).toBe(2);
+  const line = (await drawings(app)).find(d => d.body.kind === 'horizontal-line');
+  expect('alert' in line.body).toBe(false);
+  expect(await api(app, `/api/alert-lines?code=${CODE}`)).toEqual({ alert_lines: [] });
+  await screen.getByRole('button', '设为提醒线').tap();
+  await screen.getByRole('menuitemradio', '跌破时提醒').tap();
+  await expect.poll(async () => (await drawings(app)).find(d => d.id === line.id).body.alert).toEqual({ direction: 'below' });
+
+  await browser.reload();
+  await expect(browser.locator('#center')).toHaveAttribute('aria-busy', 'false');
+  await expect.poll(() => browser.evaluate(id => window.__draw.labels(id), line.id)).not.toBeNull();
+  // The magnet may have moved the line off the clicked point: select it at its saved price.
+  const onLine = { x: at.x + 40, y: await browser.evaluate(price => document.querySelector('#chart').getBoundingClientRect().top +
+    window.__draw.y(price), line.body.anchors[0].price) };
+  await clickAt(browser, onLine);
+  await expect(screen.getByRole('button', '提醒线：跌破时提醒')).toBeVisible();
+  // Another edit of the line keeps the mark.
+  await pickColor(browser, '#f23645');
+  const saved = async () => (await drawings(app)).find(d => d.id === line.id);
+  await expect.poll(async () => (await saved()).body.style.color).toBe('#f23645');
+  expect((await saved()).body.alert).toEqual({ direction: 'below' });
+
+  // The bundled sample has no ex-rights after the reference day, so the qfq line price passes through;
+  // latest is the same row /api/quotes gives.
+  const price = round4((await saved()).body.anchors[0].price);
+  const quote = (await api(app, `/api/quotes?code=${CODE}`)).quotes[CODE];
+  expect(await api(app, `/api/alert-lines?code=${CODE}`)).toEqual({ alert_lines: [{
+    code: CODE, drawing_id: line.id, direction: 'below', price, drawn_adjust: 'qfq', drawn_price: price,
+    latest: { price: quote.price, price_time: quote.price_time, stale: quote.stale } }] });
+  expect(quote.price).toBeGreaterThan(0);
+
+  await browser.keyboard.press('Escape');
+  await clickAt(browser, onLine);
+  await screen.getByRole('button', '提醒线：跌破时提醒').tap();
+  await screen.getByRole('menuitemradio', '不设提醒').tap();
+  await expect.poll(async () => 'alert' in (await saved()).body).toBe(false);
+  expect(await api(app, `/api/alert-lines?code=${CODE}`)).toEqual({ alert_lines: [] });
+});
+
 test('the drawing button collapses the toolbar, the choice survives reload, and the style bar never covers a placement', async ({ app, browser, screen }) => {
   await openWide({ app, browser });
   await expect(browser.locator('#drawBar')).toBeVisible();

@@ -537,6 +537,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   .ds-grip { display: inline-flex; align-items: center; width: 14px; height: 26px; color: var(--faint); cursor: grab; touch-action: none; }
   .ds-grip svg { width: 14px; height: 14px; }
   .ds-chip { display: block; width: 16px; height: 16px; border-radius: 5px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+  .draw-style #dsAlertBtn[data-alert] { color: var(--gold); }
   .draw-style button:disabled { opacity: .35; cursor: default; background: transparent; }
   .ds-menu { display: flex; flex-direction: column; min-width: 128px; }
   .ds-menu .pv { width: 40px; height: 0; border-top: 2px solid currentColor; }
@@ -978,6 +979,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
         <button type="button" id="dsWidthBtn" aria-label="线条宽度" data-tip="线条宽度" aria-haspopup="menu" aria-expanded="false" aria-controls="dsWidthPop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16"/><path d="M4 11.5h16" stroke-width="2.4"/><path d="M4 17.5h16" stroke-width="3.4"/></svg></button>
         <button type="button" id="dsLineBtn" aria-label="线型" data-tip="线型" aria-haspopup="menu" aria-expanded="false" aria-controls="dsLinePop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18"/><path d="M3 12h4M10 12h4M17 12h4"/><path d="M3 17h1.5M7.5 17h1.5M12 17h1.5M16.5 17h1.5M21 17h0"/></svg></button>
         <button type="button" id="dsFillBtn" aria-label="填充" data-tip="填充" aria-haspopup="dialog" aria-expanded="false" aria-controls="dsFillPop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 11l6-6 7 7-6 6a2 2 0 0 1-2.8 0L5 13.8A2 2 0 0 1 5 11z"/><path d="M5 12h13"/><path d="M19.5 15.5s1.5 1.8 1.5 2.8a1.5 1.5 0 0 1-3 0c0-1 1.5-2.8 1.5-2.8z"/></svg></button>
+        <button type="button" id="dsAlertBtn" aria-label="设为提醒线" data-tip="设为提醒线（供外部脚本读取，本页不发通知）" aria-haspopup="menu" aria-expanded="false" aria-controls="dsAlertPop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg></button>
         <button type="button" id="dsLock" aria-label="锁定" data-tip="锁定：不能拖动、不能用键盘删除" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></button>
         <button type="button" id="dsDelete" aria-label="删除" data-tip="删除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
         <div class="ds-pop ds-panel" id="dsColorPop" role="dialog" aria-label="线条颜色" hidden>
@@ -997,6 +999,11 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
           <button type="button" role="menuitemradio" data-line="solid"><i class="pv"></i>实线<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
           <button type="button" role="menuitemradio" data-line="dashed"><i class="pv" style="border-top-style:dashed"></i>虚线<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
           <button type="button" role="menuitemradio" data-line="dotted"><i class="pv" style="border-top-style:dotted"></i>点线<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+        </div>
+        <div class="ds-pop ds-menu" id="dsAlertPop" role="menu" aria-label="提醒线" hidden>
+          <button type="button" role="menuitemradio" data-alert="below">跌破时提醒<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+          <button type="button" role="menuitemradio" data-alert="above">突破时提醒<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+          <button type="button" role="menuitemradio" data-alert="">不设提醒<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
         </div>
         <div class="ds-pop ds-panel" id="dsFillPop" role="dialog" aria-label="填充" hidden>
           <label class="ds-line"><span>填充背景</span><input type="checkbox" id="dsFill"></label>

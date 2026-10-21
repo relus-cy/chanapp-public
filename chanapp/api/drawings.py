@@ -9,7 +9,8 @@ created_at、updated_at、deleted_at。写入是条件写：
 - 清空一个标的把它所有未删除画线一次标为删除，不检查版本（用户明确的整体操作）。
 
 冲突时抛 Conflict，带服务端当前版本（不存在为 None），由接口层回 409。body 的语义归前端，
-这里只校验它是对象、v 为支持的版本、序列化后不超过上限。
+这里只校验它是对象、v 为支持的版本、序列化后不超过上限；例外是提醒线（可选的 alert），服务端要读它换算价位
+（见 alert_lines），所以 alert 只接受在水平线上，方向、复权模式与线价要合法。
 
 文件位置由 engine/instance_paths.py 解析：DRAWINGS_PATH；否则与 WATCHLIST_PATH 同目录同名加 .drawings.sqlite
 后缀；否则在实例目录；都未设置时放在缓存根下的 drawings.sqlite。新建文件权限 0600。
@@ -24,7 +25,11 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from chanapp.engine.kline.rows import kind_of
+
 BODY_VERSIONS = (1,)
+ALERT_KIND = "horizontal-line"
+ALERT_DIRECTIONS = ("below", "above")
 MAX_BODY_BYTES = 16 * 1024
 MAX_PER_CODE = 500        # 单个标的的未删除画线上限，防止失控的前端灌满
 
@@ -57,10 +62,70 @@ def validate_body(body) -> str:
     v = body.get("v")
     if type(v) is not int or v not in BODY_VERSIONS:     # 排除 true、1.0 这类与 1 相等的值
         raise ValueError(f"body.v 只支持 {list(BODY_VERSIONS)}")
+    if "alert" in body:
+        _validate_alert(body)
     text = json.dumps(body, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     if len(text.encode("utf-8")) > MAX_BODY_BYTES:
         raise ValueError(f"body 超过 {MAX_BODY_BYTES} 字节")
     return text
+
+
+def _validate_alert(body) -> None:
+    alert = body["alert"]
+    if body.get("kind") != ALERT_KIND:
+        raise ValueError(f"提醒线只支持 {ALERT_KIND}")
+    if not isinstance(alert, dict) or alert.get("direction") not in ALERT_DIRECTIONS:
+        raise ValueError(f"alert.direction 只支持 {list(ALERT_DIRECTIONS)}")
+    if body.get("adjust") not in ("qfq", "raw") or _line_price(body) is None:
+        raise ValueError("提醒线要有复权模式和线价")
+
+
+def _line_price(body) -> float | None:
+    anchors = body.get("anchors")
+    price = anchors[0].get("price") if isinstance(anchors, list) and anchors and isinstance(anchors[0], dict) else None
+    return float(price) if type(price) in (int, float) else None
+
+
+def _ref_close(body) -> tuple:
+    """(参照日, 参照收盘)；缺失或不合法为 (None, None)。"""
+    ref = body.get("ref")
+    if not isinstance(ref, dict) or not isinstance(ref.get("day"), str):
+        return None, None
+    close = ref.get("close")
+    return (ref["day"], float(close)) if type(close) in (int, float) and close > 0 else (None, None)
+
+
+def qfq_ref_days(lines) -> dict:
+    """{code: 参照日集合}：前复权下画的提醒线换算要读的日子（指数恒为原始价，不读）。"""
+    out: dict = {}
+    for line in lines:
+        day, _ = _ref_close(line["body"])
+        if line["body"]["adjust"] == "qfq" and kind_of(line["code"]) != "index" and day:
+            out.setdefault(line["code"], set()).add(day)
+    return out
+
+
+def alert_lines(lines, quotes, closes) -> list:
+    """提醒线换算到当前原始价口径（按画线记下的参照收盘 ref）：
+    - 不复权下画的线、指数（恒为原始价）原样给出；
+    - 前复权下画的线乘「参照日当前的前复权收盘 ÷ 记录的参照收盘」：最新一天的前复权价等于原始价，所以换算后
+      就是今天的原始价口径；港股前复权已核实为等比，同一换算。拿不到参照日的当前前复权收盘（不在覆盖区、
+      缓存未建、没有参照）时 price 为 None，不编造。
+    quotes：{code: 门面 quote() 或 None}；closes：{code: {day: 当前前复权收盘或 None}}。"""
+    out = []
+    for line in lines:
+        code, body = line["code"], line["body"]
+        drawn = _line_price(body)
+        price = drawn
+        if body["adjust"] == "qfq" and kind_of(code) != "index":
+            day, ref_close = _ref_close(body)
+            now_close = (closes.get(code) or {}).get(day) if day else None
+            price = drawn * now_close / ref_close if now_close else None
+        q = quotes.get(code) or {}
+        out.append({"code": code, "drawing_id": line["id"], "direction": body["alert"]["direction"],
+                    "price": price, "drawn_adjust": body["adjust"], "drawn_price": drawn,
+                    "latest": {"price": q.get("price"), "price_time": q.get("price_time"), "stale": q.get("stale")}})
+    return out
 
 
 def _row(r) -> dict:
@@ -110,6 +175,18 @@ class DrawingStore:
             rows = conn.execute("SELECT * FROM drawings WHERE code=? AND deleted_at IS NULL"
                                 " ORDER BY created_at, rowid", (code,)).fetchall()
         return [_row(r) for r in rows]
+
+    def alert_items(self, code=None) -> list:
+        """未删除、带 alert 的水平线 [{code, id, body}]，按标的、创建先后；code 为 None 时全部标的。"""
+        sql = "SELECT * FROM drawings WHERE deleted_at IS NULL" + (" AND code=?" if code else "")
+        with self._connect() as conn:
+            rows = conn.execute(sql + " ORDER BY code, created_at, rowid", (code,) if code else ()).fetchall()
+        out = []
+        for r in rows:
+            body = json.loads(r["body"])
+            if body.get("kind") == ALERT_KIND and isinstance(body.get("alert"), dict):
+                out.append({"code": r["code"], "id": r["id"], "body": body})
+        return out
 
     def put(self, code, id_, body, base_revision, *, at=None) -> dict:
         text = validate_body(body)

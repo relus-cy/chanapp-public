@@ -16,6 +16,7 @@
 | `refetch_window(code, freq="day") -> dict` | 手动重拉，返回 `{"status": ...}`：`ok`、`partial`、`failed`、`busy`、`disabled`（demo 或采集器关闭） |
 | `quote(code) -> dict 或 None` | 报价 `{price, price_time, price_label, pc, pct, limit_up, trade_date, stale}`。当日首根分钟出现前 `price_label` 为 `昨收`、涨跌为空：A 股个股当日参考前收已确认时价格即参考前收（除权日为除权参考价），否则为最近收盘 |
 | `quotes(codes) -> {code: dict 或 None}` | 多个代码的 `quote` 报价，同一次读事务（`/api/quotes` 用它） |
+| `quotes_with_qfq_closes(codes, days_by_code) -> (quotes, closes)` | `quotes(codes)` 加 `days_by_code` 里各代码指定日子的当前前复权日收盘 `{code: {day: close 或 None}}`，同一次读事务（`/api/alert-lines` 用它） |
 | `status(codes) -> dict` | 运行状态，同 `/api/status` |
 | `configure_instance()` | 上下文管理器：加载并校验实例配置、初始化实例目录。应用启动时调用；脚本直接使用门面时也要先进入它，才会按实例配置选择模式与数据路径 |
 
@@ -122,12 +123,17 @@
 - `GET /api/quotes?code=`：报价表，`{data_version, quotes: {code: 行}}`，覆盖自选各项，另加不在自选里的当前代码 `code`；全部代码同一次读取。行为 `{name, price, pct, limit_up, price_time, price_label, stale, price_unavailable}`，两个市场都只由 K 线事实派生（门面 `quote`）；标的没有事实时价格为空、`price_unavailable` 为真；读取失败返回 502。页面在图表不刷新的时段用它。`GET /api/quote?code=` 返回单个代码的同结构行，保留兼容，页面不用。
 - `GET /api/status`：`{mode, enabled, checked_at, datasets, probes, budget, upstream, calendar_export}`。`mode` 为 `demo` 或 `real`；`enabled` 为真表示采集器在运行；`datasets` 逐项给出 `last_commit_at`、`stale`、`stale_judged`（为 false 时表示当前时段采集器不判 stale，`stale` 恒为 false）、`open_gaps`、`known_gaps`（重试 5 次后不再自动补取的缺口）、`pending_review`。`upstream` 列出因不可自愈失败而停发请求的来源，每项 `{source, markets, vendor_code, vendor_message, since, next_probe_at}`：`vendor_code` 与 `vendor_message` 是供应商自己的错误码与原话（已脱敏；凭据未设置时错误码为 `未设置`），`markets` 是当前由该来源供数的市场，`since` 是开始停发的时间，`next_probe_at` 是最早允许探测的时间（探测随下一轮调度发出，所以可能已过去）；没有停发时为空数组，demo 恒为空。
 - `GET/PUT /api/periods`：展示周期勾选，见 [展示周期与分析](periods-and-analysis.md)。
-- 画线：按标的逐条保存，内容由页面定义，服务端只校验后原样存取。路径见 [配置 · 实例目录与数据路径](configuration.md#实例目录与数据路径)，新建文件权限 0600；demo 同样可读写。
+- 画线：按标的逐条保存，内容由页面定义，服务端只校验后原样存取；提醒线的 `alert` 例外，服务端要读它换算价位。路径见 [配置 · 实例目录与数据路径](configuration.md#实例目录与数据路径)，新建文件权限 0600；demo 同样可读写。
   - `GET /api/drawings?code=`：`{code, drawings: [{id, body, revision, updated_at}]}`，只含未删除的画线，按创建先后排列。
-  - `PUT /api/drawings/{code}/{id}`，请求体 `{body, base_revision}`：新建时 `base_revision` 为空，修改时填当前 `revision`；成功返回该画线，`revision` 加 1。`id` 为 8–64 位字母、数字、`-`、`_`。`body` 必须是对象，`v` 为整数 1，序列化后不超过 16 KB，否则 422；单个标的最多 500 条未删除画线。
+  - `PUT /api/drawings/{code}/{id}`，请求体 `{body, base_revision}`：新建时 `base_revision` 为空，修改时填当前 `revision`；成功返回该画线，`revision` 加 1。`id` 为 8–64 位字母、数字、`-`、`_`。`body` 必须是对象，`v` 为整数 1，序列化后不超过 16 KB，否则 422；带 `alert` 时还要求 `kind` 为 `horizontal-line`、`alert.direction` 为 `below` 或 `above`、`adjust` 为 `qfq` 或 `raw`、`anchors[0].price` 为数，否则 422。单个标的最多 500 条未删除画线。
   - `DELETE /api/drawings/{code}/{id}?base_revision=`：软删除，保留墓碑；已删除的再删返回 200；不存在返回 404。
   - `DELETE /api/drawings/{code}`：把该标的所有未删除画线标为删除，返回 `{code, deleted}`，不检查版本。
-  - `body` 第 1 版字段：`kind`（工具名，取画线库的类型名，例如 `trend-line`、`horizontal-line`、`fib-retracement`、`rectangle`；页面工具栏列出的全部类型见 `chanapp/web/app.js` 的 `DRAW_GROUPS`）；`adjust`（画线时的复权模式，`qfq` 或 `raw`）；`anchors`（`[{freq, dt, price}]`：端点所在周期、那根 K 线的标签、价格）；`style`（只含改过默认值的样式键）；`ref`（前复权参照 `{day, close}`，不复权为 `null`）；`locked`（可选，只在锁定时为 `true`）。页面按 `v` 迁移旧格式，服务端不改写。
+  - `body` 第 1 版字段：`kind`（工具名，取画线库的类型名，例如 `trend-line`、`horizontal-line`、`fib-retracement`、`rectangle`；页面工具栏列出的全部类型见 `chanapp/web/app.js` 的 `DRAW_GROUPS`）；`adjust`（画线时的复权模式，`qfq` 或 `raw`）；`anchors`（`[{freq, dt, price}]`：端点所在周期、那根 K 线的标签、价格）；`style`（只含改过默认值的样式键）；`ref`（前复权参照 `{day, close}`，不复权为 `null`）；`locked`（可选，只在锁定时为 `true`）；`alert`（可选，只在水平线标为提醒线时出现，`{direction: "below" | "above"}`：`below` 指最新价跌破线价，`above` 指突破线价）。不认识 `alert` 的旧页面忽略它，与 `locked` 相同。页面按 `v` 迁移旧格式，服务端不改写。
+  - `GET /api/alert-lines?code=`：提醒线，供 AI 或外部脚本读取，chanapp 不判定触发、不保存触发状态、不发通知。`code` 可省，省略时返回全部标的。响应 `{alert_lines: [{code, drawing_id, direction, price, drawn_adjust, drawn_price, latest: {price, price_time, stale}}]}`，只含未删除、带 `alert` 的水平线，按代码、创建先后排列。
+    - `price`：换算到当前原始价口径的线价。不复权下画的线和指数（恒为原始价）原样给出；前复权下画的线乘「`ref.day` 那天当前的前复权日收盘 ÷ `ref.close`」，最新一天的前复权价等于原始价，所以乘完就是今天的原始价口径。港股前复权是供应商的等比口径，同一换算。拿不到那天的当前前复权收盘（`ref` 缺失、那天在前复权覆盖区外、港股前复权缓存未建）时为 `null`，不按旧价位给。当天的除权信息还没确认（A 股盘前参考价未到、港股前复权缓存只到最近一个收盘日）时，前复权只算到最近确认的一天，`price` 是那一天的原始价口径；当天恰好除权时，它与当天最新价之间差当天的除权因子，与前复权图表的显示一致。
+    - `drawn_adjust`、`drawn_price`：画线时的复权模式和保存的线价，便于核对。
+    - `latest`：与 `/api/quotes` 同一口径的最新价、价格时刻和 `stale`，与换算用的前复权收盘同一次读取；数据 stale 或停牌时照常给出，由读取方决定是否跳过判定。标的没有事实时三项为 `null`。
+    - 浮点数保留 4 位小数；响应 `Cache-Control: no-store`；画线存储读失败 503，行情读取失败 502。`/api/chart` 不含这些数据。
   - 冲突返回 **409 `{"detail": "画线已被修改", "current": 服务端当前版本或 null}`**：新建时 `id` 已存在（含已删除）、`base_revision` 与当前不符、修改或删除已删除的画线。墓碑占住 `id`，迟到的写入不能复活已删除的画线。存储读写失败返回 503。
 
 ## CSV 导入
