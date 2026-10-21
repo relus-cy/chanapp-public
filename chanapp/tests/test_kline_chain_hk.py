@@ -43,23 +43,28 @@ def _no_network(*args, **kwargs):
     raise AssertionError("链路测试不得联网")
 
 
+def _run_chain(cls, client):
+    """回填日线与分钟 → 定稿 → 供应商前复权缓存；结果与事实库连接挂到测试类上。"""
+    cls.tmp = tempfile.TemporaryDirectory()
+    with mock.patch.dict(os.environ, {}, clear=False), \
+            mock.patch.object(socket.socket, "connect", _no_network):
+        for name in ("LONGBRIDGE_APP_KEY", "LONGBRIDGE_APP_SECRET", "LONGBRIDGE_ACCESS_TOKEN"):
+            os.environ.pop(name, None)
+        c = collector.Collector(cls.tmp.name,
+                                providers={"longbridge": longbridge.LongbridgeProvider(client=client)},
+                                clock=lambda: NOW.timestamp(), watchlist_fn=lambda: [CODE])
+        c.backfill_day(CODE)
+        c.plan_minute_backfill(CODE)
+        cls.drain = c.drain_gaps(max_requests=100)
+        cls.finalize = c.finalize_due([CODE], "2026-05-22", NOW, calendar_known=True)
+        cls.vendor = c.refresh_vendor_qfq(CODE, NOW, closed_through="2026-05-22")
+    cls.conn = facts.open_facts(Path(cls.tmp.name) / facts.DB_NAME)
+
+
 class HKChainTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.TemporaryDirectory()
-        with mock.patch.dict(os.environ, {}, clear=False), \
-                mock.patch.object(socket.socket, "connect", _no_network):
-            for name in ("LONGBRIDGE_APP_KEY", "LONGBRIDGE_APP_SECRET", "LONGBRIDGE_ACCESS_TOKEN"):
-                os.environ.pop(name, None)
-            c = collector.Collector(cls.tmp.name,
-                                    providers={"longbridge": longbridge.LongbridgeProvider(client=RecordedClient())},
-                                    clock=lambda: NOW.timestamp(), watchlist_fn=lambda: [CODE])
-            c.backfill_day(CODE)
-            c.plan_minute_backfill(CODE)
-            cls.drain = c.drain_gaps(max_requests=100)
-            cls.finalize = c.finalize_due([CODE], "2026-05-22", NOW, calendar_known=True)
-            cls.vendor = c.refresh_vendor_qfq(CODE, NOW, closed_through="2026-05-22")
-        cls.conn = facts.open_facts(Path(cls.tmp.name) / facts.DB_NAME)
+        _run_chain(cls, RecordedClient())
 
     @classmethod
     def tearDownClass(cls):
@@ -128,6 +133,48 @@ class HKChainTests(unittest.TestCase):
         self.assertEqual(self.drain["incomplete"], 1)
         backfill = [g for g in facts.open_gaps(self.conn, CODE, "m30") if g["reason"] == "backfill"]
         self.assertEqual([g["attempts"] for g in backfill], [1])
+
+
+class OpeningAuctionClient(RecordedClient):
+    """05-14 09:30 起的 m30 改成生产实测的形状（6127.HK 2024-12-10、2025-03-06）：开盘价 = 日线开盘价（竞价成交），
+    持续交易的低高不含它且越出超过竞价补齐容差。"""
+    SHAPE = {"raw": {"low": "479.000", "close": "479.200"},      # 开 474.200 低于低 1.01%
+             "qfq": {"low": "473.500", "close": "473.700"}}      # 开 468.747 低于低 1.00%+
+
+    def __init__(self):
+        super().__init__()
+        for adjust, fields in self.SHAPE.items():
+            self.by[("m30", adjust)] = [{**r, **fields} if r["timestamp"] == "2026-05-14T09:30:00" else r
+                                        for r in self.by[("m30", adjust)]]
+
+
+class HKChainOpeningAuctionTests(unittest.TestCase):
+    """回归（2026-10-12 起 hk06127 前复权停在 10-09）：一根越界超出容差的开盘竞价 bar 让 raw 拒收该槽，
+    并让供应商前复权 day+m30 整组不发布。日线佐证后该槽入库、缓存照常发布。"""
+
+    @classmethod
+    def setUpClass(cls):
+        _run_chain(cls, OpeningAuctionClient())
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+        cls.tmp.cleanup()
+
+    def bar(self, adjust):
+        view = views.read_view(self.conn, CODE, "m30", adjust=adjust, limit=5000, now=NOW)
+        return next(b for b in view.bars if b["dt"] == "2026-05-14 10:00"), view
+
+    def test_raw_opening_slot_admitted_with_low_widened_to_auction_open(self):
+        bar, view = self.bar("raw")
+        self.assertEqual((bar["open"], bar["high"], bar["low"], bar["close"]), (474.2, 479.6, 474.2, 479.2))
+        self.assertEqual(len([b for b in view.bars if b["dt"][:10] == "2026-05-14"]), 11)
+
+    def test_vendor_qfq_published_with_opening_slot(self):
+        self.assertEqual((self.vendor["day"], self.vendor["m30"]), (1, 1))
+        bar, view = self.bar("qfq")
+        self.assertEqual((bar["open"], bar["low"]), (468.747, 468.747))
+        self.assertFalse(view.stale)
 
 
 if __name__ == "__main__":

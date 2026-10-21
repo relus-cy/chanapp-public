@@ -115,6 +115,56 @@ class LongbridgeTests(unittest.TestCase):
         qfq = {b["trade_date"]: b for b in p.qfq_series("hk01888", "day", "2023-06-12", "2023-06-15")}
         self.assertEqual(qfq["2023-06-13"]["high"], 7.48)
 
+    @staticmethod
+    def _opening_auction_client(day_raw, day_qfq):
+        # 6127.HK 2024-12-10 生产取证（2026-10-21）：09:30 起的 m30 开 10.30 高于高 10.18 达 1.18%（超出容差），
+        # 当日日线开 = 高 = 10.30，持续交易最高只到 10.18：10.30 是开市前竞价成交
+        def bar(ts, o, h, l, c, v="613600"):
+            return {"timestamp": ts, "open": o, "high": h, "low": l, "close": c, "volume": v, "turnover": "1.0"}
+        return FakeClient(by_date={
+            ("m30", "raw"): [bar("2024-12-10T09:30:00", "10.300", "10.180", "9.560", "9.570"),
+                             bar("2024-12-10T10:00:00", "9.620", "9.790", "9.590", "9.700")],
+            ("m30", "qfq"): [bar("2024-12-10T09:30:00", "10.159", "10.039", "9.419", "9.429"),
+                             bar("2024-12-10T10:00:00", "9.479", "9.649", "9.449", "9.559")],
+            ("day", "raw"): [bar("2024-12-10T00:00:00", *day_raw, v="1609416")],
+            ("day", "qfq"): [bar("2024-12-10T00:00:00", *day_qfq, v="1609416")]})
+
+    def test_opening_auction_beyond_tolerance_widened_when_day_bar_corroborates(self):
+        client = self._opening_auction_client(("10.300", "10.300", "9.450", "9.450"),
+                                              ("10.159", "10.159", "9.309", "9.309"))
+        p = longbridge.LongbridgeProvider(client=client)
+        with self.assertLogs(longbridge.log, "WARNING"):
+            rows = p.minute_history("hk06127", "m30", "2024-12-10 09:30", "2024-12-10 16:00", now=self.NOW)
+        self.assertEqual([(r.slot_end, r.open, r.high, r.low, r.close) for r in rows],
+                         [("2024-12-10 10:00", 10.30, 10.30, 9.56, 9.57),
+                          ("2024-12-10 10:30", 9.62, 9.79, 9.59, 9.70)])
+        qfq = p.qfq_series("hk06127", "m30", "2024-12-10 09:30", "2024-12-10 16:00")
+        self.assertEqual([(b["open"], b["high"], b["low"], b["close"]) for b in qfq],
+                         [(10.159, 10.159, 9.419, 9.429), (9.479, 9.649, 9.449, 9.559)])
+
+    def test_opening_auction_below_low_widened_by_day_open(self):
+        # 6127.HK 2025-03-06：m30 开 14.00 低于低 14.20 达 1.41%，日线开 = 低 = 14.00
+        def bar(ts, o, h, l, c):
+            return {"timestamp": ts, "open": o, "high": h, "low": l, "close": c, "volume": "1103900", "turnover": "1.0"}
+        client = FakeClient(by_date={("m30", "raw"): [bar("2025-03-06T09:30:00", "14.000", "15.000", "14.200", "14.940")],
+                                     ("day", "raw"): [bar("2025-03-06T00:00:00", "14.000", "15.340", "14.000", "14.720")]})
+        p = longbridge.LongbridgeProvider(client=client)
+        with self.assertLogs(longbridge.log, "WARNING"):
+            rows = p.minute_history("hk06127", "m30", "2025-03-06 09:30", "2025-03-06 16:00", now=self.NOW)
+        self.assertEqual([(r.open, r.high, r.low, r.close) for r in rows], [(14.0, 15.0, 14.0, 14.94)])
+
+    def test_beyond_tolerance_without_day_corroboration_left_for_admission(self):
+        # 日线开盘价不等于越界的 m30 开盘价（或日线高低不含它）：不补，留给准入按 bad_ohlc 拒收
+        for day_raw in (("10.200", "10.300", "9.450", "9.450"),     # 开不等
+                        ("10.300", "10.000", "9.450", "9.450")):    # 日线高 10.00 不含 10.30（越出 3%，日线自身也不补）
+            p = longbridge.LongbridgeProvider(client=self._opening_auction_client(day_raw, day_raw))
+            rows = p.minute_history("hk06127", "m30", "2024-12-10 09:30", "2024-12-10 16:00", now=self.NOW)
+            self.assertEqual((rows[0].open, rows[0].high, rows[0].low), (10.30, 10.18, 9.56))
+
+    def test_clean_m30_fetch_requests_no_day_bars(self):
+        _, c = self.m30()
+        self.assertEqual({call[2] for call in c.calls}, {"m30"})
+
     def test_qfq_series_uses_same_label_rules(self):
         p, c = provider()
         rows = p.qfq_series("hk00700", "m30", "2026-05-14 09:30", "2026-05-15 16:00")

@@ -4,7 +4,8 @@
 - 日线：raw（NoAdjust），pc = 上一行收盘（港股前收即上一日收盘），首行用回看窗口补；currency HKD，volume 为股。
 - m30：长桥是区间起始标签（09:30…15:30），加 30 分钟归一为末端标签。收市竞价 bar 的起始标签等于会话终点
   （常规日 16:00；半日市按同一规则落在 12:00），并入该终点槽：open 取前一根常规 bar，high/low 取两者极值，
-  close 取竞价 bar，量额相加。常规日每日 11 根。起始标签不在会话内的行（盘前/盘后）逐行丢弃并记日志，
+  close 取竞价 bar，量额相加。常规日每日 11 根。开/收越出高低超过竞价补齐容差时，取同口径当日日线佐证（开/收等于
+  日线开/收且在日线高低内）后补齐，不成立的留给准入拒收。起始标签不在会话内的行（盘前/盘后）逐行丢弃并记日志，
   不作废整批（spec §5.3：只隔离已证实错误的行）。
 - minute_history 记 closed，且只收已过 now 的槽；minute_live 用 candlesticks(count=12)，只留当日行、一律 forming
   （计划 A 决定 8：closed 只来自定稿）。
@@ -31,7 +32,8 @@ from chanapp.engine.kline.rows import CalendarRow, RawDayRow, RawMinuteRow, new_
 
 log = logging.getLogger(__name__)
 
-CONTRACT_VERSION = "longbridge-raw-3"         # 2：naive 时间按主机时区解释；竞价价小幅越出时补齐高低；3：新增 calendar
+CONTRACT_VERSION = "longbridge-raw-4"         # 2：naive 时间按主机时区解释；竞价价小幅越出时补齐高低；3：新增 calendar；
+                                              # 4：m30 越界超出容差时由当日日线佐证补齐
 AUCTION_WIDEN_TOL = 0.01
 _WIDENED_LOGGED: set = set()
 HKT = ZoneInfo("Asia/Hong_Kong")
@@ -139,6 +141,28 @@ def _widen_for_auction(bar: dict, label: str) -> dict:
     return {**bar, "high": max(hi, bar["high"]), "low": min(lo, bar["low"])}
 
 
+def _out_of_range(bar: dict) -> bool:
+    """开或收越出高低，且高低本身可用（非正、低高倒置的不在此列，留给准入拒收）。"""
+    if bar["high"] <= 0 or bar["low"] <= 0 or bar["low"] > bar["high"]:
+        return False
+    return bar["low"] > min(bar["open"], bar["close"]) or bar["high"] < max(bar["open"], bar["close"])
+
+
+def _widen_by_day(bar: dict, day: dict, label: str) -> dict:
+    """越出超过容差的 m30 开/收，由同源同复权口径的当日日线佐证时补齐高低：越界的是开盘价则须等于日线开盘价，
+    是收盘价则须等于日线收盘价，且落在日线高低内（6127.HK 2024-12-10 实测：m30 开 10.30 高于高 10.18 达 1.18%，
+    日线开 = 高 = 10.30，持续交易最高只到 10.18）。佐证不成立的原样返回，留给准入按 bad_ohlc 拒收。"""
+    for price, name in ((bar["open"], "open"), (bar["close"], "close")):
+        if bar["low"] <= price <= bar["high"]:
+            continue
+        if price != day[name] or not day["low"] <= price <= day["high"]:
+            return bar
+    hi, lo = max(bar["open"], bar["close"]), min(bar["open"], bar["close"])
+    log.warning("长桥 m30 %s 开/收越出高低超过容差，经当日日线佐证（竞价成交），高低 %s/%s → %s/%s",
+                label, bar["high"], bar["low"], max(hi, bar["high"]), min(lo, bar["low"]))
+    return {**bar, "high": max(hi, bar["high"]), "low": min(lo, bar["low"])}
+
+
 def _normalize_m30(candles: list[dict]) -> list[tuple[str, dict]]:
     """起始标签 → 末端标签；会话终点起始的收市竞价 bar 并入该终点槽。返回 [(slot_end, bar)]，按时间升序。"""
     grid = set(sessions.slots("HK", "m30"))
@@ -225,6 +249,17 @@ class LongbridgeProvider:
             prev_close = bar["close"]
         return out
 
+    def _m30_pairs(self, code, adjust, candles) -> list[tuple[str, dict]]:
+        """m30 归一（_normalize_m30），再对仍越出高低的 bar 取同口径当日日线佐证（_widen_by_day）。
+        只有出现越界 bar 时才请求日线，一次覆盖越界 bar 所在的日期区间。"""
+        pairs = _normalize_m30(candles)
+        dates = sorted({slot[:10] for slot, bar in pairs if _out_of_range(bar)})
+        if not dates:
+            return pairs
+        days = {r["timestamp"][:10]: _bar(r) for r in self._history(code, "day", adjust, dates[0], dates[-1])}
+        return [(slot, _widen_by_day(bar, days[slot[:10]], slot)
+                 if _out_of_range(bar) and slot[:10] in days else bar) for slot, bar in pairs]
+
     @staticmethod
     def _check_freq(fact_freq):
         if fact_freq == "m5":
@@ -245,14 +280,14 @@ class LongbridgeProvider:
 
     def minute_history(self, code, fact_freq, start, end, *, now) -> list:
         self._check_freq(fact_freq)
-        pairs = _normalize_m30(self._history(code, "m30", "raw", start[:10], end[:10]))
+        pairs = self._m30_pairs(code, "raw", self._history(code, "m30", "raw", start[:10], end[:10]))
         limit = min(end, _now_label(now))
         return self._minute_rows(code, [(s, b) for s, b in pairs if start <= s <= limit], "closed")
 
     def minute_live(self, code, fact_freq, *, now) -> list:
         self._check_freq(fact_freq)
         today = _now_label(now)[:10]
-        pairs = _normalize_m30(self._call("candlesticks", _symbol(code), "m30", LIVE_COUNT, "raw"))
+        pairs = self._m30_pairs(code, "raw", self._call("candlesticks", _symbol(code), "m30", LIVE_COUNT, "raw"))
         return self._minute_rows(code, [(s, b) for s, b in pairs if s[:10] == today], "forming")
 
     def qfq_series(self, code, freq, start, end) -> list[dict]:
@@ -262,7 +297,7 @@ class LongbridgeProvider:
                     for day, b, _ in self._day_series(code, "qfq", start, end)]
         if freq != "m30":
             raise ProviderUnsupported(f"长桥供应商前复权只取 day/m30，收到 {freq}")
-        pairs = _normalize_m30(self._history(code, "m30", "qfq", start[:10], end[:10]))
+        pairs = self._m30_pairs(code, "qfq", self._history(code, "m30", "qfq", start[:10], end[:10]))
         return [{"trade_date": s[:10], "slot_end": s, **b, "volume_unit": "share"}
                 for s, b in pairs if start <= s <= end]
 
