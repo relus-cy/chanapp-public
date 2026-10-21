@@ -11,7 +11,7 @@ export default {
   retries: 0,
   timeout: 120_000,
   assertionTimeout: 10_000,
-  trace: 'on',
+  trace: 'retain-on-failure',   // a passing test keeps no trace; `--trace on` records every one
   cache: 'off',
   targets: [{
     name: 'demo',

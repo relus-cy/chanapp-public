@@ -5,8 +5,13 @@ on:
   pull_request:
 
 jobs:
+  # unittest and browser each run as three slices on separate machines; the run is green only when every slice is.
   unittest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     env:
       COLLECTOR_ENABLED: '0'
     steps:
@@ -14,19 +19,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run unittest slice
+        run: python chanapp/scripts/unittest_shard.py ${{ matrix.shard }}/3
+
+  js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Run unittest
-        run: python -m unittest discover -s chanapp/tests
       - name: Run JS UI tests
         run: bash chanapp/scripts/test_js.sh
 
   browser:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,12 +56,12 @@ jobs:
           npm ci
           npx --no-install e2e-web install chromium --with-deps
       - name: Run user flow acceptance
-        run: PYTHON=python npm run test:e2e
+        run: PYTHON=python npm run test:e2e -- --shard ${{ matrix.shard }}/3
       - name: Upload browser evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: browser-evidence-${{ github.sha }}
+          name: browser-evidence-${{ github.sha }}-${{ matrix.shard }}
           include-hidden-files: true
           retention-days: 14
           if-no-files-found: error
