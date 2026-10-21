@@ -567,11 +567,9 @@ class Collector:
                  else today.replace(year=today.year - years).isoformat())
         listed = self._list_date(code) if lookup else self._known_list_date(code)
         start = max(floor, listed) if listed else floor
-        if years == config.MINUTE_BACKFILL_YEARS and self._planned(code, "backfill"):
-            # 日线整段回填已完成且无未决缺口时，首根日线之前没有交易：分钟不往前登记（次新股、上市日未知）
-            first = self.conn().execute("SELECT MIN(trade_date) FROM day_bars WHERE code=?", (code,)).fetchone()[0]
-            if first and not facts.open_gaps(self.conn(), code, "day"):
-                start = max(start, first)
+        if years == config.MINUTE_BACKFILL_YEARS and (first := self._first_trading_day(code)):
+            # 首根日线之前没有交易：分钟不往前登记（次新股、港股查不到上市日）。首根之后的日线缺口（停牌）不影响
+            start = max(start, first)
         return start
 
     def _plan_key(self, code, kind) -> str:
@@ -836,6 +834,10 @@ class Collector:
                 out[fact] = self._commit_minutes(conn, code, minute_rows, item=FetchItem.MINUTE_HISTORY.value,
                                                  fact=fact, source=source, gen=gen, end=f"{end_day} 23:59")
             self._reconcile(conn, code, [r.trade_date for r in (*day_rows, *minute_rows)])
+            if day_rows:                       # 导入的日线若落在关不掉的日线缺口里，缺的分钟改由新缺口承接
+                days = sorted(r.trade_date for r in day_rows)
+                with facts.write_txn(conn):
+                    self._requeue_minutes(conn, code, days[0], days[-1])
         return out
 
     def commit_import_metadata(self, calendar_rows, instruments) -> None:
@@ -918,15 +920,19 @@ class Collector:
     def _required_slots(self, market, fact, day) -> set:
         return calendar.required_slots(self.conn(), market, fact, day)
 
-    def _minute_covered(self, code, fact, lo: str, hi: str, *, unknown_required=True, returned=()) -> bool:
+    def _minute_covered(self, code, fact, lo: str, hi: str, *, unknown_required=True, returned=(),
+                        fetched=False) -> bool:
         """[lo, hi] 内每个应有分钟的交易日，已收盘可读槽位覆盖该日全部会话槽位（隔离槽不要求）。
 
-        停牌日（日线 sf=1）不要求分钟。unknown_required=False 用于取数之后：只要求日历已知的开市日、
-        可读有行的日子与本次取回过行（含被拒）的日子；日历未知的工作日取回为空按非交易日处理（港股假日）。"""
+        停牌日（日线 sf=1）与已证明的首个交易日之前（_first_trading_day：上市前）不要求分钟。fetched 表示刚为该区间
+        取过分钟：上游一根没给、又没有 final 日线、落在未决日线缺口里的日子（_day_in_question）也不要求。
+        unknown_required=False 用于取数之后：只要求日历已知的开市日、可读有行的日子与本次取回过行（含被拒）的日子；
+        日历未知的工作日取回为空按非交易日处理（港股假日）。"""
         return not self._minute_uncovered_days(code, fact, lo, hi, unknown_required=unknown_required,
-                                               returned=returned)
+                                               returned=returned, fetched=fetched)
 
-    def _minute_uncovered_days(self, code, fact, lo: str, hi: str, *, unknown_required=True, returned=()) -> list:
+    def _minute_uncovered_days(self, code, fact, lo: str, hi: str, *, unknown_required=True, returned=(),
+                               fetched=False) -> list:
         """[lo, hi] 内分钟未覆盖的日子（升序，口径见 _minute_covered）。整段一次取隔离键、已收盘槽位、日线与日历，
         查询条数不随天数增长；逐日调用 _minute_covered(d, d) 得到的是同一集合。"""
         conn, market = self.conn(), market_of(code)
@@ -937,9 +943,15 @@ class Collector:
                               (code, fact, lo[:10], hi[:10])):
             if r["slot_end"] not in hidden:
                 present.setdefault(r["trade_date"], set()).add(r["slot_end"])
-        suspended = {r["trade_date"] for r in facts.read_day_rows(conn, code, lo[:10], hi[:10])
-                     if r["sf"] == 1 and r["provenance"] != "preopen"}
-        days = [d for d in self._dates(lo, hi) if d not in suspended]
+        day_rows = facts.read_day_rows(conn, code, lo[:10], hi[:10])
+        suspended = {r["trade_date"] for r in day_rows if r["sf"] == 1 and r["provenance"] != "preopen"}
+        first = self._first_trading_day(code)
+        skipped = suspended | ({d for d in self._dates(lo, hi) if d < first} if first else set())
+        if fetched:
+            # 取数之后，上游这天一根分钟也没给、也没有 final 日线、日线缺口还未决：交给日线缺口回答（停牌）。取数之前
+            # 照常要求，分钟总要先试一次（日线被拒的日子分钟可能是好的）
+            skipped |= self._day_in_question(code, lo, hi, day_rows) - set(present) - set(returned)
+        days = [d for d in self._dates(lo, hi) if d not in skipped]
         span = calendar.Span(conn, market, days[0], days[-1]) if days else None
         out = []
         for day in days:
@@ -949,6 +961,32 @@ class Collector:
             if not (span.required_slots(fact, day) - hidden) <= present.get(day, set()):
                 out.append(day)
         return out
+
+    def _day_in_question(self, code, lo: str, hi: str, day_rows) -> set:
+        """[lo, hi] 内没有 final 日线、落在未决日线缺口里的日子：本代码那天开没开市由日线缺口重试回答（长桥对停牌日
+        既不给日线也不给 sf=1 行）。只认上游没返回行的缺口（backfill、finalize；已转 known_gap 的看转入前的原因，
+        本改动前转入、没有原因记录的单日缺口不认）：rejected、write_failed 的日子日线返回过行，那天开市。日线补到时
+        _requeue_minutes 再为这些日子登记分钟缺口。"""
+        finals = {r["trade_date"] for r in day_rows if r["provenance"] == "final"}
+        pending = []
+        for g in self.conn().execute(
+                "SELECT g.start, g.end, CASE WHEN g.reason='known_gap' THEN COALESCE(o.reason, CASE WHEN"
+                " substr(g.start, 1, 10)<substr(g.end, 1, 10) THEN 'backfill' END) ELSE g.reason END AS why"
+                " FROM coverage_gaps g LEFT JOIN known_gap_origin o ON o.gap_id=g.gap_id"
+                " WHERE g.code=? AND g.dataset='day' AND g.resolved_at IS NULL", (code,)):
+            if g["why"] in ("backfill", "finalize"):
+                pending.append((g["start"][:10], g["end"][:10]))
+        return {d for d in self._dates(lo, hi) if d not in finals and any(a <= d <= b for a, b in pending)}
+
+    def _first_trading_day(self, code):
+        """已证明的首个交易日（只读本地）：上市日与首根日线取晚者。首根日线只在日线整段回填已完成、首根之前没有未决
+        日线缺口时可信（回填已证明更早没有交易：次新股、港股查不到上市日）；之后的缺口（停牌）不影响它。都不可信时 None。"""
+        bounds = [listed] if (listed := self._known_list_date(code)) else []
+        if self._planned(code, "backfill"):
+            first = self.conn().execute("SELECT MIN(trade_date) FROM day_bars WHERE code=?", (code,)).fetchone()[0]
+            if first and not any(g["start"][:10] < first for g in facts.open_gaps(self.conn(), code, "day")):
+                bounds.append(first)
+        return max(bounds) if bounds else None
 
     def _known_list_date(self, code):
         """只读本地 instruments（写者锁内也可调用，不打上游）。"""
@@ -1035,7 +1073,7 @@ class Collector:
             return self._day_covered(gap["code"], gap["start"], gap["end"], unknown_required=strict,
                                      from_first_row=not strict, returned=returned - exclude, exclude=exclude)
         return self._minute_covered(gap["code"], gap["dataset"], gap["start"], gap["end"], unknown_required=strict,
-                                    returned=returned)
+                                    returned=returned, fetched=fetched)
 
     def _reconcile(self, conn, code, dates) -> None:
         """写入后核对分钟与日线（与定稿一致）：只核对同时有 final 日线与已收盘分钟的日期。调用方持写者锁。"""
@@ -1204,6 +1242,8 @@ class Collector:
         if self._gap_covered(gap, fetched=False):
             with self.writer() as conn, facts.write_txn(conn):
                 facts.resolve_gap(conn, gap["gap_id"])
+                if gap["dataset"] == "day":            # 日线可能由窗口等别的路径补到：同一事务里补登分钟
+                    self._requeue_minutes(conn, code, gap["start"], gap["end"])
             return "skip"
         try:
             rows, source, gen = self._fetch_gap(gap)
@@ -1249,11 +1289,43 @@ class Collector:
                     facts.resolve_gap(conn, gap["gap_id"])
                 else:
                     self._fail_gap(conn, gap, "提交后可读覆盖未达标")
+                if gap["dataset"] == "day":            # 只补到一部分（停牌日留在缺口里）也要补登已有日线那几天的分钟
+                    self._requeue_minutes(conn, code, gap["start"], gap["end"])
         if not covered:
             return "incomplete"
         if finalize and gap["dataset"] == "day" and market_of(code) == "HK" and kind_of(code) == "stock":
             self.refresh_vendor_qfq(code, self.now(), closed_through=gap["start"][:10], eligible=self.is_tracked)
         return "done"
+
+    def _requeue_minutes(self, conn, code, lo: str, hi: str) -> None:
+        """日线补到之后：[lo, hi] 里有 final 日线（非停牌）、分钟未覆盖、又不在任何未决分钟缺口（含 known_gap）里的
+        日子，按月登记分钟缺口。日线缺口未决时取过分钟的日子不要求分钟（_day_in_question），它们的分钟缺口可能早已
+        关闭、发现水位也已越过，不在这里登记就没人补；已转 known_gap 的不重复登记。只对已做过分钟规划、有分钟资格的
+        代码，截到分钟回填起点。调用方持写者锁并开好事务（与关闭或计次日线缺口同一事务）。"""
+        fact = self._fact_freq(code)
+        if not fact or not self.eligible(code, fact) or not self._planned(code, "minute"):
+            return
+        lo = max(lo[:10], self._start(code, years=config.MINUTE_BACKFILL_YEARS, lookup=False))
+        if lo > hi[:10]:
+            return
+        hi = hi[:10]
+        traded = {r["trade_date"] for r in facts.read_day_rows(conn, code, lo, hi)
+                  if r["provenance"] == "final" and r["sf"] != 1}
+        tracked = [(g["start"][:10], g["end"][:10]) for g in facts.open_gaps(conn, code, fact)]
+        # 口径同取数之后的覆盖判定（unknown_required=False）：取数后不要求的日子（日历未知且没取回）不登记，
+        # 否则每次补登都把刚按取数后口径关掉的日子再登记回来、白发一次请求
+        missing = [d for d in self._minute_uncovered_days(code, fact, lo, hi, unknown_required=False)
+                   if d in traded and not any(a <= d <= b for a, b in tracked)]
+        if not missing:
+            return
+        # 分段不跨过有分钟的日子与被未决分钟缺口跟踪的日子（如单日 known_gap），免得重取它们
+        blocked = {r["trade_date"] for r in conn.execute(
+            "SELECT DISTINCT trade_date FROM current_minute_bars WHERE code=? AND fact_freq=? AND state='closed'"
+            " AND trade_date>=? AND trade_date<=?", (code, fact, lo, hi))}
+        blocked |= {d for d in self._dates(missing[0], missing[-1]) if any(a <= d <= b for a, b in tracked)}
+        for run_lo, run_hi in self._missing_ranges(missing, blocked):
+            for start, end, _, _ in self._month_slices(code, run_lo, run_hi):
+                facts.record_gap(conn, code, fact, start, end, "backfill")
 
     @staticmethod
     def _fail_gap(conn, gap, error) -> None:
@@ -1708,6 +1780,8 @@ class Collector:
                             self._derive_calendar(conn, code)
                             self._note_day_absent(conn, code, lo, hi, rows)
                             self._note_window_absent(conn, code, lo, hi, rows)
+                            with facts.write_txn(conn):        # 补到的日子若在关不掉的日线缺口里，分钟改由新缺口承接
+                                self._requeue_minutes(conn, code, lo, hi)
                         else:
                             res = self._commit_minutes(conn, code, rows, item=item.value, fact=dataset,
                                                        source=source, gen=gen, start=lo, end=hi)

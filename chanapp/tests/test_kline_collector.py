@@ -1,6 +1,7 @@
 """采集器：单写者、额度、熔断、缺口续传、不跨源回落（spec §5.1、§5.3、§9 D7）。"""
 import tempfile
 import contextlib
+import dataclasses
 import unittest
 import unittest.mock
 from datetime import date, datetime, timedelta
@@ -68,6 +69,39 @@ class FullFake(FakeProvider):
         return [RawMinuteRow(code, d, f"{d} {t}", 10, 10, 10, 10, 1, "lot", 1, "closed", "traded", new_batch_id())
                 for d in _weekdays(start, end) if d not in self.skip_days
                 for t in sessions.slots("CN", fact_freq) if start <= f"{d} {t}" <= end]
+
+
+class ListedFake(FullFake):
+    """sh600036 于 2026-08-03 上市、09-10 与 09-11 停牌：这些日子上游既不给日线也不给分钟（长桥对停牌日不返回
+    sf=1 行）。指数每个工作日都有日线，日历由它推出：上市前与停牌日都是已知开市日。"""
+    listed, suspended = "2026-08-03", ("2026-09-10", "2026-09-11")
+
+    def _traded(self, rows):
+        return [r for r in rows if r.code != "sh600036" or (r.trade_date >= self.listed
+                                                              and r.trade_date not in self.suspended)]
+
+    def day_history(self, code, start, end):
+        return self._traded(super().day_history(code, start, end))
+
+    def minute_history(self, code, fact_freq, start, end, *, now):
+        return self._traded(super().minute_history(code, fact_freq, start, end, now=now))
+
+
+class Toggle(FullFake):
+    """逐日控制 sh600036：day_skip / minute_skip 中的日子不返回行，day_bad 中的日子返回准入拒收的日线（high < low）；
+    index_bad 中的日子上证指数日线被拒（A 股日历由指数推出，这些日子日历未知）。"""
+    def __init__(self):
+        super().__init__()
+        self.day_skip, self.minute_skip, self.day_bad, self.index_bad = set(), set(), set(), set()
+
+    def day_history(self, code, start, end):
+        rows = [r for r in super().day_history(code, start, end) if code != "sh600036" or r.trade_date not in self.day_skip]
+        bad = self.day_bad if code == "sh600036" else self.index_bad if code == "sh000001" else ()
+        return [dataclasses.replace(r, high=9, low=11) if r.trade_date in bad else r for r in rows]
+
+    def minute_history(self, code, fact_freq, start, end, *, now):
+        return [r for r in super().minute_history(code, fact_freq, start, end, now=now)
+                if code != "sh600036" or r.trade_date not in self.minute_skip]
 
 
 def _list_since(directory, codes, list_date):
@@ -1170,6 +1204,171 @@ class CollectorTests(unittest.TestCase):
             facts.record_gap(conn, "sh600036", FACT, "2026-09-01 09:30", "2026-09-01 15:00", "known_gap")
         self.assertEqual(c.rearm_known_gaps(), 2)
         self.assertEqual(self._gaps(conn), {("2026-08-01 09:30", "backfill", 0), ("2026-09-01 09:30", "finalize", 0)})
+
+    def _settle_history(self, c):
+        """历史线程跑到没有可做的事：每轮清掉退避与冷却（失败的缺口照常计次，满 5 次转 known_gap）。"""
+        for _ in range(40):
+            c.code_backoff.until.clear()
+            c.source_breaker.until.clear()
+            c.history_tick(datetime(2026, 9, 26, 20, 0))
+
+    def test_minute_coverage_not_required_before_listing_or_while_day_bar_is_in_question(self):
+        # 回归（hk06693 2026-10-21）：上市日未知、停牌日上游不给日线时，停牌留下的日线缺口让分钟规划不再截到首根
+        # 日线；上市前 19 个月与停牌日都按应有分钟判定，永远达不到覆盖，全部转 known_gap
+        provider = ListedFake()
+        c = self.make(provider)
+        self._settle_history(c)
+        conn = facts.open_facts(self.dir / facts.DB_NAME)
+        self.addCleanup(conn.close)
+        self.assertEqual(facts.open_gaps(conn, "sh600036", FACT), [])
+        self.assertEqual(min(start for kind, code, start, _ in provider.calls if kind == FACT and code == "sh600036"),
+                         "2026-08-03 09:30")
+        # 停牌日有没有交易由日线数据集回答：日线缺口照常重试，取不到就留作 known_gap
+        self.assertEqual([(g["start"], g["end"], g["reason"]) for g in facts.open_gaps(conn, "sh600036", "day")],
+                         [("2026-09-10", "2026-09-11", "known_gap")])
+
+    def test_day_bar_filled_later_brings_minute_requirement_back(self):
+        # 日线缺口未决的日子不要求分钟；之后日线补到了（供应商修好、known_gap 重开），这些日子的分钟必须重新有缺口
+        # 承接，否则分钟缺口早已关闭、发现水位也已越过，分钟永远没人补
+        provider = ListedFake()
+        c = self.make(provider)
+        self._settle_history(c)
+        conn = facts.open_facts(self.dir / facts.DB_NAME)
+        self.addCleanup(conn.close)
+        self.assertEqual(facts.open_gaps(conn, "sh600036", FACT), [])
+        provider.suspended = ()
+        with unittest.mock.patch.object(bindings, "contract_hash", lambda source: "fixed"):
+            self.assertEqual(c.rearm_known_gaps(), 1)
+        self._settle_history(c)
+        self.assertEqual(facts.open_gaps(conn, "sh600036"), [])
+        self.assertEqual(len(facts.read_minute_rows(conn, "sh600036", FACT, "2026-09-10 00:00", "2026-09-12 00:00")),
+                         2 * len(sessions.slots("CN", FACT)))
+
+    def _minutes_on(self, conn, day):
+        return len(facts.read_minute_rows(conn, "sh600036", FACT, f"{day} 00:00", f"{day} 23:59"))
+
+    def test_day_bar_filled_in_partly_covered_day_gap_brings_minute_requirement_back(self):
+        # 复核复现（2026-10-21）：一个日线缺口里 09-09 是交易日、09-10 停牌，起初两源都缺。09-09 的日线后来补到了，
+        # 但缺口因 09-10 永远关不掉；只在缺口整条关闭时补登，09-09 的分钟就永久丢失、也不留 known_gap
+        provider = Toggle()
+        provider.day_skip = provider.minute_skip = {"2026-09-09", "2026-09-10"}
+        c = self.make(provider)
+        self._settle_history(c)
+        conn = facts.open_facts(self.dir / facts.DB_NAME)
+        self.addCleanup(conn.close)
+        provider.day_skip = provider.minute_skip = {"2026-09-10"}
+        with unittest.mock.patch.object(bindings, "contract_hash", lambda source: "fixed"):
+            c.rearm_known_gaps()
+        self._settle_history(c)
+        self.assertEqual(self._minutes_on(conn, "2026-09-09"), len(sessions.slots("CN", FACT)))
+
+    def test_rejected_day_bar_keeps_minute_requirement(self):
+        # 复核复现（2026-10-21）：日线返回过但被拒，说明那天开市，不是停牌；分钟源起初漏了这天，不能因日线缺口未决就
+        # 关掉分钟缺口（之后日线一直被拒、缺口关不掉，分钟源修好也不会再取）
+        provider = Toggle()
+        provider.day_bad, provider.minute_skip = {"2026-09-09"}, {"2026-09-09"}
+        c = self.make(provider)
+        self._settle_history(c)
+        conn = facts.open_facts(self.dir / facts.DB_NAME)
+        self.addCleanup(conn.close)
+        provider.minute_skip = set()
+        with unittest.mock.patch.object(bindings, "contract_hash", lambda source: "fixed"):
+            c.rearm_known_gaps()
+        self._settle_history(c)
+        self.assertEqual(self._minutes_on(conn, "2026-09-09"), len(sessions.slots("CN", FACT)))
+
+    def _stuck_day_gap(self, days, minute_skip=None):
+        """days 两源起初都缺（日线缺口重试满 5 次转 known_gap、不再续传；分钟缺口按日线在途关闭）。"""
+        provider = Toggle()
+        provider.day_skip, provider.minute_skip = set(days), set(days if minute_skip is None else minute_skip)
+        c = self.make(provider)
+        self._settle_history(c)
+        conn = facts.open_facts(self.dir / facts.DB_NAME)
+        self.addCleanup(conn.close)
+        self.assertEqual({g["reason"] for g in facts.open_gaps(conn, "sh600036", "day")}, {"known_gap"})
+        return provider, c, conn
+
+    def _minute_calls_over(self, provider, since, day):
+        return [call for call in provider.calls[since:]
+                if call[0] == FACT and call[1] == "sh600036" and call[2][:10] <= day <= call[3][:10]]
+
+    def test_imported_day_bar_in_stuck_day_gap_brings_minute_requirement_back(self):
+        # 复核复现（2026-10-21 第二轮）：日线缺口已转 known_gap，一次性导入补上 09-09 的日线，续传与窗口都不会再碰它
+        provider, c, conn = self._stuck_day_gap({"2026-09-09", "2026-09-10"})
+        row = RawDayRow("sh600036", "2026-09-09", 10, 10, 10, 10, DAY_VOL, "lot", 1, "CNY", 10, 0, "final", new_batch_id())
+        c.commit_import("sh600036", [row], [], source="mairui", end_day="2026-09-09")
+        provider.minute_skip = {"2026-09-10"}
+        self._settle_history(c)
+        self.assertEqual(self._minutes_on(conn, "2026-09-09"), len(sessions.slots("CN", FACT)))
+
+    # 重拉（refetch_window）不论周期都强制重取 m60 分析窗口的分钟（约半年）；日线窗口约两年。下面几个用例的日子放在
+    # 2 月：日线窗口补得到，分钟窗口够不着，分钟只能由补登承接；请求只数重拉之后历史线程发的
+    def test_refetched_day_bar_in_stuck_day_gap_brings_minute_requirement_back(self):
+        # 复核复现（2026-10-21 第二轮）：日线缺口已转 known_gap，重拉的日线窗口补上 02-10；续传不再碰这条缺口
+        provider, c, conn = self._stuck_day_gap({"2026-02-10", "2026-02-11"})
+        provider.day_skip = provider.minute_skip = {"2026-02-11"}
+        c.refetch_window("sh600036", "day")
+        self._settle_history(c)
+        self.assertEqual(self._minutes_on(conn, "2026-02-10"), len(sessions.slots("CN", FACT)))
+
+    def test_day_bar_written_elsewhere_brings_minute_requirement_back_when_day_gap_closes(self):
+        # 日线由未经补登的写入路径补到时，续传在取数前发现日线缺口已覆盖而关闭，同时补登分钟（兜底）
+        provider = Toggle()
+        provider.day_skip = provider.minute_skip = {"2026-09-09"}
+        c = self.make(provider)
+        with unittest.mock.patch.object(collector, "MAX_GAP_ATTEMPTS", 99):     # 日线缺口保持未决，不转 known_gap
+            self._settle_history(c)
+        conn = facts.open_facts(self.dir / facts.DB_NAME)
+        self.addCleanup(conn.close)
+        self.assertEqual([g["reason"] for g in facts.open_gaps(conn, "sh600036")], ["backfill"])
+        facts.commit_day_rows(conn, [RawDayRow("sh600036", "2026-09-09", 10, 10, 10, 10, DAY_VOL, "lot", 1, "CNY", 10, 0,
+                                               "final", new_batch_id())],
+                              market="CN", kind="stock", item="day_history", source="mairui", binding_gen=1,
+                              today="2026-09-26")
+        provider.minute_skip = set()
+        self._settle_history(c)
+        self.assertEqual(self._minutes_on(conn, "2026-09-09"), len(sessions.slots("CN", FACT)))
+
+    def test_requeue_does_not_refetch_days_whose_minutes_were_given_up(self):
+        # 复核复现（2026-10-21 第二轮）：02-13 的分钟上游不给，2 月分钟缺口已转 known_gap；之后 02-10 的日线补到，
+        # 补登不能把整月再登记一遍、把放弃过的日子重取 5 次
+        provider, c, conn = self._stuck_day_gap({"2026-02-10", "2026-02-11"},
+                                                minute_skip={"2026-02-10", "2026-02-11", "2026-02-13"})
+        provider.day_skip = {"2026-02-11"}
+        c.refetch_window("sh600036", "day")
+        since = len(provider.calls)
+        self._settle_history(c)
+        self.assertEqual([call for call in provider.calls[since:] if call[0] == FACT], [])
+
+    def test_requeued_range_does_not_span_day_tracked_by_minute_known_gap(self):
+        # 复核复现（2026-10-21 第二轮）：02-11 有单日分钟 known_gap，02-10 与 02-12 的日线补到后分别补登，
+        # 登记的区间不能跨过 02-11 让它再重试 5 次
+        days = ("2026-02-10", "2026-02-11", "2026-02-12")
+        provider, c, conn = self._stuck_day_gap(days)
+        with facts.write_txn(conn):
+            facts.record_gap(conn, "sh600036", FACT, "2026-02-11 09:30", "2026-02-11 15:00", "known_gap")
+        provider.day_skip, provider.minute_skip = set(), {"2026-02-11"}
+        c.refetch_window("sh600036", "day")
+        since = len(provider.calls)
+        self._settle_history(c)
+        self.assertEqual(self._minute_calls_over(provider, since, "2026-02-11"), [])
+        self.assertEqual([self._minutes_on(conn, d) for d in days], [len(sessions.slots("CN", FACT)), 0,
+                                                                     len(sessions.slots("CN", FACT))])
+
+    def test_requeue_matches_post_fetch_coverage_on_calendar_unknown_day(self):
+        # 复核复现（2026-10-21 第二轮）：指数 02-10 日线被拒，日历未知；个股有日线、分钟源不给这天。取数后口径不要求
+        # 日历未知又没取回的日子，补登若按取数前口径登记，每次重拉后都白发一次分钟请求
+        provider = Toggle()
+        provider.index_bad, provider.minute_skip = {"2026-02-10"}, {"2026-02-10"}
+        c = self.make(provider)
+        self._settle_history(c)
+        counts = []
+        for _ in range(3):
+            c.refetch_window("sh600036", "day")
+            since = len(provider.calls)
+            self._settle_history(c)
+            counts.append(len(self._minute_calls_over(provider, since, "2026-02-10")))
+        self.assertEqual(counts, [0, 0, 0])
 
     def test_minute_backfill_starts_at_first_day_bar_when_list_date_unknown(self):
         # 次新股：上市日未知（instrument 不可用），但日线回填已证明更早没有交易，分钟缺口不往前登记

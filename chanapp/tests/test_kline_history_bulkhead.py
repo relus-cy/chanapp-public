@@ -111,10 +111,14 @@ class RoundCapTests(Base):
     def test_recent_gap_is_not_starved_by_backlogs_sorted_first(self):
         # 四个代码各有三年分钟积压（按代码排在前面），另一个代码只缺昨天：昨天的缺口第一轮就取
         backlog = ["sh600000", "sh600036", "sh600519", "sh601318"]
-        _list_since(self.dir, backlog + ["sz000001"], "2026-09-01")
+        _list_since(self.dir, backlog, "2023-09-01")
+        _list_since(self.dir, ["sz000001"], "2026-09-01")
         self.seed(INDEX, "2026-09-25")
         for code in backlog:
             self.seed(code, "2026-09-25")
+            # 积压是真的：这三年有日线、只缺分钟（上市前的月份不要求分钟，不算积压）
+            facts.commit_day_rows(self.conn, FullFake().day_history(code, "2023-09-01", "2026-08-31"), market="CN",
+                                  kind="stock", item="day_history", source="mairui", binding_gen=1, today="2026-09-25")
             with facts.write_txn(self.conn):
                 for y, m in [(y, m) for y in (2023, 2024, 2025, 2026) for m in range(1, 13)
                              if (2023, 9) <= (y, m) <= (2026, 8)]:
