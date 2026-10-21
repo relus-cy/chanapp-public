@@ -1,11 +1,14 @@
 """通道线：最近一条已完成线段的上下轨（前端金色虚线）。
 
 口径：
-- 段选取：xds 中最后一条 forming=False 的已完成线段；xds 为空（或无已完成段）
-  时退化为把全部笔视作一段，方向取末笔方向；
-- 下降段：段内每笔的高端端点（max(y0,y1) 及其 x）中最高的两个连成上轨，
-  下轨为过段内最低点（低端端点最小值）的平行线；上升段镜像（最低两笔低点
-  连成下轨，上轨过段内最高点）；
+- 段选取：xds 中最后一条 forming=False 的已完成线段；没有已完成段时返回空列表
+  （全部笔可能混着涨跌两腿，按任何单一方向画都会失真；与 chan.py 只在线段内
+  算趋势线一致）；
+- 下降段：段内每笔的高端端点（max(y0,y1) 及其 x）中最高的两个连成上轨；
+  下轨与上轨平行，过段内全部笔端点中相对该斜率最靠下的一个（y - 斜率·x 最小），
+  不是绝对最低点：斜率陡时过绝对最低点的平行线会落到上轨上方。上轨锚点也是
+  段内端点，所以下轨恒不高于上轨。上升段镜像（最低两笔低点连成下轨，上轨过
+  相对斜率最靠上的端点）；
 - x1 延伸到最后已知 bar（全部笔的最大 x1），y1 为该处延长值。
 
 元素：{"upper": {x0,y0,x1,y1}, "lower": {x0,y0,x1,y1}, "direction": "up"|"down"}
@@ -40,23 +43,22 @@ def _rail(p0: tuple[float, int], slope: float, x_end: int) -> dict:
 
 
 def build(bis: list[dict], xds: list[dict]) -> list[dict]:
-    """由笔/线段序列构建通道列表（当前只产出最近一段的一条通道）。"""
+    """由笔/线段序列构建通道列表（只产出最近已完成段的一条通道，没有已完成段时为空）。"""
     if not bis:
         return []
     completed = [x for x in xds if not x.get("forming")]
-    if completed:
-        seg = completed[-1]
-        seg_bis = [b for b in bis if b["x0"] >= seg["x0"] and b["x1"] <= seg["x1"]]
-        direction = seg["direction"]
-    else:
-        seg_bis = list(bis)
-        direction = bis[-1]["direction"]
+    if not completed:
+        return []
+    seg = completed[-1]
+    seg_bis = [b for b in bis if b["x0"] >= seg["x0"] and b["x1"] <= seg["x1"]]
+    direction = seg["direction"]
     if len(seg_bis) < 2:
         return []
 
     x_end = max(b["x1"] for b in bis)
     highs = [_hi(b) for b in seg_bis]
     lows = [_lo(b) for b in seg_bis]
+    ends = highs + lows                            # 段内全部笔端点
 
     if direction == "down":
         pair = _top_two(highs, reverse=True)      # 最高两个笔高点 → 上轨
@@ -65,7 +67,7 @@ def build(bis: list[dict], xds: list[dict]) -> list[dict]:
         (ya, xa), (yb, xb) = pair
         slope = (yb - ya) / (xb - xa)
         upper = _rail((ya, xa), slope, x_end)
-        ye, xe = min(lows)                         # 段内最低点 → 下轨（平行）
+        ye, xe = min(ends, key=lambda p: p[0] - slope * p[1])   # 相对斜率最低的端点 → 下轨（平行）
         lower = _rail((ye + slope * (xa - xe), xa), slope, x_end)
     else:
         pair = _top_two(lows, reverse=False)      # 最低两个笔低点 → 下轨
@@ -74,7 +76,7 @@ def build(bis: list[dict], xds: list[dict]) -> list[dict]:
         (ya, xa), (yb, xb) = pair
         slope = (yb - ya) / (xb - xa)
         lower = _rail((ya, xa), slope, x_end)
-        ye, xe = max(highs)                        # 段内最高点 → 上轨（平行）
+        ye, xe = max(ends, key=lambda p: p[0] - slope * p[1])   # 相对斜率最高的端点 → 上轨（平行）
         upper = _rail((ye + slope * (xa - xe), xa), slope, x_end)
 
     return [{"upper": upper, "lower": lower, "direction": direction}]
