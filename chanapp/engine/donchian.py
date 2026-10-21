@@ -9,7 +9,8 @@
     盘中触到但收盘没越过：形成中的 bar 记 touch（provisional），已收盘的记 false_break。
   - touch（盘中触价）：最高 > 入场线买入，按 max(开盘, 入场线)；最低 < 有效离场价卖出，按 min(开盘, 有效离场价)；
     止损 = 入场价 − 2N（N 取上一根，盘中下单时只知道它）。
-  - 有效离场价 = max(离场线, 止损)；止损入场后固定；入场那根不离场；比较一律严格不等号。
+  - 有效离场价 = max(离场线, 止损)；止损入场后固定；入场那根不离场，离场那根不再入场；比较一律严格不等号。
+  - 规则状态里的 effective_exit（持有时）与 effective_entry（空仓时）都取「接下来要判定的那根」的线位。
   - 形成中的 bar 上的信号为 provisional，已收盘的为 confirmed。
 - 建议仓位：最后一根的 风险预算 ÷ (2N ÷ 收盘)，上限 1；只是建议，不读取、不跟踪实际持仓。
 """
@@ -56,7 +57,7 @@ def _one(bars, n_in, n_out, n):
 
 
 def _simulate(bars, entry, exit_, n, nxt, mode):
-    signals, pos, last_change_forming = [], None, False
+    signals, pos, last_change_forming, exited_at = [], None, False, None
 
     def emit(i, side, kind, price, level):
         signals.append({"time": bars[i]["dt"], "side": side, "kind": kind,
@@ -88,25 +89,27 @@ def _simulate(bars, entry, exit_, n, nxt, mode):
         if mode == "close":
             if b["close"] < level:
                 emit(i, "sell", "close", b["close"], level)
-                pos, last_change_forming = None, forming
+                pos, last_change_forming, exited_at = None, forming, i
             elif b["low"] < level:
                 emit(i, "sell", "touch" if forming else "false_break", level, level)
         elif b["low"] < level:
             emit(i, "sell", "touch", min(b["open"], level), level)
-            pos, last_change_forming = None, forming
-    return {"signals": signals, "state": _state(bars, exit_, nxt, pos, last_change_forming)}
+            pos, last_change_forming, exited_at = None, forming, i
+    return {"signals": signals, "state": _state(bars, entry, exit_, nxt, pos, last_change_forming, exited_at)}
 
 
-def _state(bars, exit_, nxt, pos, provisional):
-    if pos is None:
-        return {"holding": False, "entry_time": None, "entry_price": None, "stop": None, "effective_exit": None,
-                "provisional": provisional}
+def _state(bars, entry, exit_, nxt, pos, provisional, exited_at):
     last = len(bars) - 1
+    if pos is None:
+        # 入场线同理：最后一根还在形成且没在它上面离场时就是它，否则是下一根
+        line = entry[last] if bars and bars[last].get("forming") and exited_at != last else nxt["entry"]
+        return {"holding": False, "entry_time": None, "entry_price": None, "stop": None, "effective_exit": None,
+                "effective_entry": line, "provisional": provisional}
     # 有效离场价对应「接下来要判定的那根」：最后一根还在形成且不是入场根时就是它，否则是下一根
     line = exit_[last] if bars[last].get("forming") and pos["i"] != last else nxt["exit"]
     return {"holding": True, "entry_time": bars[pos["i"]]["dt"], "entry_price": pos["price"], "stop": pos["stop"],
             "effective_exit": pos["stop"] if line is None else max(line, pos["stop"]),
-            "provisional": provisional}
+            "effective_entry": None, "provisional": provisional}
 
 
 def _suggestion(bars, n):

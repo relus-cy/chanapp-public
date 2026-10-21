@@ -1472,6 +1472,8 @@
 
   // ---------- 唐奇安通道（主图叠加；数值来自 /api/chart 的 donchian 字段） ----------
 
+  var DC_MODE_TEXT = { close: '收盘确认', touch: '盘中触价' };
+
   function currentDc() {
     var all = lastChartData && lastChartData.donchian;
     return dcSettings.key !== 'off' && all ? all[dcSettings.key] || null : null;
@@ -1492,6 +1494,7 @@
     c.dcExit.setData(dc ? chanDonchian.lineData(dc.rows, 'exit', toTime) : []);
     c.dcStop.setData(dc ? chanDonchian.stopData(dc.rows, mode.state, toTime) : []);
     syncDcControl();
+    renderDcCard(dc);
     c.dcOverlay.set(dc && dc.rows.length ? {
       lastTime: toTime(dc.rows[dc.rows.length - 1].time), next: dc.next,
       stop: mode.state && mode.state.holding ? mode.state.stop : null,
@@ -1505,8 +1508,10 @@
     var na = on && !!lastChartData && !lastChartData.donchian;
     el('dcSeg').classList.toggle('on', on);
     el('dcSeg').classList.toggle('na', na);
-    el('dcSegCur').textContent = !on ? '唐奇安'
-      : 'DC ' + dcSettings.key + (na ? ' · 仅前复权' : dcSettings.mode === 'touch' ? ' · 触价' : '');
+    // 按钮与「缠论」同样式、只写名称（工具行与多周期摘要共用一行）；参数组与判定方式写在右栏状态卡标题里，
+    // 打开状态由图标颜色表示，读屏经隐藏文字读到
+    el('dcSegCur').textContent = na ? '唐奇安 · 仅前复权' : '唐奇安';
+    el('dcSegState').textContent = on ? '（已打开 ' + dcSettings.key + ' · ' + DC_MODE_TEXT[dcSettings.mode] + '）' : '';
     document.querySelectorAll('#dcSegPop [data-dc]').forEach(function (b) {
       var sel = b.dataset.dc === dcSettings.key;
       b.setAttribute('aria-checked', sel ? 'true' : 'false'); b.tabIndex = sel ? 0 : -1;
@@ -1515,6 +1520,35 @@
       var sel = b.dataset.dcmode === dcSettings.mode;
       b.setAttribute('aria-checked', sel ? 'true' : 'false'); b.tabIndex = sel ? 0 : -1;
     });
+  }
+
+  // 右栏状态卡：所选判定方式的规则状态、接下来要判定的线位与它离最新收盘多远。关闭或本视图不提供时隐藏
+  function renderDcCard(dc) {
+    var bars = klineData, last = bars.length ? bars[bars.length - 1] : null;
+    var sum = dc && chanDonchian.statusSummary(dc, dcSettings.mode, last && last.close);
+    el('dcSec').hidden = !sum;
+    if (!sum) return;
+    var touch = dcSettings.mode === 'touch';
+    el('dcSecTitle').textContent = '唐奇安 ' + dcSettings.key + ' · ' + DC_MODE_TEXT[dcSettings.mode];
+    var state = el('dcState');
+    state.textContent = (sum.holding ? '规则持有' : '规则空仓') + (sum.provisional ? ' · 形成中' : '');
+    state.classList.toggle('holding', sum.holding);
+    // 比较是严格不等号：高于入场线才入场、低于有效离场价才离场
+    el('dcWatchK').textContent = (touch ? '盘中' : '收盘') + (sum.holding ? '低于此价离场' : '高于此价入场');
+    el('dcWatchV').textContent = sum.watch.price;
+    el('dcWatchD').textContent = sum.watch.dist ? '距收盘 ' + sum.watch.dist : '';
+    var kv = function (k, v, title) {
+      return '<div class="kv"' + (title ? ' title="' + esc(title) + '"' : '') + '><div class="k">' + esc(k) +
+        '</div><div class="v">' + esc(v) + '</div></div>';
+    };
+    el('dcGrid').innerHTML = sum.holding
+      ? kv('入场 ' + fmtBarTime(sum.entry.time), sum.entry.price) + kv('止损', sum.stop, '入场价减 2N，入场后不动') + kv('N', sum.n)
+      : (sum.suggestion ? kv('建议仓位', sum.suggestion.weight, '止损（2N）触发时约亏总资金 ' + sum.suggestion.risk) : '') +
+        kv('N', sum.n, '20 根真实波幅的平滑值');
+    var lastEl = el('dcLast');
+    lastEl.hidden = !sum.last;
+    lastEl.innerHTML = sum.last ? '最近信号 <b>' + esc(fmtBarTime(sum.last.time)) + '</b> ' + esc(sum.last.text) +
+      ' <b>' + esc(sum.last.price) + '</b>' : '';
   }
 
   function wireDcSeg() {
@@ -3152,7 +3186,7 @@
     Array.prototype.forEach.call(el('structureVisible').querySelectorAll('button'), function (b) {
       b.classList.toggle('active', (b.dataset.visible === '1') === structureVisible);
     });
-    /* res-bar 只留一行只读摘要，两组 seg 收进「图层与规则」浮层；
+    /* res-bar 只留一行只读摘要，两组 seg 收进「缠论」浮层；
        摘要随 seg 同函数刷新，任何 state 变更路径（含绕过 click 的）都不会脱节 */
     el('ruleSummary').textContent = ruleLabelText() + (structureVisible ? '' : ' · 结构层隐藏');
   }
@@ -3255,7 +3289,7 @@
   }
   wireAiPopup();
 
-  // 「图层与规则」浮层：摘要与软边框按钮同为入口，Esc/外点关闭，关闭后焦点归还按钮
+  // 「缠论」浮层：摘要与软边框按钮同为入口，Esc/外点关闭，关闭后焦点归还按钮
   function wireRulesPopover() {
     var pop = el('rulesPop'), btn = el('rulesBtn'), summary = el('ruleSummary');
     function setOpen(open, refocus) {

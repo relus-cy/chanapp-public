@@ -78,7 +78,7 @@ chanapp 是一个缠论分析 Web 应用。本文说明它的 HTTP 接口有哪�
 - `next`：`{entry, exit}`，把最后一根算进去的**下一根线位**。最后一根形成中时会随它变化。
 - `modes`：`close`（收盘确认）与 `touch`（盘中触价）两种判定方式，各有：
   - `signals`：`[{time, side, kind, status, price, level}]`。`kind` 为 `close` 收盘越过、`touch` 盘中越过、`false_break` 假突破（盘中越过、收盘没越过，只在 `close` 模式出现）。`touch` 在 `touch` 模式里就是入场或离场；在 `close` 模式里只出现在形成中的 K 线上，表示盘中已越过、等收盘确认，不改变持仓；`level` 为被越过的线位；`status` 在形成中的 K 线上为 `provisional`。
-  - `state`：按规则从窗口起点空仓推演的**假设持仓**，不是用户的真实持仓：`{holding, entry_time, entry_price, stop, effective_exit, provisional}`。`stop` 为入场价 − 2N，入场后固定；`effective_exit` = max(离场线, `stop`)，是接下来那根要判定的离场价。
+  - `state`：按规则从窗口起点空仓推演的**假设持仓**，不是用户的真实持仓：`{holding, entry_time, entry_price, stop, effective_exit, effective_entry, provisional}`。`stop` 为入场价 − 2N，入场后固定；`effective_exit` = max(离场线, `stop`)，是持有时接下来那根要判定的离场价；`effective_entry` 是空仓时接下来那根要判定的入场线（持有时为 null）。
 - `suggestion`：`{weight, stop_distance, risk_budget}`：按 1% 风险预算折算的建议仓位，`weight = min(1, risk_budget ÷ stop_distance)`，`stop_distance = 2N ÷ 收盘`。只是建议，不读取实际持仓。
 
 ### `resonance` — 多周期摘要

@@ -6,7 +6,7 @@ Theme, six moving averages, Donchian channel, MACD/KDJ/RSI/BOLL, strict/relaxed 
 
 ## How to get to it (user POV)
 
-Use header theme/adjustment controls, `图层与规则`, the MA buttons, the Donchian menu (`唐奇安`) and indicator menu below the chart. Open signal evidence through `查看依据与识别时间` and the resonance detail buttons.
+Use header theme/adjustment controls, the toolbar above the chart (`画线`, the Donchian menu `唐奇安`, `缠论`), and the MA buttons and indicator menu below the chart. The Donchian rule-state card sits in the right rail while the overlay is on. Open signal evidence through `查看依据与识别时间` and the resonance detail buttons.
 
 ## Driving it with e2e
 

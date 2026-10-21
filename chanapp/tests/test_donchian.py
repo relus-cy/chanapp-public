@@ -166,6 +166,26 @@ class CloseModeTests(unittest.TestCase):
         # 已收盘：判定的是下一根，离场线 = 第 4、5 根最低 min(9.5, 10.5)
         self.assertEqual(calc(rows)["modes"]["close"]["state"]["effective_exit"], 9.5)
 
+    def test_state_entry_while_flat_is_the_line_judged_next(self):
+        # 第 5 根盘中越过入场线 11 但收在 10.6：形成中时接下来判定的仍是它自己的入场线 11
+        rows = FLAT + [(10, 10.5, 9.5, 10), (10, 11.5, 9.6, 10.6)]
+        self.assertEqual(calc(rows, forming_last=True)["modes"]["close"]["state"]["effective_entry"], 11)
+        # 已收盘（假突破）：判定的是下一根，入场线 = 第 3–5 根最高 11.5
+        self.assertEqual(calc(rows)["modes"]["close"]["state"]["effective_entry"], 11.5)
+
+    def test_state_entry_after_exit_on_forming_bar_is_next_line(self):
+        # 第 5 根形成中收盘跌破离场：同一根不再入场，接下来判定的是下一根（第 3–5 根最高 12.6），不是它自己的 12
+        rows = FLAT + [(10, 12, 9.5, 11.5), (11.5, 12.6, 8, 8.5)]
+        st = calc(rows, forming_last=True)["modes"]["close"]["state"]
+        self.assertFalse(st["holding"])
+        self.assertEqual(st["effective_entry"], 12.6)
+
+    def test_state_entry_is_null_while_holding(self):
+        rows = FLAT + [(10, 12, 9.5, 11.5)]
+        st = calc(rows)["modes"]["close"]["state"]
+        self.assertTrue(st["holding"])
+        self.assertIsNone(st["effective_entry"])
+
     def test_no_signal_before_n_exists(self):
         # 入场线已有值（3 根）但 N 要 20 根：不入场，也不把收盘突破标成假突破
         out = donchian.compute(bars_from(FLAT + [(10, 12, 9.5, 11.5)]), params=P32, atr_n=20)["3/2"]

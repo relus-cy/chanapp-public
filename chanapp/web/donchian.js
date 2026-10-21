@@ -75,25 +75,15 @@
 
   function fmt(v) { return v == null ? '—' : (+v).toFixed(2); }
 
-  // 图例：第 i 根的入场线、离场线、N；最后一根写明规则状态（按规则假设的持有／空仓，不是实际持仓）；
-  // 规则状态持有且在入场之后显示止损；最后一根追加建议仓位与明日预估线；
-  // 该根有信号时追加信号说明（两种判定方式的都列，所选方式在前，文字相同的只列一次）。返回 [{label, value}]，由 app.js 拼 HTML
+  // 图例：第 i 根的入场线、离场线、N；规则状态持有且在入场之后显示止损；
+  // 该根有信号时追加信号说明（两种判定方式的都列，所选方式在前，文字相同的只列一次）。返回 [{label, value}]，由 app.js 拼 HTML。
+  // 规则状态、接下来判定的线位与建议仓位不在图例里，见 statusSummary（右栏状态卡）
   function legendParts(dc, i, mode) {
     if (!dc || !dc.rows || i == null || !dc.rows[i]) return [];
-    var r = dc.rows[i], last = i === dc.rows.length - 1;
-    var m = (dc.modes || {})[mode] || {};
-    var st = m.state || {};
+    var r = dc.rows[i];
+    var st = (((dc.modes || {})[mode] || {}).state) || {};
     var parts = [{ label: '入', value: fmt(r.entry) }, { label: '出', value: fmt(r.exit) }, { label: 'N', value: fmt(r.n) }];
-    if (last && m.state) parts.push({ label: '规则状态', value: st.holding ? '持有' : '空仓' });
     if (st.holding && st.entry_time && r.time >= st.entry_time) parts.push({ label: '止损', value: fmt(st.stop) });
-    if (last && dc.next && (dc.next.entry != null || dc.next.exit != null)) {
-      parts.push({ label: '下一根', value: '入 ' + fmt(dc.next.entry) + ' 出 ' + fmt(dc.next.exit) });
-    }
-    if (last && dc.suggestion) {
-      // 写明风险预算：分钟周期 N 小、止损近，同样 1% 风险折出的仓位会大得多
-      parts.push({ label: '建议仓位', value: (dc.suggestion.weight * 100).toFixed(1) + '%（风险' +
-        +(dc.suggestion.risk_budget * 100).toFixed(2) + '%）' });
-    }
     var texts = {};
     [mode, mode === 'close' ? 'touch' : 'close'].forEach(function (k) {   // 所选方式的信号在前
       (((dc.modes || {})[k] || {}).signals || []).forEach(function (s) {
@@ -104,9 +94,33 @@
     return parts;
   }
 
+  function pctText(v) { return (v * 100).toFixed(1) + '%'; }
+
+  // 右栏状态卡：所选判定方式的规则状态（按规则假设，不是实际持仓）。watch 是接下来要判定的那条线——
+  // 持有时盯有效离场价，空仓时盯入场线（都由后端按最后一根是否形成中选好），dist 是它相对最新收盘的距离。
+  // 数值格式化为字符串，时间保持原样由 app.js 格式化
+  function statusSummary(dc, mode, close) {
+    var m = dc && dc.modes && dc.modes[mode];
+    if (!m || !m.state || !dc.rows || !dc.rows.length) return null;
+    var st = m.state, holding = !!st.holding;
+    var line = holding ? st.effective_exit : st.effective_entry;
+    var sigs = m.signals || [], sig = sigs[sigs.length - 1];
+    var sg = dc.suggestion;
+    var dist = line == null || !close ? null : (line >= close ? '+' : '') + pctText(line / close - 1);
+    return {
+      holding: holding, provisional: !!st.provisional,
+      watch: { side: holding ? 'exit' : 'entry', price: fmt(line), dist: dist },
+      entry: holding ? { time: st.entry_time, price: fmt(st.entry_price) } : null,
+      stop: holding ? fmt(st.stop) : null,
+      n: fmt(dc.rows[dc.rows.length - 1].n),
+      suggestion: sg ? { weight: pctText(sg.weight), risk: +(sg.risk_budget * 100).toFixed(2) + '%' } : null,
+      last: sig ? { time: sig.time, text: signalText(sig), price: fmt(sig.price) } : null,
+    };
+  }
+
   var api = { KEYS: KEYS, MODES: MODES, STORE_KEY: STORE_KEY, STORE_MODE: STORE_MODE, readSettings: readSettings,
     lineData: lineData, stopData: stopData, markerStyle: markerStyle, allSignals: allSignals, signalText: signalText,
-    legendParts: legendParts };
+    legendParts: legendParts, statusSummary: statusSummary };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.chanDonchian = api;
 })(this);

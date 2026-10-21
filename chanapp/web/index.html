@@ -440,7 +440,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
 
   /* 多级别信号占独立一行，不覆盖图表或拦截十字线。 */
   .res-bar { position: relative; flex: 0 0 36px; height: 36px; display: flex; align-items: center; gap: 12px; padding: 5px 10px; background: var(--panel); }
-  /* 成笔标准/提示范围收进「图层与规则」浮层：摘要 + 软边框按钮为入口，浮层里放两组 seg。 */
+  /* 成笔标准/提示范围收进「缠论」浮层：摘要 + 软边框按钮为入口，浮层里放两组 seg。 */
   #ruleSummary {
     font-size: 11px; color: var(--faint); white-space: nowrap; flex-shrink: 0; cursor: pointer;
     transition: color .12s ease-out;
@@ -459,7 +459,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   /* 关闭态用 visibility/opacity/pointer-events 隐藏（不用 display:none）：元素始终在文档中，
      开合只切换 .open，测试与无头抽查可直接查询。visibility 延迟到淡出结束才切，开场即
      可见（同步可聚焦）。 */
-  /* 浮层统一材质（图层与规则、展示周期对话框、搜索候选、副图指标菜单）：同圆角、描边、阴影、半透明模糊底，
+  /* 浮层统一材质（缠论、展示周期对话框、搜索候选、副图指标菜单）：同圆角、描边、阴影、半透明模糊底，
      打开时同一段轻微下落淡入；不支持 backdrop-filter 时退回不透明底保证可读 */
   .rules-pop, .period-dialog, #sidebar .wl-drop, #subSegPop, #dcSegPop {
     background: var(--material); -webkit-backdrop-filter: saturate(1.5) blur(16px); backdrop-filter: saturate(1.5) blur(16px);
@@ -635,35 +635,31 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   }
   #subSeg #subSegPop button.active { background: var(--raise); color: var(--gold); }
   @media (hover:hover) { #subSeg #subSegPop button:hover { background: var(--raise); } }
-  /* 唐奇安：主图叠加，按钮 + 菜单（参数组、判定方式两组单选，选了不关菜单） */
-  #dcSeg { position: relative; }
-  #dcSeg #dcSegBtn { gap: 4px; }
-  #dcSeg.on #dcSegBtn { color: var(--dc); background: var(--capsule); box-shadow: var(--shadow-raise); }
-  #dcSegBtn svg { width: 9px; height: 9px; flex-shrink: 0; }
-  #dcSeg .dot, .dc-legend .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--dc); }
-  #dcSeg .dot { margin-right: 2px; }
-  /* 副图栏在主图下沿，菜单较高：向上展开，落在主图上，不被视口底边裁掉 */
+  /* 唐奇安：主图叠加，放在图上方工具行（与画线、缠论同组）；按钮 + 菜单（参数组、判定方式两组单选，选了不关菜单） */
+  #dcSeg { position: relative; flex-shrink: 0; display: flex; }
+  /* 与「画线」「缠论」同一套 soft-btn：图标 + 文字、中性描边；打开时只把图标染成通道色，参数组写在右栏状态卡标题里 */
+  #dcSeg.on #dcSegBtn .dc-ic { color: var(--dc); }
+  .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .dc-legend .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--dc); }
+  /* 工具行靠右：菜单与「缠论」浮层一样向下、右缘对齐按钮 */
   #dcSegPop {
-    position: absolute; bottom: calc(100% + 6px); left: -1px; z-index: 30; width: 236px;
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: 220px;
     display: flex; flex-direction: column; gap: 2px; padding: 6px;
   }
   #dcSegPop[hidden] { display: none; }
-  #dcSegPop .dc-head { font-size: 10px; color: var(--faint); padding: 6px 10px 2px; font-family: inherit; }
-  #dcSeg #dcSegPop button {
-    display: flex; align-items: center; justify-content: space-between; width: 100%; height: auto; text-align: left;
-    padding: 5px 10px; border-radius: var(--radius-m); box-shadow: none; background: transparent;
+  #dcSegPop .dc-head { font-size: 10px; color: var(--faint); padding: 6px 10px 2px; }
+  #dcSegPop button {
+    display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: left;
+    padding: 5px 10px; border: 0; border-radius: var(--radius-m); background: transparent; color: var(--dim);
+    font-size: 11px; font-family: var(--mono); cursor: pointer;
   }
-  #dcSeg #dcSegPop button[aria-checked="true"] { background: var(--raise); color: var(--dc); }
+  #dcSegPop button[aria-checked="true"] { background: var(--raise); color: var(--dc); }
   #dcSegPop button .ck { width: 12px; height: 12px; visibility: hidden; }
   #dcSegPop button[aria-checked="true"] .ck { visibility: visible; }
-  @media (hover:hover) { #dcSeg #dcSegPop button:hover { background: var(--raise); } }
-  @media (pointer:coarse) { #dcSeg #dcSegPop button { min-height: 40px; } }
-  /* 已打开但当前视图不提供（不复权个股）：按钮去掉强调色 */
-  #dcSeg.on.na #dcSegBtn { color: var(--dim); }
-  #dcSeg.na .dot { opacity: .4; }
-  #dcSegPop .dc-help { margin: 6px 4px 2px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 11px;
-    line-height: 1.55; color: var(--dim); font-family: inherit; }
-  #dcSegPop .dc-help p { margin: 0 0 3px; }
+  @media (hover:hover) { #dcSegPop button:hover { background: var(--raise); color: var(--fg); } }
+  @media (pointer:coarse) { #dcSegPop button { min-height: 40px; } }
+  /* 已打开但当前视图不提供（不复权个股）：图标不染色 */
+  #dcSeg.on.na #dcSegBtn .dc-ic { color: var(--dim); }
   /* 唐奇安读数可折行：末尾的信号说明不能被省略号截掉；日期锚点随图例高度下移（app.js placeAxisAnchor） */
   .dc-legend { white-space: normal; }
   .dc-legend .dot { margin: 0 4px 0 0; vertical-align: 1px; }
@@ -720,6 +716,30 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #flowSec .track i { position: absolute; top: 0; height: 100%; border-radius: 2px; }
   #flowSec .track i.pos { background: var(--up); left: 50%; }
   #flowSec .track i.neg { background: var(--down); right: 50%; }
+
+  /* 唐奇安状态卡：所选参数与判定方式的规则状态、接下来要判定的线位（app.js renderDcCard）。按规则假设，不是实际持仓 */
+  #rail > #dcSec { flex-shrink: 0; border-top: 1px solid var(--line); }
+  #dcSec[hidden] { display: none; }
+  #dcSec .dc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  #dcSec .dc-head h3 { margin: 0; font-size: 11px; color: var(--faint); font-weight: 600; letter-spacing: .12em; }
+  .dc-state {
+    flex-shrink: 0; font-size: 11px; line-height: 18px; padding: 0 6px; border-radius: var(--radius-xs);
+    color: var(--dim); background: var(--raise);
+  }
+  .dc-state.holding { color: var(--panel); background: var(--dc); }
+  #dcSec .dc-watch { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  #dcSec .dc-watch .k { color: var(--dim); font-size: 12px; }
+  #dcSec .dc-watch .v { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--dc); }
+  #dcSec .dc-watch .d { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-left: 6px; }
+  #dcSec .dc-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 10px; }
+  #dcSec .kv .k { font-size: 11px; color: var(--faint); }
+  #dcSec .kv .v { font-family: var(--mono); font-size: 13px; margin-top: 1px; }
+  #dcSec .dc-last { margin: 8px 0 0; font-size: 11px; color: var(--dim); }
+  #dcSec .dc-last[hidden] { display: none; }
+  #dcSec .dc-last b { font-family: var(--mono); font-weight: 400; color: var(--fg); }
+  #dcSec .dc-help { margin-top: 6px; font-size: 11px; line-height: 1.55; color: var(--dim); }
+  #dcSec .dc-help summary { padding: 4px 0; color: var(--gold); cursor: pointer; width: max-content; }
+  #dcSec .dc-help p { margin: 2px 0 4px; }
 
   /* AI 完全分类 */
   .ai-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
@@ -841,9 +861,13 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     font-family: var(--mono);
   }
   footer > span { min-width: 0; overflow: hidden; }
-  @container (max-width: 700px) {
+  /* 多周期摘要与工具行（画线、唐奇安、缠论）放不下一行时换行，摘要独占第一行、信号名完整显示。
+     摘要是尺寸容器，不能靠 flex 按内容自动换行；阈值按三个周期的摘要实测：中间区 818px 时信号名差约 20px，898px 时放得下 */
+  @container (max-width: 900px) {
     .res-bar { height: auto; flex-basis: auto; flex-wrap: wrap; gap: 6px 12px; }
     .resonance { flex-basis: 100%; }
+  }
+  @container (max-width: 700px) {
     #subBar { display: grid; grid-template-columns: auto 1fr; justify-items: start; height: 86px; gap: 4px 8px; }
     #maSeg, #subNote { grid-column: 1 / -1; }
     #subNote { max-width: 100%; height: 16px; }
@@ -928,10 +952,26 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
       <button id="drawToggle" class="soft-btn" type="button" aria-pressed="true" aria-controls="drawBar" title="显示或收起画线工具栏">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/></svg>画线
       </button>
-      <button id="rulesBtn" class="soft-btn" type="button" aria-expanded="false" aria-controls="rulesPop" title="图层与规则">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 7h8m4 0h4M4 17h3m4 0h9"/><circle cx="14" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>图层与规则
+      <div id="dcSeg">
+        <button id="dcSegBtn" class="soft-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="dcSegPop" title="唐奇安通道（海龟交易法）：主图叠加入场线、离场线与突破标记"><svg class="dc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9h5V5h6v3h7"/><path d="M3 19h4v-3h7v2h7"/></svg><span id="dcSegCur">唐奇安</span><span class="vh" id="dcSegState"></span></button>
+        <div id="dcSegPop" role="group" aria-label="唐奇安通道设置" hidden>
+          <div class="dc-head" id="dcHeadParams">参数（入场 / 离场）</div>
+          <div role="radiogroup" aria-labelledby="dcHeadParams">
+            <button type="button" role="radio" data-dc="off" aria-checked="true">关闭<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+            <button type="button" role="radio" data-dc="20/10" aria-checked="false">20 / 10<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+            <button type="button" role="radio" data-dc="55/20" aria-checked="false">55 / 20<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+          </div>
+          <div class="dc-head" id="dcHeadMode">判定方式</div>
+          <div role="radiogroup" aria-labelledby="dcHeadMode">
+            <button type="button" role="radio" data-dcmode="close" aria-checked="true">收盘确认<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+            <button type="button" role="radio" data-dcmode="touch" aria-checked="false">盘中触价<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+          </div>
+        </div>
+      </div>
+      <button id="rulesBtn" class="soft-btn" type="button" aria-expanded="false" aria-controls="rulesPop" title="缠论：成笔标准、提示范围与结构层显隐">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 7h8m4 0h4M4 17h3m4 0h9"/><circle cx="14" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>缠论
       </button>
-      <div class="rules-pop" id="rulesPop" role="group" aria-label="图层与规则设置">
+      <div class="rules-pop" id="rulesPop" role="group" aria-label="缠论设置">
         <div class="rule-line"><span>成笔标准</span>
           <div class="rule-option" id="ruleProfile" role="group" aria-label="成笔标准" title="严格/宽松仅指成笔跨度，买卖点按上游形态规则计算">
             <button data-profile="strict">严格</button>
@@ -1022,27 +1062,6 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
           <button data-ma="144"><i class="dot" style="background:var(--ma144)"></i>MA144</button>
           <button data-ma="250"><i class="dot" style="background:var(--ma250)"></i>MA250</button>
         </div>
-        <div class="seg" id="dcSeg">
-          <button id="dcSegBtn" aria-haspopup="true" aria-expanded="false" aria-controls="dcSegPop" title="唐奇安通道（海龟交易法）：主图叠加入场线、离场线与突破标记"><i class="dot" aria-hidden="true"></i><span id="dcSegCur">唐奇安</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
-          <div id="dcSegPop" role="group" aria-label="唐奇安通道设置" hidden>
-            <div class="dc-head" id="dcHeadParams">参数（入场 / 离场）</div>
-            <div role="radiogroup" aria-labelledby="dcHeadParams">
-              <button type="button" role="radio" data-dc="off" aria-checked="true">关闭<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
-              <button type="button" role="radio" data-dc="20/10" aria-checked="false">20 / 10<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
-              <button type="button" role="radio" data-dc="55/20" aria-checked="false">55 / 20<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
-            </div>
-            <div class="dc-head" id="dcHeadMode">判定方式</div>
-            <div role="radiogroup" aria-labelledby="dcHeadMode">
-              <button type="button" role="radio" data-dcmode="close" aria-checked="true">收盘确认<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
-              <button type="button" role="radio" data-dcmode="touch" aria-checked="false">盘中触价<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
-            </div>
-            <div class="dc-help">
-              <p>实线当天不变；短虚线是把最新一根算进去的下一根线位，收盘前会变。</p>
-              <p>▲▼ 两种判定方式都画：实心为收盘确认，淡色带 ~ 为盘中触价或形成中，空心为假突破。</p>
-              <p>规则状态与橙色止损线跟随所选方式，是按规则假设的持有，与实际持仓无关；建议仓位按 1% 风险预算折算。</p>
-            </div>
-          </div>
-        </div>
         <div class="seg" id="subSeg" title="副图指标（单选）">
           <button id="subSegBtn" aria-haspopup="true" aria-expanded="false"><span id="subSegCur">MACD</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
           <div id="subSegPop" hidden>
@@ -1073,6 +1092,17 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
       <div class="main"><span class="k">主力净流入</span><span class="v" id="flowMain"></span></div>
       <div class="bars" id="flowBars"></div>
       <p id="flowNote" hidden></p>
+    </div>
+    <div class="sec" id="dcSec" hidden>
+      <div class="dc-head"><h3 id="dcSecTitle">唐奇安</h3><span id="dcState" class="dc-state" title="从窗口起点空仓开始按规则推演，与实际持仓无关"></span></div>
+      <div class="dc-watch"><span class="k" id="dcWatchK"></span><span><b class="v" id="dcWatchV"></b><span class="d" id="dcWatchD"></span></span></div>
+      <div class="dc-grid" id="dcGrid"></div>
+      <p class="dc-last" id="dcLast" hidden></p>
+      <details class="dc-help"><summary>图上标记怎么看</summary>
+        <p>实线当天不变；短虚线是把最新一根算进去的下一根线位，收盘前会变。</p>
+        <p>▲▼ 两种判定方式都画：实心为收盘确认，淡色带 ~ 为盘中触价或形成中，空心为假突破。</p>
+        <p>上方规则状态与橙色止损线跟随所选判定方式，从窗口起点空仓开始按规则推演，与实际持仓无关。建议仓位按 1% 风险预算折算：止损触发时约亏总资金 1%。</p>
+      </details>
     </div>
     <div id="railScroll">
     <div class="sec">

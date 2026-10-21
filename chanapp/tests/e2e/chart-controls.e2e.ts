@@ -65,7 +65,7 @@ test('four subchart indicators show the pinned sample values and remain selected
 
 test('stroke rules and signal scope reach the real analysis and survive reload', async ({ app, browser, screen }) => {
   await openChart({ app, browser });
-  await screen.getByRole('button', '图层与规则').tap();
+  await screen.getByRole('button', '缠论').tap();
   const relaxed = await chartAction(browser, () => screen.getByRole('button', '宽松').tap(), /\/api\/chart\?.*rule_profile=relaxed&/);
   expect(relaxed.rule_profile).toBe('relaxed');
   expect(relaxed.signal_scope).toBe('expanded');
@@ -74,10 +74,10 @@ test('stroke rules and signal scope reach the real analysis and survive reload',
   expect(standard.signal_scope).toBe('standard');
   await expect(browser.locator('#ruleSummary')).toHaveText('宽松成笔 · 标准提示');
   await browser.keyboard.press('Escape');
-  await expect(screen.getByRole('button', '图层与规则')).toBeFocused();
+  await expect(screen.getByRole('button', '缠论')).toBeFocused();
   await chartAction(browser, () => browser.reload(), /\/api\/chart\?.*rule_profile=relaxed&signal_scope=standard/);
   await expect(browser.locator('#ruleSummary')).toHaveText('宽松成笔 · 标准提示');
-  await screen.getByRole('button', '图层与规则').tap();
+  await screen.getByRole('button', '缠论').tap();
   const strict = await chartAction(browser, () => screen.getByRole('button', '严格').tap(), /\/api\/chart\?.*rule_profile=strict&/);
   expect(strict.rule_profile).toBe('strict');
   const expanded = await chartAction(browser, () => screen.getByRole('button', '扩展').tap(), /\/api\/chart\?.*signal_scope=expanded/);
@@ -112,7 +112,7 @@ test('structure layer toggle hides only the drawn analysis and survives reload',
   const shown = await structureShown();
   expect(shown.lines).toBeGreaterThan(1);
   expect(shown.markers).toBeGreaterThan(0);
-  await screen.getByRole('button', '图层与规则').tap();
+  await screen.getByRole('button', '缠论').tap();
   await screen.getByRole('button', '隐藏').tap();
   await expect.poll(zsInk).toBe(0);
   await expect.poll(structureShown).toEqual({ lines: 0, markers: 0 });
@@ -122,7 +122,7 @@ test('structure layer toggle hides only the drawn analysis and survives reload',
   await expect(browser.locator('#ruleSummary')).toHaveText('严格成笔 · 扩展提示 · 结构层隐藏');
   await expect.poll(zsInk).toBe(0);
   await expect.poll(structureShown).toEqual({ lines: 0, markers: 0 });
-  await screen.getByRole('button', '图层与规则').tap();
+  await screen.getByRole('button', '缠论').tap();
   await screen.getByRole('button', '显示').tap();
   await expect.poll(zsInk).toBeGreaterThan(0);
   await expect.poll(structureShown).toEqual(shown);
@@ -182,7 +182,7 @@ test('evidence and resonance details return focus and close on a period change',
   await expect(browser.locator('#cardsDock')).not.toHaveAttribute('inert');
 });
 
-test('donchian toggle shows the pinned sample channel, ignores the structure layer, keeps its choice across reload and explains raw', async ({ app, browser, screen }) => {
+test('donchian toggle shows the pinned sample channel and rule-state card, ignores the structure layer, keeps its choice across reload and explains raw', async ({ app, browser, screen }) => {
   const probe = `window.__dc = function () {
     return [charts.dcEntry, charts.dcExit, charts.dcStop].filter(function (s) {
       return s.options().visible && s.data().length > 0; }).length;
@@ -201,7 +201,9 @@ test('donchian toggle shows the pinned sample channel, ignores the structure lay
   });
   const dcLines = () => browser.evaluate(() => window.__dc());
   await expect(browser.locator('#dcSegCur')).toHaveText('唐奇安');
+  await expect(browser.locator('#dcSegState')).toHaveText('');
   await expect(browser.locator('#ohlc .dc-legend')).toHaveCount(0);
+  await expect(browser.locator('#dcSec')).toBeHidden();
   expect(await dcLines()).toBe(0);
   await expect.poll(dcInk).toBe(0);
   await browser.locator('#dcSegBtn').tap();
@@ -213,13 +215,19 @@ test('donchian toggle shows the pinned sample channel, ignores the structure lay
   await screen.getByRole('button', '切换日间/夜间主题').hover();
   // Literal oracle for the bundled 2026-09-24 qfq daily sample, computed outside the app:
   // previous-20 high, previous-10 low, Wilder ATR(20), 1% / (2N / close); the close-mode rule is flat.
-  const latest = 'DC20/10 入974.99 出858.00 N53.19 规则状态空仓 下一根入 974.99 出 858.00 建议仓位8.4%（风险1%）';
-  await expect(browser.locator('#ohlc .dc-legend')).toHaveText(latest);
+  await expect(browser.locator('#ohlc .dc-legend')).toHaveText('DC20/10 入974.99 出858.00 N53.19');
+  // The rule state lives in the rail card: flat, watching the next bar's entry line 974.99, 8.8% above the 895.86 close.
+  await expect(browser.locator('#dcSecTitle')).toHaveText('唐奇安 20/10 · 收盘确认');
+  await expect(browser.locator('#dcState')).toHaveText('规则空仓');
+  await expect(browser.locator('#dcWatchK')).toHaveText('收盘高于此价入场');
+  await expect(browser.locator('#dcWatchV')).toHaveText('974.99');
+  await expect(browser.locator('#dcWatchD')).toHaveText('距收盘 +8.8%');
+  await expect(browser.locator('#dcGrid .kv .v')).toHaveText(['8.4%', '53.19']);
   // Entry and exit lines (no stop line while flat), plus the next-bar dashes and markers on the overlay.
   expect(await dcLines()).toBe(2);
   expect(await browser.evaluate(() => window.__dcStop())).toBeNull();
   await expect.poll(dcInk).toBeGreaterThan(0);
-  await screen.getByRole('button', '图层与规则').tap();
+  await screen.getByRole('button', '缠论').tap();
   await screen.getByRole('button', '隐藏').tap();
   await expect(browser.locator('#ruleSummary')).toContainText('结构层隐藏');
   expect(await dcLines()).toBe(2);
@@ -233,18 +241,28 @@ test('donchian toggle shows the pinned sample channel, ignores the structure lay
   await expect(browser.locator('#dcSegPop [data-dcmode="touch"]')).toHaveAttribute('aria-checked', 'true');
   await browser.keyboard.press('Tab');
   await expect(browser.locator('#dcSegBtn')).toHaveAttribute('aria-expanded', 'false');
-  await expect(browser.locator('#dcSegCur')).toHaveText('DC 20/10 · 触价');
+  // The button stays a plain "唐奇安" like its toolbar neighbours; the choice is announced through hidden text.
+  await expect(browser.locator('#dcSegCur')).toHaveText('唐奇安');
+  await expect(browser.locator('#dcSegState')).toHaveText('（已打开 20/10 · 盘中触价）');
   // The touch-mode rule holds since 2026-09-21 (entry 949.73, stop = 949.73 − 2 × previous N): the stop line
-  // is drawn and also continued one slot right of the last bar on the overlay.
+  // is drawn and also continued one slot right of the last bar on the overlay. The card now watches the
+  // effective exit max(next 10-bar low 858.00, stop), 4.2% below the close.
+  await expect(browser.locator('#dcSecTitle')).toHaveText('唐奇安 20/10 · 盘中触价');
+  await expect(browser.locator('#dcState')).toHaveText('规则持有');
+  await expect(browser.locator('#dcWatchK')).toHaveText('盘中低于此价离场');
+  await expect(browser.locator('#dcWatchV')).toHaveText('858.00');
+  await expect(browser.locator('#dcWatchD')).toHaveText('距收盘 -4.2%');
+  await expect(browser.locator('#dcGrid .kv .v')).toHaveText(['949.73', '835.94', '53.19']);
   expect(await dcLines()).toBe(3);
   expect(await browser.evaluate(() => window.__dcStop())).toBe(835.9386);
   await chartAction(browser, () => browser.reload(), /\/api\/chart\?.*freq=day&/);
-  await expect(browser.locator('#dcSegCur')).toHaveText('DC 20/10 · 触价');
+  await expect(browser.locator('#dcSegState')).toHaveText('（已打开 20/10 · 盘中触价）');
   await expect(browser.locator('#dcSegPop [data-dcmode="touch"]')).toHaveAttribute('aria-checked', 'true');
   await chartAction(browser, () => screen.getByRole('button', '不复权').tap(), /\/api\/chart\?.*adjust=raw&/);
   await screen.getByRole('button', '切换日间/夜间主题').hover();
   await expect(browser.locator('#ohlc .dc-legend')).toHaveText('唐奇安仅前复权下显示');
-  await expect(browser.locator('#dcSegCur')).toHaveText('DC 20/10 · 仅前复权');
+  await expect(browser.locator('#dcSegCur')).toHaveText('唐奇安 · 仅前复权');
+  await expect(browser.locator('#dcSec')).toBeHidden();
   expect(await dcLines()).toBe(0);
   await expect.poll(dcInk).toBe(0);
 });
