@@ -197,6 +197,44 @@ class LongbridgeTests(unittest.TestCase):
         slots = [r.slot_end[11:] for r in rows]
         self.assertEqual((len(slots), "14:00" in slots, "13:30" in slots), (10, False, True))
 
+    @staticmethod
+    def _first_bucket_client(drop_opening_minute=False):
+        rec = json.loads((FIX / "m30-firstbucket-1888-20260717.json").read_text())["rows"]
+        by = {(period, adjust): rec[f"{period}-{adjust}"] for period in ("m30", "m1", "day") for adjust in ("raw", "qfq")}
+        if drop_opening_minute:                  # 2026-05-19 的形状：同源 m1 也缺 09:30 那一分钟
+            for adjust in ("raw", "qfq"):
+                by[("m1", adjust)] = [r for r in by[("m1", adjust)] if r["timestamp"][11:16] != "09:30"]
+        return FakeClient(by_date=by, live=rec["m30-raw"])
+
+    def test_missing_opening_bucket_filled_from_m1(self):
+        # 1888.HK 2026-07-17 实测：m30 缺 09:30 起点那根（10:00 槽），所在月份转 known_gap；同源 m1 有完整的
+        # 09:30–09:59，按桶聚合补上。m1 不含开市竞价量，补出的槽量偏少（同日 700.HK 对照差 433,402 股）
+        client = self._first_bucket_client()
+        p = longbridge.LongbridgeProvider(client=client)
+        with self.assertLogs(longbridge.log, "WARNING"):
+            rows = p.minute_history("hk01888", "m30", "2026-07-17 09:30", "2026-07-17 16:00", now=self.LATER)
+        got = {r.slot_end[11:]: (r.open, r.high, r.low, r.close, r.volume) for r in rows}
+        self.assertEqual(list(got), ["10:00", "10:30", "11:00", "11:30", "12:00", "13:30",
+                                     "14:00", "14:30", "15:00", "15:30", "16:00"])
+        self.assertEqual(got["10:00"], (47.0, 47.88, 45.52, 46.90, 29186935))     # m1 09:30–09:59 聚合
+        self.assertEqual(got["10:30"], (46.90, 48.32, 46.76, 46.94, 11950525))    # 已有的 m30 保留原值
+        self.assertEqual([c[2:] for c in client.calls if c[2] == "m1"], [("m1", "raw", "2026-07-17", "2026-07-17")])
+        qfq = [b["slot_end"][11:] for b in p.qfq_series("hk01888", "m30", "2026-07-17 09:30", "2026-07-17 16:00")]
+        self.assertEqual(qfq, list(got))         # 前复权缓存发布前要求 raw 的槽它都有
+
+    def test_missing_bucket_without_opening_minute_in_m1_stays_missing(self):
+        # 2026-05-19 的形状：m1 也缺桶起点那一分钟，聚合出的是残缺桶（量与最低价对不上日线），不补
+        p = longbridge.LongbridgeProvider(client=self._first_bucket_client(drop_opening_minute=True))
+        rows = p.minute_history("hk01888", "m30", "2026-07-17 09:30", "2026-07-17 16:00", now=self.LATER)
+        self.assertEqual([r.slot_end[11:] for r in rows][:2], ["10:30", "11:00"])
+
+    def test_live_m30_does_not_fetch_m1_for_missing_bucket(self):
+        # 盘中增量每轮都取：不为缺桶多发 m1 请求，缺的槽交给定稿与续传（minute_history）
+        client = self._first_bucket_client()
+        p = longbridge.LongbridgeProvider(client=client)
+        rows = p.minute_live("hk01888", "m30", now=datetime(2026, 7, 17, 16, 30))
+        self.assertEqual((len(rows), [c for c in client.calls if c[2] == "m1"]), (10, []))
+
     def test_clean_m30_fetch_requests_no_day_bars(self):
         _, c = self.m30()
         self.assertEqual({call[2] for call in c.calls}, {"m30"})

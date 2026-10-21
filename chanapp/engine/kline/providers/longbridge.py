@@ -8,6 +8,9 @@
   日线开/收且在日线高低内）后补齐，不成立的留给准入拒收。个别交易日长桥 m30 从某一时刻起起始标签整体偏离半点
   （如 13:29、13:59，m5 同样偏移；m1 始终在整分钟上，正常日 m1 按 30 分钟分桶聚合与 m30 逐根相同）：这类日子只
   多取一次当日同口径 m1，按桶聚合补上缺的半点槽，已在半点上的 m30 保留原值，偏移的行丢弃；m1 也没有的桶留缺。
+  长桥个别日子聚合 m30 时丢掉首个时间桶（如 1888.HK 2026-07-17 缺 09:30 起点那根）：历史与前复权取数时，当日最后一根
+  之前缺的半点槽同样由 m1 聚合补，但只在 m1 有该桶起点那一分钟时补（2026-05-19 m1 也缺 09:30，不补）；m1 不含开市
+  竞价量，补出的首桶量偏少。盘中增量不补（每轮都取，缺的槽交给定稿与续传）。
   其余起始标签不在会话内的行（盘前/盘后）逐行丢弃并记日志，不作废整批（spec §5.3：只隔离已证实错误的行）。
 - minute_history 记 closed，且只收已过 now 的槽；minute_live 用 candlesticks(count=12)，只留当日行、一律 forming
   （计划 A 决定 8：closed 只来自定稿）。
@@ -34,8 +37,9 @@ from chanapp.engine.kline.rows import CalendarRow, RawDayRow, RawMinuteRow, new_
 
 log = logging.getLogger(__name__)
 
-CONTRACT_VERSION = "longbridge-raw-5"         # 2：naive 时间按主机时区解释；竞价价小幅越出时补齐高低；3：新增 calendar；
-                                              # 4：m30 越界超出容差时由当日日线佐证补齐；5：起始标签不在半点上的日子由 m1 聚合补槽
+CONTRACT_VERSION = "longbridge-raw-6"         # 2：naive 时间按主机时区解释；竞价价小幅越出时补齐高低；3：新增 calendar；
+                                              # 4：m30 越界超出容差时由当日日线佐证补齐；5：起始标签不在半点上的日子由 m1 聚合补槽；
+                                              # 6：历史与前复权 m30 当日最后一根之前缺的半点槽由 m1 聚合补（m1 有桶起点那一分钟时）
 AUCTION_WIDEN_TOL = 0.01
 _WIDENED_LOGGED: set = set()
 HKT = ZoneInfo("Asia/Hong_Kong")
@@ -178,6 +182,26 @@ def _off_grid(r: dict) -> bool:
     return in_session and _hhmm_slot_end(hhmm) not in _M30_GRID
 
 
+_M30_STARTS = tuple(f"{int(end[:2]) - (end[3:] == '00'):02d}:{'30' if end[3:] == '00' else '00'}"
+                    for end in sessions.slots("HK", "m30"))     # 末端标签 → 起始标签：10:00 → 09:30
+
+
+def _missing_starts(rows: list[dict]) -> dict[str, list[str]]:
+    """{日期: [缺的起始标签]}：当日最后一根半点槽之前没有的半点槽（收市竞价不算）。最后一根之后的不算缺（当天还没到、
+    半日市只开上午）。"""
+    have: dict[str, set] = {}
+    for r in rows:
+        hhmm = r["timestamp"][11:16]
+        if hhmm in _M30_STARTS:
+            have.setdefault(r["timestamp"][:10], set()).add(hhmm)
+    out = {}
+    for day, starts in have.items():
+        gap = [s for s in _M30_STARTS if s < max(starts) and s not in starts]
+        if gap:
+            out[day] = gap
+    return out
+
+
 def _m1_buckets(rows: list[dict]) -> dict[str, dict]:
     """m1 → 按 30 分钟桶聚合的 m30 形状行（起始标签 → 行）；只聚合落在半点网格上的连续交易桶，收市竞价等不在桶内的行不取。"""
     groups: dict[str, list[dict]] = {}
@@ -283,10 +307,11 @@ class LongbridgeProvider:
             prev_close = bar["close"]
         return out
 
-    def _m30_pairs(self, code, adjust, candles) -> list[tuple[str, dict]]:
+    def _m30_pairs(self, code, adjust, candles, *, fill_missing=False) -> list[tuple[str, dict]]:
         """m30 归一（_normalize_m30），再对仍越出高低的 bar 取同口径当日日线佐证（_widen_by_day）。
-        只有出现越界 bar 时才请求日线，一次覆盖越界 bar 所在的日期区间。"""
-        pairs = _normalize_m30(self._fill_off_grid(code, adjust, candles))
+        只有出现越界 bar 时才请求日线，一次覆盖越界 bar 所在的日期区间。fill_missing（历史与供应商前复权，不含盘中
+        增量）：当日最后一根之前缺的半点槽由同口径 m1 聚合补上（_fill_off_grid）。"""
+        pairs = _normalize_m30(self._fill_off_grid(code, adjust, candles, fill_missing=fill_missing))
         dates = sorted({slot[:10] for slot, bar in pairs if _out_of_range(bar)})
         if not dates:
             return pairs
@@ -294,22 +319,35 @@ class LongbridgeProvider:
         return [(slot, _widen_by_day(bar, days[slot[:10]], slot)
                  if _out_of_range(bar) and slot[:10] in days else bar) for slot, bar in pairs]
 
-    def _fill_off_grid(self, code, adjust, candles) -> list[dict]:
-        """有起始标签不在半点上的日子：丢掉偏移的行，取当日同口径 m1 按桶聚合，补上该日已取区间内缺的半点槽。"""
+    def _fill_off_grid(self, code, adjust, candles, *, fill_missing=False) -> list[dict]:
+        """当日同口径 m1 按桶聚合补槽，每个需要的日子只多取一次 m1：
+        - 有起始标签不在半点上的日子：丢掉偏移的行，补上该日已取区间内缺的半点槽；
+        - fill_missing 时，最后一根半点槽之前缺槽的日子（长桥个别日子聚合时丢掉首个时间桶，如 1888.HK 2026-07-17）：
+          只在 m1 有该桶起点那一分钟时补（2026-05-19 m1 也缺 09:30 那一分钟，聚合出的是残缺桶，量与最低价对不上
+          日线，所有者 2026-09-29 裁定不补）。m1 不含开市竞价量，补出的首桶量偏少。"""
         off = [r for r in candles if _off_grid(r)]
-        if not off:
-            return candles
         keep = [r for r in candles if not _off_grid(r)]
         have = {r["timestamp"][:16] for r in keep}
-        for day in sorted({r["timestamp"][:10] for r in off}):
-            span = [r["timestamp"][:16] for r in candles if r["timestamp"][:10] == day]
-            lo, hi = min(span), max(span)
-            filled = [c for ts, c in _m1_buckets(self._history(code, "m1", adjust, day, day)).items()
-                      if lo <= ts[:16] <= hi and ts[:16] not in have]
-            keep.extend(filled)
-            log.warning("长桥 m30 %s 起始标签不在半点上（%s），改由 m1 聚合补槽 %s", day,
-                        [r["timestamp"][11:16] for r in off if r["timestamp"][:10] == day],
-                        [c["timestamp"][11:16] for c in filled])
+        missing = _missing_starts(keep) if fill_missing else {}
+        for day in sorted({r["timestamp"][:10] for r in off} | set(missing)):
+            m1 = self._history(code, "m1", adjust, day, day)
+            buckets = _m1_buckets(m1)
+            filled = []
+            if any(r["timestamp"][:10] == day for r in off):
+                span = [r["timestamp"][:16] for r in candles if r["timestamp"][:10] == day]
+                lo, hi = min(span), max(span)
+                filled = [c for ts, c in buckets.items() if lo <= ts[:16] <= hi and ts[:16] not in have]
+                log.warning("长桥 m30 %s 起始标签不在半点上（%s），改由 m1 聚合补槽 %s", day,
+                            [r["timestamp"][11:16] for r in off if r["timestamp"][:10] == day],
+                            [c["timestamp"][11:16] for c in filled])
+            minutes = {r["timestamp"][:16] for r in m1}
+            got = {c["timestamp"][:16] for c in filled}
+            gap = [buckets[f"{day}T{s}:00"] for s in missing.get(day, ())
+                   if f"{day}T{s}" not in got and f"{day}T{s}" in minutes and f"{day}T{s}:00" in buckets]
+            if missing.get(day):
+                log.warning("长桥 m30 %s 缺半点槽（起始 %s），由 m1 聚合补 %s", day, missing[day],
+                            [c["timestamp"][11:16] for c in gap])
+            keep.extend(filled + gap)
         return keep
 
     @staticmethod
@@ -332,7 +370,7 @@ class LongbridgeProvider:
 
     def minute_history(self, code, fact_freq, start, end, *, now) -> list:
         self._check_freq(fact_freq)
-        pairs = self._m30_pairs(code, "raw", self._history(code, "m30", "raw", start[:10], end[:10]))
+        pairs = self._m30_pairs(code, "raw", self._history(code, "m30", "raw", start[:10], end[:10]), fill_missing=True)
         limit = min(end, _now_label(now))
         return self._minute_rows(code, [(s, b) for s, b in pairs if start <= s <= limit], "closed")
 
@@ -349,7 +387,7 @@ class LongbridgeProvider:
                     for day, b, _ in self._day_series(code, "qfq", start, end)]
         if freq != "m30":
             raise ProviderUnsupported(f"长桥供应商前复权只取 day/m30，收到 {freq}")
-        pairs = self._m30_pairs(code, "qfq", self._history(code, "m30", "qfq", start[:10], end[:10]))
+        pairs = self._m30_pairs(code, "qfq", self._history(code, "m30", "qfq", start[:10], end[:10]), fill_missing=True)
         return [{"trade_date": s[:10], "slot_end": s, **b, "volume_unit": "share"}
                 for s, b in pairs if start <= s <= end]
 
