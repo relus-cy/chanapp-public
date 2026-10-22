@@ -19,6 +19,7 @@ const PROBE = `window.__draw = {
     return d.points.map(function (p) { var hit = klineData.filter(function (b) { return String(toTime(b.time)) === String(p.time); })[0];
       return hit ? hit.time : 'off-bar'; }); },
   shown: function (id) { var d = drawCtl && drawCtl.manager.get(id); return d ? { style: d.style, locked: !!d.locked } : null; },
+  count: function () { return drawCtl ? drawCtl.state().count : 0; },
 };`;
 let appSource: string | null = null;
 async function probedApp() {
@@ -569,9 +570,11 @@ test('every tool in every toolbar group places a drawing that is saved with defa
     await chooseTool(browser, kind);
     const count = await browser.evaluate(kind => LightweightChartsDrawing.OVERLAY_SPECS[kind].pointCount, kind);
     for (let k = 0; k < count; k++) await clickAt(browser, await chartPoint(browser, spots[k][0], spots[k][1]));
-    await expect.poll(async () => (await drawings(app)).length, kind).toBe(i + 1);
+    // Placed on the page before the next tool; the saves (1 s debounce each) run alongside the next placements.
+    await expect.poll(() => browser.evaluate(() => window.__draw.count()), kind).toBe(i + 1);
     await browser.keyboard.press('Escape');                               // deselect: the style bar leaves the pane
   }
+  await expect.poll(async () => (await drawings(app)).length).toBe(kinds.length);
   await settle();
   const saved = await drawings(app);
   expect(saved.map(d => d.body.kind)).toEqual(kinds);

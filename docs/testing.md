@@ -39,7 +39,7 @@ demo 不提供港股、实时行情、F10、资金流与 AI 样本。部署、�
 
 失败时保留命令、退出码、失败断言、对应截图／trace。修复实际缺陷时保留修复前失败和修复后通过的证据。清理临时实例后保留这些产物。应用改动后按 [功能地图](../.agents/skills/verify-chanapp/features/README.md) 核对入口；可用 `/maintain-verification-skill` 维护地图。
 
-GitHub Actions 的 browser job 用运行器的 `--shard 1/3`…`3/3` 把完整流程切成三片，在三台机器上各起独立实例并行执行，包含三组既有浏览器验收；每片单 worker、零重试。每片的 `browser-evidence-<SHA>-<片号>` artifact 保留 14 天，包括报告、运行器截图、失败用例的 trace、补充日志和离线截图（离线截图只在跑到该流程的那一片）。上传步骤在测试失败后仍执行，并显式包含 `.e2e` 隐藏目录中的指定产物；临时实例状态不在上传范围。长期追溯保留提交 SHA 和 run 链接；artifact 过期后须按需要另存证据。
+GitHub Actions 的 browser job 用运行器的 `--shard 1/4`…`4/4` 把完整流程切成四片，在四台机器上各起独立实例并行执行，包含三组既有浏览器验收；每片单 worker、零重试。每片的 `browser-evidence-<SHA>-<片号>` artifact 保留 14 天，包括报告、运行器截图、失败用例的 trace、补充日志和离线截图（离线截图只在跑到该流程的那一片）。上传步骤在测试失败后仍执行，并显式包含 `.e2e` 隐藏目录中的指定产物；临时实例状态不在上传范围。长期追溯保留提交 SHA 和 run 链接；artifact 过期后须按需要另存证据。
 
 副图读数共用浮点尾差显示处理，覆盖 MACD、KDJ、RSI 和 BOLL；它只格式化显示文本，不修改指标数组。这不是通用十进制半入算法。固定样本的四组完整读数由 `e2e/chart-controls.e2e.ts` 验证，其中 BOLL 中轨 `884.955` 显示为 `884.96`。
 

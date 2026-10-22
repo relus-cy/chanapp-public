@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  # unittest and browser each run as three slices on separate machines; the run is green only when every slice is.
+  # unittest runs as three slices and browser as four, each on its own machine; the run is green only when every slice is.
   unittest:
     runs-on: ubuntu-latest
     strategy:
@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -56,7 +56,7 @@ jobs:
           npm ci
           npx --no-install e2e-web install chromium --with-deps
       - name: Run user flow acceptance
-        run: PYTHON=python npm run test:e2e -- --shard ${{ matrix.shard }}/3
+        run: PYTHON=python npm run test:e2e -- --shard ${{ matrix.shard }}/4
       - name: Upload browser evidence
         if: always()
         uses: actions/upload-artifact@v4
