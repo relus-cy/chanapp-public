@@ -13,6 +13,7 @@
     释放后再开即返回窗口（复核必须修的端到端证明）；
 4. 指数（非系统依赖的深证成指）搜索查看：只取窗口，不规划完整历史；
 5. 前复权链不足：窗口里有缺失交易日时前复权图明确提示「前复权自 … 起可用」，不静默全拉。
+5b. 非自选个股盘中、午休或收盘后首开：请求路径补取当日参考前收，前复权当天就有今天（2026-10-23 生产缺根后补）。
 收盘：
 6. 盘中接纳后收盘、当天历史空返回：自选有界重试（20:00/22:00 两次，之后当天不再请求；2026-09-30 前为 17:30 起三次），状态保持
    「已收盘 · 待定稿」且时间不因失败推进；非自选在收盘后重新打开触发一次请求路径跟进，离开后不再有两小时一次的后台
@@ -351,6 +352,72 @@ class HKNewListingAcceptance(_Flow):
         self.assertTrue(body["kline"], body["meta"])
         self.assertEqual(body["kline"][-1]["time"][:10], self.DAY)
         self.assertEqual(body["meta"]["adjust"], "qfq")
+
+
+class UntrackedTodayPreopenAcceptance(_Flow):
+    """2026-10-23 生产实测（科创板 sh688836，不在自选，盘中首开）后补的回归：前复权要等当日参考前收确认才出今天，
+    修前请求路径（首开、补窗口、追赶、手动重拉）都不取参考前收，只有调度线程的盘中轮次会取，首开与重拉后
+    今天缺根，午休首开要等到 13:00，收盘后首开要等到 20:00 定稿。现在由请求路径补取：每代码一次请求，
+    与调度线程共用 60 秒重试节流；手动重拉是显式请求，不受节流。"""
+    DAY = "2026-09-28"
+    LATE = "sz000005"                                  # 收盘后才首开的另一只非自选个股
+
+    def setUp(self):
+        super().setUp()
+        _list_since(self.dir, [self.LATE], "2010-01-04")
+        with facts.write_txn(self.conn):
+            self.conn.execute("INSERT OR IGNORE INTO calendar(market, date, is_open, sessions, source, fetched_at)"
+                              " VALUES ('CN',?,1,'[]','test',?)", (self.DAY, facts.now_iso()))
+        self.pc, self.preopen_calls = 10.0, []
+
+        def preopen_ref(code, day):
+            self.preopen_calls.append((code, day))
+            if self.pc is None:                            # 行情接口还没给出当日报价
+                return None
+            return RawDayRow(code, day, None, None, None, None, None, "lot", None, "CNY", self.pc, 0, "preopen",
+                             new_batch_id())
+        self.provider.preopen_ref = preopen_ref
+
+    def open_at(self, hh, mm, code=X, freq="day", **extra):
+        self.clock.t = at(self.DAY, hh, mm).timestamp()
+        return self.chart(code, freq, **extra)
+
+    def assert_today(self, body):
+        self.assertEqual(body["kline"][-1]["time"][:10], self.DAY, body["meta"]["notices"])
+        self.assertNotIn("today_unconfirmed", [n["code"] for n in body["meta"]["notices"]])
+
+    def test_first_open_in_session_shows_today_with_one_request(self):
+        self.assert_today(self.open_at(11, 18))
+        self.assertEqual(self.preopen_calls, [(X, self.DAY)])
+        for freq in ("m30", "week"):                       # 分钟与周线前复权同一系数链
+            self.assert_today(self.chart(X, freq))
+        self.assertEqual(len(self.preopen_calls), 1)       # 已确认：之后的读取零请求
+
+    def test_first_open_at_lunch_and_after_close_shows_today(self):
+        self.assert_today(self.open_at(12, 10))
+        self.assert_today(self.open_at(17, 0, code=self.LATE))
+        self.assertEqual(self.preopen_calls, [(X, self.DAY), (self.LATE, self.DAY)])
+
+    def test_unconfirmed_preopen_is_throttled_and_refetch_retries_it(self):
+        self.pc = None
+        body = self.open_at(11, 18)
+        self.assertEqual(body["kline"][-1]["time"], "2026-09-25")
+        self.assertIn("today_unconfirmed", [n["code"] for n in body["meta"]["notices"]])
+        self.open_at(11, 18)
+        self.assertEqual(len(self.preopen_calls), 1)       # 60 秒内不重复请求
+        self.open_at(11, 18, refetch=1)
+        self.assertNotEqual(self.last_headers.get("X-Refetch-Status"), "ok")   # 今天仍被隐藏，不报成功
+        self.assertEqual(len(self.preopen_calls), 2)       # 显式重拉不受节流
+        self.pc = 10.0
+        self.assert_today(self.open_at(11, 18, refetch=1))
+        self.assertEqual(self.last_headers.get("X-Refetch-Status"), "ok")
+        self.assertEqual(len(self.preopen_calls), 3)
+
+    def test_no_request_on_non_trading_day_before_preopen_time_or_for_index(self):
+        self.chart(X, "day")                               # 搭建时钟为周六晚
+        self.open_at(9, 0)
+        self.open_at(11, 18, code=IDX)
+        self.assertEqual(self.preopen_calls, [])
 
 
 if __name__ == "__main__":

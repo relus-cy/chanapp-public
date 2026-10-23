@@ -119,7 +119,9 @@ class Recording(FullFake):
                              new_batch_id())]
 
     def preopen_ref(self, code, trade_date):
-        return None
+        # 与真实来源盘中同口径：当日报价的昨收（价格恒 10）。重拉在参考前收未确认时不报 ok
+        return RawDayRow(code, trade_date, None, None, None, None, None, "lot", None, "CNY", 10, 0, "preopen",
+                         new_batch_id())
 
     def calendar(self, year):
         return []

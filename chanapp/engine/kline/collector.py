@@ -84,6 +84,7 @@ _FACTORIES = {name: (spec.module, spec.factory) for name, spec in REGISTRY.items
 _CLOSE_SLOT = {"CN": "15:00", "HK": "16:00"}
 _CN_INDEX = "sh000001"
 _REFETCH_WAIT_CATCHUP_S = 60                 # 手动重拉开始前等在途的请求路径追赶做完的上限
+_PREOPEN_FROM = "09:16"                      # A 股盘前参考价最早可取时点（PREOPEN 轮次与请求路径补取共用）
 MAX_GAP_ATTEMPTS = 5
 _NON_RECOVERY = ("backfill", "rejected")   # 回填类缺口的续传不占用恢复预留额度
 _MAX_WINDOW_SLICES = 40
@@ -314,7 +315,7 @@ def due_modes(now, *, market, is_trading_day, state) -> list:
         modes.append("BACKFILL")
     else:
         last_pre = state.get("last_preopen")
-        if (market == "CN" and "09:16" <= hhmm <= "09:29" and not state.get("preopen_done")
+        if (market == "CN" and _PREOPEN_FROM <= hhmm <= "09:29" and not state.get("preopen_done")
                 and (last_pre is None or (now - last_pre).total_seconds() >= 60)):
             modes.append("PREOPEN")                   # 每分钟至多一轮，只重试未确认的标的
         # 窗口含收盘后 1 分钟（取最后一根 bar 的定格），按秒比较：11:31:30 已在窗口外
@@ -1815,9 +1816,10 @@ class Collector:
         """手动重拉（显式请求）：整段重取主图周期与共振依赖（WINDOW_MINUTE_FREQ）的分析窗口，不改变关注状态、
         不重复全库重建；失败时保留已有事实（提交走同一准入，修订不删行）。
 
-        当天：盘中取一次盘中增量；过了首个定稿时点的交易日强制重取当天（与定稿同一入口与当日定稿锁，锁忙则跳过）。
+        当天：盘中取一次盘中增量；过了首个定稿时点的交易日强制重取当天（与定稿同一入口与当日定稿锁，锁忙则跳过）；
+        A 股个股当日参考前收未确认时不受节流重取一次（confirm_preopen），仍未确认则不报 ok（前复权还看不到今天）。
         港股个股另整段重发供应商前复权缓存（窗口起点）。返回 {status, requests, accepted, empty, stopped, today,
-        vendor}：status 为 ok（每个请求都取到并接纳、窗口无缺、当天与缓存都成功）、partial（有取到但不全）、
+        preopen, vendor}：status 为 ok（每个请求都取到并接纳、窗口无缺、当天、参考前收与缓存都成功）、partial（有取到但不全）、
         failed（什么都没取到）、busy（同一代码已有重拉在途，在途追赶 _REFETCH_WAIT_CATCHUP_S 内没结束，或同一代码的
         单飞锁被历史规划、缓存刷新等占着超过 REQUEST_LOCK_WAIT_S：不发请求）或 disabled。"""
         if not is_enabled():
@@ -1863,6 +1865,10 @@ class Collector:
                 # 今天已收盘槽的补取失败不能让重拉报 ok：盘中它补早盘（minute_live 只回最近两槽），
                 # 收盘后到定稿前它是当天分钟的唯一来源（_refetch_today 此时不取）
                 out["today"] = "failed"
+            try:
+                out["preopen"] = self.confirm_preopen(code, force=True)
+            except CollectorLocked:
+                out["preopen"] = False
             out["vendor"] = None
             if market_of(code) == "HK" and kind_of(code) == "stock":
                 res = self.refresh_vendor_qfq(code, now, force=True)
@@ -1870,7 +1876,8 @@ class Collector:
                     not ({"stale_binding", "superseded", "frozen"} & set(res)) else "failed"
             day_lo, minute_lo = self._window_span(code, freqs, bars)   # 补齐日线后的窗口（分钟下限随首根日线）
             out["review"] = self._window_reviews(code, day_lo, minute_lo, now.date().isoformat())
-        good = [out["accepted"] > 0, out["today"] in (None, "ok"), out["vendor"] in (None, "ok")]
+        good = [out["accepted"] > 0, out["today"] in (None, "ok"), out["preopen"] is not False,
+                out["vendor"] in (None, "ok")]
         clean = (out["stopped"] is None and not out["empty"] and not out["short"] and out["complete"]
                  and not out["review"])
         if all(good) and clean:
@@ -1971,8 +1978,29 @@ class Collector:
                 confirmed.add(code)
         return confirmed
 
+    def confirm_preopen(self, code, *, force=False) -> bool | None:
+        """请求路径补确认当日参考前收：前复权等它确认才出今天，调度线程只在盘前与盘中窗口给活跃代码取，
+        非自选首开、午休与收盘后到定稿前的查看要由这里补。返回 None 表示今天不需要（没有 F4 绑定、非交易日或
+        未到 _PREOPEN_FROM），否则返回此刻是否已确认。已确认零请求；与调度线程共用每代码 60 秒的重试节流，
+        force（手动重拉）不受节流。"""
+        if not is_enabled() or not self._has_preopen_binding(code):
+            return None
+        now = self.now()
+        market, today = market_of(code), now.date().isoformat()
+        if now.strftime("%H:%M") < _PREOPEN_FROM or not self._trading(market, now):
+            return None
+        if self.preopen_confirmed(code, today):
+            return True
+        state = self._state.setdefault((market, today), {})
+        if force:
+            state.setdefault("preopen_tried", {})[code] = now
+            self.preopen([code], now)
+        else:
+            self._preopen_round(state, [code], now)
+        return self.preopen_confirmed(code, today)
+
     def _preopen_due(self, state, codes, now) -> list:
-        """未确认、且距上次尝试满 60 秒的 F4 标的（每代码节流，PREOPEN 与 INTRADAY 共用）。"""
+        """未确认、且距上次尝试满 60 秒的 F4 标的（每代码节流，PREOPEN、INTRADAY 与请求路径 confirm_preopen 共用）。"""
         today = now.date().isoformat()
         tried = state.setdefault("preopen_tried", {})
         return [c for c in codes if self._has_preopen_binding(c) and not self.preopen_confirmed(c, today)
