@@ -12,6 +12,8 @@
   - 有效离场价 = max(离场线, 止损)；止损入场后固定；入场那根不离场，离场那根不再入场；比较一律严格不等号。
   - 规则状态里的 effective_exit（持有时）与 effective_entry（空仓时）都取「接下来要判定的那根」的线位。
   - 形成中的 bar 上的信号为 provisional，已收盘的为 confirmed。
+  - 卖出信号带 basis：有效离场价取的是止损（stop，严格高于离场线）还是离场线（exit）。
+  - trades 记下每一笔规则进出（含已平仓的）与它的止损，图上逐笔画止损线；持有中的那笔 exit_* 为 None。
 - 建议仓位：最后一根的 风险预算 ÷ (2N ÷ 收盘)，上限 1；只是建议，不读取、不跟踪实际持仓。
 """
 from __future__ import annotations
@@ -56,13 +58,28 @@ def _one(bars, n_in, n_out, n):
             "suggestion": _suggestion(bars, n)}
 
 
-def _simulate(bars, entry, exit_, n, nxt, mode):
-    signals, pos, last_change_forming, exited_at = [], None, False, None
+def _basis(exit_line, stop):
+    return "stop" if stop > exit_line else "exit"
 
-    def emit(i, side, kind, price, level):
-        signals.append({"time": bars[i]["dt"], "side": side, "kind": kind,
-                        "status": "provisional" if bars[i].get("forming") else "confirmed",
-                        "price": price, "level": level})
+
+def _simulate(bars, entry, exit_, n, nxt, mode):
+    signals, trades, pos, last_change_forming, exited_at = [], [], None, False, None
+
+    def emit(i, side, kind, price, level, basis=None):
+        sig = {"time": bars[i]["dt"], "side": side, "kind": kind,
+               "status": "provisional" if bars[i].get("forming") else "confirmed",
+               "price": price, "level": level}
+        if basis:
+            sig["basis"] = basis
+        signals.append(sig)
+
+    def open_(i, price, stop):
+        trades.append({"entry_time": bars[i]["dt"], "entry_price": price, "stop": stop,
+                       "exit_time": None, "exit_price": None})
+        return {"i": i, "price": price, "stop": stop}
+
+    def close_(i, price):
+        trades[-1].update(exit_time=bars[i]["dt"], exit_price=price)
 
     for i, b in enumerate(bars):
         forming = bool(b.get("forming"))
@@ -74,28 +91,32 @@ def _simulate(bars, entry, exit_, n, nxt, mode):
                 continue
             if mode == "close":
                 if b["close"] > line:
-                    pos = {"i": i, "price": b["close"], "stop": b["close"] - 2 * n_at}
+                    pos = open_(i, b["close"], b["close"] - 2 * n_at)
                     emit(i, "buy", "close", b["close"], line)
                     last_change_forming = forming
                 elif b["high"] > line:
                     emit(i, "buy", "touch" if forming else "false_break", line, line)
             elif b["high"] > line:
                 price = max(b["open"], line)
-                pos = {"i": i, "price": price, "stop": price - 2 * n_at}
+                pos = open_(i, price, price - 2 * n_at)
                 emit(i, "buy", "touch", price, line)
                 last_change_forming = forming
             continue                     # 空仓的 bar（含刚入场那根）不判离场
-        level = max(exit_[i], pos["stop"])
+        level, basis = max(exit_[i], pos["stop"]), _basis(exit_[i], pos["stop"])
         if mode == "close":
             if b["close"] < level:
-                emit(i, "sell", "close", b["close"], level)
+                emit(i, "sell", "close", b["close"], level, basis)
+                close_(i, b["close"])
                 pos, last_change_forming, exited_at = None, forming, i
             elif b["low"] < level:
-                emit(i, "sell", "touch" if forming else "false_break", level, level)
+                emit(i, "sell", "touch" if forming else "false_break", level, level, basis)
         elif b["low"] < level:
-            emit(i, "sell", "touch", min(b["open"], level), level)
+            price = min(b["open"], level)
+            emit(i, "sell", "touch", price, level, basis)
+            close_(i, price)
             pos, last_change_forming, exited_at = None, forming, i
-    return {"signals": signals, "state": _state(bars, entry, exit_, nxt, pos, last_change_forming, exited_at)}
+    return {"signals": signals, "trades": trades,
+            "state": _state(bars, entry, exit_, nxt, pos, last_change_forming, exited_at)}
 
 
 def _state(bars, entry, exit_, nxt, pos, provisional, exited_at):

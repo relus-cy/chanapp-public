@@ -1132,7 +1132,7 @@
     // 不能像确认结构那样拼成单条折线——否则不相交的段之间会被直线连接。
 
     var zsOverlay = makeZsOverlay(el('chart'), main, candleSeries);
-    // 唐奇安：入场线、离场线为阶梯实线（当根全天不变），止损线只在规则状态持有时画；不受结构层显隐影响
+    // 唐奇安：入场线、离场线为阶梯实线（当根全天不变），止损线按所选方式逐笔画（每笔入场到离场）；不受结构层显隐影响
     function dcLine() {
       return main.addSeries(LW.LineSeries, {
         lineWidth: 1, lineType: LW.LineType.WithSteps, visible: false,
@@ -1492,7 +1492,7 @@
     c.dcStop.applyOptions({ color: P.dcStop, visible: !!dc });
     c.dcEntry.setData(dc ? chanDonchian.lineData(dc.rows, 'entry', toTime) : []);
     c.dcExit.setData(dc ? chanDonchian.lineData(dc.rows, 'exit', toTime) : []);
-    c.dcStop.setData(dc ? chanDonchian.stopData(dc.rows, mode.state, toTime) : []);
+    c.dcStop.setData(dc ? chanDonchian.stopData(dc.rows, mode.trades, toTime) : []);
     syncDcControl();
     renderDcCard(dc);
     c.dcOverlay.set(dc && dc.rows.length ? {

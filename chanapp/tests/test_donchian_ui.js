@@ -3,6 +3,8 @@
 // 可能出错的方式：坏的本地存储值把开关弄成未知状态；null 线值画成 0；止损线从窗口起点而不是入场根开始画；
 // 假突破画成实心、形成中或盘中触价的信号画成收盘确认的实心；只画了当前判定方式的标记（规格要求两种都画）；
 // 两种方式在同一根同一线位的同类信号重复画；图例在空仓时仍显示止损。
+// 止损线只画当前持有那笔、已平仓的止损消失（用户看到跌破标记却找不到被跌破的线）；相邻两笔之间、离场之后没断开；
+// 卖出说明不写判定价，也不分止损还是离场线。
 // 规则状态摘要（右栏状态卡）：持有时没盯离场价而盯了入场线；空仓时用了 next.entry 而不是后端给的接下来要判定的入场线；
 // 与收盘的距离符号反了；最近信号取了另一种判定方式的；空仓时还显示入场价与止损。
 const assert = require('node:assert');
@@ -32,10 +34,19 @@ const rows = [
 assert.deepStrictEqual(dc.lineData(rows, 'entry', id),
   [{ time: '2026-01-02', value: 11 }, { time: '2026-01-03', value: 11 }, { time: '2026-01-04', value: 12 }]);
 
-// 止损线从入场根画到末根；空仓不画
-assert.deepStrictEqual(dc.stopData(rows, { holding: true, entry_time: '2026-01-03', stop: 7.5 }, id),
-  [{ time: '2026-01-03', value: 7.5 }, { time: '2026-01-04', value: 7.5 }]);
-assert.deepStrictEqual(dc.stopData(rows, { holding: false, entry_time: null, stop: null }, id), []);
+// 止损线逐笔画：图表库的线段取起点的颜色，空白点也不会断线，所以笔外的点和离场根都给透明色——线从入场根画到离场根为止。
+// 笔外的点取下一笔（之后没有就取上一笔）的止损作值，不把价格轴拉偏；一笔都没有时不出点
+const G = 'transparent';
+assert.deepStrictEqual(dc.stopData(rows, [{ entry_time: '2026-01-02', stop: 8, exit_time: '2026-01-03' }], id),
+  [{ time: '2026-01-01', value: 8, color: G }, { time: '2026-01-02', value: 8 }, { time: '2026-01-03', value: 8, color: G },
+   { time: '2026-01-04', value: 8, color: G }]);
+// 前后两笔紧挨着（离场根的下一根就入场）也断开：离场根透明，下一根从新止损起画；持有中的那笔画到末根
+assert.deepStrictEqual(dc.stopData(rows, [{ entry_time: '2026-01-01', stop: 8, exit_time: '2026-01-02' },
+                                          { entry_time: '2026-01-03', stop: 7.5, exit_time: null }], id),
+  [{ time: '2026-01-01', value: 8 }, { time: '2026-01-02', value: 8, color: G }, { time: '2026-01-03', value: 7.5 },
+   { time: '2026-01-04', value: 7.5 }]);
+assert.deepStrictEqual(dc.stopData(rows, [], id), []);
+assert.deepStrictEqual(dc.stopData(rows, undefined, id), []);
 
 // 标记样式
 assert.deepStrictEqual(dc.markerStyle({ side: 'buy', kind: 'close', status: 'confirmed' }), { up: true, fill: 'solid', tilde: false });
@@ -58,6 +69,15 @@ assert.deepStrictEqual(dc.markerStyle({ side: 'buy', kind: 'close', status: 'pro
   assert.deepStrictEqual(dc.allSignals(null), []);
 }
 assert.strictEqual(dc.signalText({ side: 'buy', kind: 'close', status: 'provisional' }), '收盘突破入场线（形成中）');
+// 卖出说明分止损与离场线；带线位时数值放在「形成中」之前；旧数据没有 basis 时退回「离场价」
+assert.strictEqual(dc.signalText({ side: 'sell', kind: 'close', basis: 'stop', level: 32.8979, status: 'confirmed' }, true),
+  '收盘跌破止损 32.90');
+assert.strictEqual(dc.signalText({ side: 'sell', kind: 'false_break', basis: 'exit', level: 29.5, status: 'confirmed' }, true),
+  '假跌破：盘中跌破离场线 29.50，收盘收回');
+assert.strictEqual(dc.signalText({ side: 'sell', kind: 'touch', basis: 'stop', level: 32.64, status: 'provisional' }, true),
+  '盘中触及止损 32.64（形成中）');
+assert.strictEqual(dc.signalText({ side: 'sell', kind: 'touch', basis: 'stop', status: 'confirmed' }), '盘中触及止损');
+assert.strictEqual(dc.signalText({ side: 'sell', kind: 'close', status: 'confirmed' }), '收盘跌破离场价');
 
 // 图例
 {
@@ -67,21 +87,30 @@ assert.strictEqual(dc.signalText({ side: 'buy', kind: 'close', status: 'provisio
     suggestion: { weight: 0.0789, stop_distance: 0.1267, risk_budget: 0.01 },
     modes: {
       close: { signals: [{ time: '2026-01-03', side: 'buy', kind: 'close', status: 'confirmed', price: 11.6, level: 11 }],
+               trades: [{ entry_time: '2026-01-03', entry_price: 11.6, stop: 7.4, exit_time: null, exit_price: null }],
                state: { holding: true, entry_time: '2026-01-03', entry_price: 11.6, stop: 7.4, effective_exit: 10.2 } },
-      touch: { signals: [{ time: '2026-01-03', side: 'buy', kind: 'touch', status: 'confirmed', price: 11, level: 11 }],
+      touch: { signals: [{ time: '2026-01-02', side: 'buy', kind: 'touch', status: 'confirmed', price: 11, level: 11 },
+                         { time: '2026-01-03', side: 'sell', kind: 'touch', basis: 'stop', status: 'confirmed', price: 9.1, level: 9.1 }],
+               trades: [{ entry_time: '2026-01-02', entry_price: 11, stop: 9.1, exit_time: '2026-01-03', exit_price: 9.1 }],
                state: { holding: false } },
     },
   };
+  // 收盘确认那笔从第 3 根才入场：第 2 根不显示止损，只列另一种方式在这根的入场
   assert.deepStrictEqual(dc.legendParts(payload, 1, 'close'),
-    [{ label: '入', value: '11.00' }, { label: '出', value: '9.00' }, { label: 'N', value: '2.00' }]);
+    [{ label: '入', value: '11.00' }, { label: '出', value: '9.00' }, { label: 'N', value: '2.00' },
+     { label: '', value: '盘中触及入场线 11.00' }]);
   assert.deepStrictEqual(dc.legendParts(payload, 2, 'close'),
     [{ label: '入', value: '11.00' }, { label: '出', value: '9.50' }, { label: 'N', value: '2.10' },
-     { label: '止损', value: '7.40' }, { label: '', value: '收盘突破入场线' }, { label: '', value: '盘中触及入场线' }]);
+     { label: '止损', value: '7.40' }, { label: '', value: '收盘突破入场线 11.00' }, { label: '', value: '盘中触及止损 9.10' }]);
+  // 已平仓那笔的止损在它的持有期内照样显示（含离场那根），所选方式的信号在前
+  assert.deepStrictEqual(dc.legendParts(payload, 2, 'touch'),
+    [{ label: '入', value: '11.00' }, { label: '出', value: '9.50' }, { label: 'N', value: '2.10' },
+     { label: '止损', value: '9.10' }, { label: '', value: '盘中触及止损 9.10' }, { label: '', value: '收盘突破入场线 11.00' }]);
   // 最后一根也只给逐根读数；规则状态、接下来判定的线位与建议仓位在右栏状态卡（statusSummary）
   assert.deepStrictEqual(dc.legendParts(payload, 3, 'close'),
     [{ label: '入', value: '12.00' }, { label: '出', value: '10.00' }, { label: 'N', value: '2.20' },
      { label: '止损', value: '7.40' }]);
-  // 盘中触价模式下空仓：不显示止损
+  // 盘中触价那笔已在第 3 根离场：之后不显示止损
   assert.deepStrictEqual(dc.legendParts(payload, 3, 'touch'),
     [{ label: '入', value: '12.00' }, { label: '出', value: '10.00' }, { label: 'N', value: '2.20' }]);
   assert.deepStrictEqual(dc.legendParts(null, 0, 'close'), []);

@@ -13,6 +13,8 @@
 - 离场比较用了 <=；盘中触价跳空低开时按离场价而不是开盘价成交；盘中触价的止损用了当根 N；
 - 规则状态的有效离场价没取止损，或最后一根形成中时没用当根的离场线；
 - N 还没有值时把收盘突破误标成假突破；按日期而不是按根数取窗口（停牌、新股）。
+- 已平仓的那笔丢了止损（图上只能画当前持仓的止损线）；把收盘确认方式下形成中的盘中越过当成一笔；
+  卖出信号没说明判定价取的是止损还是离场线（两者相等时算离场线）。
 """
 import unittest
 
@@ -198,8 +200,40 @@ class CloseModeTests(unittest.TestCase):
         out = calc(rows)
         sig = out["modes"]["close"]["signals"]
         self.assertEqual(sig[-1], {"time": "2026-01-05", "side": "sell", "kind": "false_break",
-                                   "status": "confirmed", "price": 9, "level": 9})
+                                   "status": "confirmed", "price": 9, "level": 9, "basis": "exit"})
         self.assertTrue(out["modes"]["close"]["state"]["holding"])
+
+    def test_trades_keep_each_round_trip_stop_and_sells_name_their_basis(self):
+        # 同 test_stop_drives_exit：第 5 根假跌破比的是离场线 9.8，第 6 根收盘跌破比的是止损 9.467
+        rows = [(10, 10.2, 9.8, 10)] * 3 + [(10, 10.5, 9.9, 10.4), (10.4, 10.45, 9.0, 10.3), (10.3, 10.3, 9.2, 9.3)]
+        out = calc(rows)["modes"]["close"]
+        self.assertEqual([s.get("basis") for s in out["signals"]], [None, "exit", "stop"])
+        self.assertEqual(len(out["trades"]), 1)
+        t = out["trades"][0]
+        self.assertEqual((t["entry_time"], t["entry_price"], t["exit_time"], t["exit_price"]),
+                         ("2026-01-04", 10.4, "2026-01-06", 9.3))
+        self.assertAlmostEqual(t["stop"], 9.466667, places=6)
+        self.assertFalse(out["state"]["holding"])                          # 已平仓，规则状态里没有止损了
+
+    def test_open_trade_has_no_exit_and_matches_state(self):
+        out = calc(FLAT + [(10, 12, 9.5, 11.5)])["modes"]["close"]
+        n4 = (2.0 * 2 + 2.5) / 3
+        self.assertEqual(len(out["trades"]), 1)
+        t = out["trades"][0]
+        self.assertEqual((t["entry_time"], t["entry_price"], t["exit_time"], t["exit_price"]),
+                         ("2026-01-04", 11.5, None, None))
+        self.assertAlmostEqual(t["stop"], 11.5 - 2 * n4)
+
+    def test_equal_stop_and_exit_line_is_exit_basis(self):
+        # 入场收 11.5、N=13/6 → 止损 7.1667；离场线 9 更高：依据是离场线
+        out = calc(FLAT + [(10, 12, 9.5, 11.5), (11.5, 12, 8.9, 11)])["modes"]["close"]
+        self.assertEqual(out["signals"][-1]["basis"], "exit")
+        self.assertEqual(donchian._basis(9.0, 9.0), "exit")
+        self.assertEqual(donchian._basis(9.0, 9.1), "stop")
+
+    def test_forming_touch_in_close_mode_is_not_a_trade(self):
+        out = calc(FLAT + [(10, 12, 9.5, 10.5)], forming_last=True)["modes"]["close"]
+        self.assertEqual(out["trades"], [])
 
 
 class TouchModeTests(unittest.TestCase):
@@ -224,7 +258,7 @@ class TouchModeTests(unittest.TestCase):
         out = calc(FLAT + [(10, 12, 9.5, 11.5), (8.5, 9, 8, 8.8)])
         self.assertEqual(out["modes"]["touch"]["signals"][-1],
                          {"time": "2026-01-05", "side": "sell", "kind": "touch", "status": "confirmed",
-                          "price": 8.5, "level": 9})
+                          "price": 8.5, "level": 9, "basis": "exit"})
 
     def test_touch_on_forming_bar_is_provisional(self):
         out = calc(FLAT + [(10, 12, 9.5, 10.5)], forming_last=True)
@@ -236,6 +270,11 @@ class TouchModeTests(unittest.TestCase):
         sig = calc(rows)["modes"]["touch"]["signals"]
         self.assertEqual([(s["time"], s["side"]) for s in sig], [("2026-01-04", "buy"), ("2026-01-05", "sell")])
         self.assertEqual((sig[1]["price"], sig[1]["level"]), (8, 8))      # 离场线 = min(9, 8)，止损 7；按线价成交
+
+    def test_touch_trades_record_fill_prices(self):
+        out = calc(FLAT + [(10, 12, 9.5, 11.5), (8.5, 9, 8, 8.8)])["modes"]["touch"]
+        self.assertEqual(out["trades"], [{"entry_time": "2026-01-04", "entry_price": 11, "stop": 7.0,
+                                          "exit_time": "2026-01-05", "exit_price": 8.5}])
 
 
 class SuggestionTests(unittest.TestCase):

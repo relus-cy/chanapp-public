@@ -187,7 +187,32 @@ test('donchian toggle shows the pinned sample channel and rule-state card, ignor
     return [charts.dcEntry, charts.dcExit, charts.dcStop].filter(function (s) {
       return s.options().visible && s.data().length > 0; }).length;
   };
-  window.__dcStop = function () { return charts.dcOverlay._data && charts.dcOverlay._data.stop; };`;
+  window.__dcStop = function () { return charts.dcOverlay._data && charts.dcOverlay._data.stop; };
+  window.__dcStopAt = function (t) {
+    var p = charts.dcStop.data().filter(function (d) { return d.time === t; })[0];
+    return p ? { value: p.value, shown: p.color !== 'transparent' } : null;
+  };
+  // Pixels on the main pane at the stop price, halfway between bars t1 and t2 (where no candle is), that are the
+  // stop colour blended over the chart background at one consistent ratio (the 1px line is antialiased).
+  window.__dcStopInk = function (t1, t2, price) {
+    var ts = charts.main.timeScale(), x = (ts.timeToCoordinate(t1) + ts.timeToCoordinate(t2)) / 2;
+    var y = charts.candleSeries.priceToCoordinate(price), dpr = window.devicePixelRatio || 1;
+    var rgb = function (hex) { return [1, 3, 5].map(function (k) { return parseInt(hex.substr(k, 2), 16); }); };
+    var want = rgb(charts.dcStop.options().color), bg = rgb(charts.main.options().layout.background.color);
+    var hits = 0;
+    document.querySelectorAll('#chart canvas').forEach(function (c) {
+      var ctx = c.getContext('2d'); if (!ctx || c.width < 200) return;
+      var d = ctx.getImageData(Math.round(x * dpr) - 1, Math.round(y * dpr) - 4, 3, 9).data;
+      for (var i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 250) continue;
+        var a = [0, 1, 2].map(function (k) { return (bg[k] - d[i + k]) / (bg[k] - want[k]); });
+        if (Math.min.apply(null, a) > 0.2 && Math.max.apply(null, a) - Math.min.apply(null, a) < 0.1) hits++;
+      }
+    });
+    return hits;
+  };
+  window.__dcShow = function (t) { locateBar(t); };   // the evidence-card path that centres a bar
+  window.__dcX = function (t) { return charts.main.timeScale().timeToCoordinate(t); };`;
   const source = await probedAppSource(probe);
   await browser.route(/\/app\.js(\?|$)/, route => route.fulfill({ body: source, contentType: 'application/javascript' }));
   await openChart({ app, browser });
@@ -223,14 +248,44 @@ test('donchian toggle shows the pinned sample channel and rule-state card, ignor
   await expect(browser.locator('#dcWatchV')).toHaveText('974.99');
   await expect(browser.locator('#dcWatchD')).toHaveText('距收盘 +8.8%');
   await expect(browser.locator('#dcGrid .kv .v')).toHaveText(['8.4%', '53.19']);
-  // Entry and exit lines (no stop line while flat), plus the next-bar dashes and markers on the overlay.
-  expect(await dcLines()).toBe(2);
+  // Entry and exit lines, plus the stop lines of the closed close-mode trades; no stop dash past the last bar
+  // while flat. The next-bar dashes and markers are on the overlay.
+  expect(await dcLines()).toBe(3);
   expect(await browser.evaluate(() => window.__dcStop())).toBeNull();
   await expect.poll(dcInk).toBeGreaterThan(0);
+  // A closed trade keeps its own stop line: bought on the 2026-01-30 close 648.2329 with Wilder N(20) 32.5101
+  // (computed outside the app), stop 648.2329 − 2 × 32.5101 = 583.2127, drawn from the entry bar to the exit bar
+  // 2026-02-04 (close 559.34 below the stop, which is above that bar's 10-bar low) and cut off on both sides.
+  // The chart library colours a segment by its starting point, so "shown" is the segment leaving that bar.
+  const stopAt = (t: string) => browser.evaluate((d) => window.__dcStopAt(d), t);
+  expect((await stopAt('2026-01-29')).shown).toBe(false);
+  for (const t of ['2026-01-30', '2026-02-03']) {
+    expect((await stopAt(t)).shown).toBe(true);
+    expect((await stopAt(t)).value).toBeCloseTo(583.2127, 3);
+  }
+  expect((await stopAt('2026-02-04')).shown).toBe(false);
+  expect((await stopAt('2026-02-05')).shown).toBe(false);
+  await browser.evaluate(() => window.__dcShow('2026-02-04'));
+  await expect.poll(() => browser.evaluate(() => window.__dcX('2026-02-04'))).toBeGreaterThan(100);
+  // On screen: the stop is painted between the entry and exit bars and not after the exit bar.
+  const ink = (a: string, b: string) => browser.evaluate(([x, y]) => window.__dcStopInk(x, y, 583.2127), [a, b]);
+  await expect.poll(() => ink('2026-02-03', '2026-02-04')).toBeGreaterThan(0);
+  expect(await ink('2026-02-04', '2026-02-05')).toBe(0);
+  expect(await ink('2026-01-29', '2026-01-30')).toBe(0);
+  // Hovering the exit bar shows that trade's stop and says the close broke the stop, not the exit line.
+  const exitX = await browser.evaluate(() => window.__dcX('2026-02-04'));
+  const chartBox = await browser.evaluate(() => {
+    const r = document.querySelector('#chart').getBoundingClientRect();
+    return { x: r.left, y: r.top, h: r.height };
+  });
+  await browser.mouse.move(chartBox.x + exitX, chartBox.y + chartBox.h * 0.4);
+  await expect(browser.locator('#ohlc .dc-legend')).toContainText('止损583.21');
+  await expect(browser.locator('#ohlc .dc-legend')).toContainText('收盘跌破止损 583.21');
+  await screen.getByRole('button', '切换日间/夜间主题').hover();
   await screen.getByRole('button', '缠论').tap();
   await screen.getByRole('button', '隐藏').tap();
   await expect(browser.locator('#ruleSummary')).toContainText('结构层隐藏');
-  expect(await dcLines()).toBe(2);
+  expect(await dcLines()).toBe(3);
   await expect.poll(dcInk).toBeGreaterThan(0);
   await screen.getByRole('button', '显示').tap();
   await browser.keyboard.press('Escape');

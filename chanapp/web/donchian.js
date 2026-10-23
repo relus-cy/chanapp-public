@@ -24,15 +24,33 @@
     return out;
   }
 
-  // 规则状态为持有时，止损线从入场根画到最后一根（止损入场后固定）；空仓不画
-  function stopData(rows, state, toTime) {
-    if (!state || !state.holding || state.stop == null) return [];
-    var out = [], on = false;
-    (rows || []).forEach(function (r) {
-      if (r.time === state.entry_time) on = true;
-      if (on) out.push({ time: toTime(r.time), value: state.stop });
+  // 第 i 根所在的那笔规则进出（入场根到离场根，含两端；持有中的到末根），不在任何一笔里为 null。
+  // time 为同格式字符串，字典序即时间序
+  function tradeAt(trades, time) {
+    var hit = null;
+    (trades || []).forEach(function (t) {
+      if (t.entry_time <= time && (t.exit_time == null || time <= t.exit_time)) hit = t;
     });
-    return out;
+    return hit;
+  }
+
+  // 止损线逐笔画（每笔入场后固定），从入场根画到离场根，持有中的画到末根。图表库（lightweight-charts 5.0.9 实测）
+  // 每段线取起点的颜色，只有 time 的空白点也不会断线，所以离场根与笔外的点都给透明色来断开，前后两笔紧挨着时也分得开。
+  // 笔外的点取下一笔（之后没有就取上一笔）的止损作值，不把价格轴拉偏；一笔都没有时不出点
+  var GAP = 'transparent';
+  function stopData(rows, trades, toTime) {
+    if (!trades || !trades.length) return [];
+    var pts = (rows || []).map(function (r) {
+      var t = tradeAt(trades, r.time);
+      if (!t) return { time: toTime(r.time), value: null, color: GAP };
+      var p = { time: toTime(r.time), value: t.stop };
+      if (r.time === t.exit_time) p.color = GAP;
+      return p;
+    });
+    var fill = null, i;
+    for (i = pts.length - 1; i >= 0; i--) { if (pts[i].value == null) pts[i].value = fill; else fill = pts[i].value; }
+    for (i = 0; i < pts.length; i++) { if (pts[i].value == null) pts[i].value = fill; else fill = pts[i].value; }
+    return pts;
   }
 
   // 标记样式：假突破空心；盘中触价与形成中（盘中、未定稿）的信号淡色并加 ~；收盘确认的实心
@@ -63,31 +81,37 @@
       .map(function (x) { return x.s; });
   }
 
+  // {line} 是被越过的线：买入为入场线；卖出按 basis 为止损或离场线，没有 basis（旧数据）时统称离场价
   var KIND_TEXT = {
-    buy: { close: '收盘突破入场线', touch: '盘中触及入场线', false_break: '假突破：盘中越过入场线，收盘未站上' },
-    sell: { close: '收盘跌破离场价', touch: '盘中触及离场价', false_break: '假跌破：盘中跌破离场价，收盘收回' },
+    buy: { close: '收盘突破{line}', touch: '盘中触及{line}', false_break: '假突破：盘中越过{line}，收盘未站上' },
+    sell: { close: '收盘跌破{line}', touch: '盘中触及{line}', false_break: '假跌破：盘中跌破{line}，收盘收回' },
   };
+  var LINE_TEXT = { buy: '入场线', stop: '止损', exit: '离场线', sell: '离场价' };
 
-  function signalText(sig) {
-    var t = (KIND_TEXT[sig.side] || {})[sig.kind] || '';
+  // withLevel：线名后带上被越过的线位（图例用），「形成中」放在最后
+  function signalText(sig, withLevel) {
+    var line = LINE_TEXT[sig.side === 'buy' ? 'buy' : sig.basis] || LINE_TEXT.sell;
+    if (withLevel && sig.level != null) line += ' ' + fmt(sig.level);
+    var t = ((KIND_TEXT[sig.side] || {})[sig.kind] || '').replace('{line}', line);
     return sig.status === 'provisional' ? t + '（形成中）' : t;
   }
 
   function fmt(v) { return v == null ? '—' : (+v).toFixed(2); }
 
-  // 图例：第 i 根的入场线、离场线、N；规则状态持有且在入场之后显示止损；
-  // 该根有信号时追加信号说明（两种判定方式的都列，所选方式在前，文字相同的只列一次）。返回 [{label, value}]，由 app.js 拼 HTML。
+  // 图例：第 i 根的入场线、离场线、N；该根落在所选方式的某笔规则进出里（含已平仓的）时显示那笔的止损；
+  // 该根有信号时追加信号说明与被越过的线位（两种判定方式的都列，所选方式在前，文字相同的只列一次）。
+  // 返回 [{label, value}]，由 app.js 拼 HTML。
   // 规则状态、接下来判定的线位与建议仓位不在图例里，见 statusSummary（右栏状态卡）
   function legendParts(dc, i, mode) {
     if (!dc || !dc.rows || i == null || !dc.rows[i]) return [];
     var r = dc.rows[i];
-    var st = (((dc.modes || {})[mode] || {}).state) || {};
+    var trade = tradeAt(((dc.modes || {})[mode] || {}).trades, r.time);
     var parts = [{ label: '入', value: fmt(r.entry) }, { label: '出', value: fmt(r.exit) }, { label: 'N', value: fmt(r.n) }];
-    if (st.holding && st.entry_time && r.time >= st.entry_time) parts.push({ label: '止损', value: fmt(st.stop) });
+    if (trade) parts.push({ label: '止损', value: fmt(trade.stop) });
     var texts = {};
     [mode, mode === 'close' ? 'touch' : 'close'].forEach(function (k) {   // 所选方式的信号在前
       (((dc.modes || {})[k] || {}).signals || []).forEach(function (s) {
-        var t = signalText(s);
+        var t = signalText(s, true);
         if (s.time === r.time && !texts[t]) { texts[t] = true; parts.push({ label: '', value: t }); }
       });
     });
