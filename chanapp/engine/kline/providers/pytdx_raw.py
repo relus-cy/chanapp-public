@@ -38,16 +38,14 @@ _MINUTE_FREQS = ("m5", "m15")
 VOLUME_WRAP = 2 ** 32
 MORNING_CLOSE_ALIAS = {"13:00": "11:30"}
 
-# Top 8 种子池（2026-08-27 实测存活，按首笔延迟升序）
+# 种子池（2026-10-26 在两处不同网络同时实测仍能取 K 线的 4 站，按 TCP 延迟升序）。
+# 原 2026-08-27 的 8 站到 2026-10-24 全部改回桩应答（握手正常，K 线 body 只有 2 字节、无数据）；
+# pytdx 自带 hq_hosts 同样不可用，只作种子全灭时的兜底候选。
 SEED_HOSTS = [
-    ("202.108.253.139", 80),
-    ("117.34.114.13", 7709),
-    ("220.178.55.71", 7709),
-    ("117.34.114.15", 7709),
-    ("117.34.114.20", 7709),
-    ("117.34.114.27", 7709),
-    ("218.106.92.183", 7709),
-    ("180.153.18.170", 7709),
+    ("114.28.173.133", 7709),
+    ("shtdx.gtjas.com", 7709),
+    ("139.9.43.31", 7709),
+    ("sztdx.gtjas.com", 7709),
 ]
 CONNECT_TIMEOUT = 3          # 秒；握手/请求超此判失败
 HOST_MAX_FAILURES = 3        # 同站连败熔断阈值
@@ -66,6 +64,18 @@ def _latest_trading_day(now: datetime | None = None) -> str:
     while d.weekday() >= 5:
         d -= timedelta(days=1)
     return d.isoformat()
+
+
+def _describe(exc: BaseException) -> str:
+    """异常文本；pytdx 在 raise_exception=True 下把原因包成 TdxFunctionCallError("calling function error")，
+    真正原因在 original_exception，一并写出。"""
+    text = str(exc)
+    orig = getattr(exc, "original_exception", None)
+    if orig is not None:
+        kind = type(orig)
+        name = kind.__name__ if kind.__module__ == "builtins" else f"{kind.__module__}.{kind.__name__}"
+        text += f" <- {name}: {orig}"
+    return text
 
 
 def _market_num(code: str) -> tuple[int, str]:
@@ -219,7 +229,7 @@ class _HostPool:
     def query(self, kind, category, market, num, offset, count) -> list[dict]:
         """单页取数。首页：异常或空数据 → 记站失败、切下一站重试，最多 3 站；翻页见 _continue。"""
         key = (kind, category, market, num)
-        last_err = None
+        last_err, empty = None, False
         with self._lock:
             if offset > 0:
                 return self._continue(key, offset, count)
@@ -234,13 +244,13 @@ class _HostPool:
                     self._pages[key] = self._conn_seq
                     return [dict(r) for r in page]
                 except Exception as e:  # noqa: BLE001
-                    last_err = e
-                    log.warning("pytdx %s cat=%s @%s 失败: %s，切站重试", num, category, self._host, e)
+                    last_err, empty = _describe(e), isinstance(e, _EmptyPage)
+                    log.warning("pytdx %s cat=%s @%s 失败: %s，切站重试", num, category, self._host, last_err)
                     if self._host is not None:
                         self._host_state(self._host).record_failure()
                     self._disconnect()
         message = f"pytdx {num} cat={category} 多站重试失败: {last_err}"
-        if isinstance(last_err, _EmptyPage):
+        if empty:
             raise ProviderError(message)            # 各站都连上了、只是没有数据：标的级
         raise ProviderConnectionError(message)
 
@@ -260,10 +270,11 @@ class _HostPool:
         try:
             page = self._bars(key, offset, count)
         except Exception as e:  # noqa: BLE001
-            log.warning("pytdx %s cat=%s @%s 翻页失败: %s，断开连接、整批放弃", num, category, self._host, e)
+            reason = _describe(e)
+            log.warning("pytdx %s cat=%s @%s 翻页失败: %s，断开连接、整批放弃", num, category, self._host, reason)
             self._host_state(self._host).record_failure()
             self._disconnect()
-            raise ProviderConnectionError(f"pytdx {num} cat={category} 翻页失败: {e}") from None
+            raise ProviderConnectionError(f"pytdx {num} cat={category} 翻页失败: {reason}") from None
         self._requests += 1
         return [dict(r) for r in page]
 

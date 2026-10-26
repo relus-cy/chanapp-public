@@ -215,6 +215,32 @@ class PytdxRawTests(unittest.TestCase):
             pool.query("index", 9, 1, "000001", 0, 10)
         self.assertNotIsInstance(cm.exception, raw.ProviderConnectionError)
 
+    def test_host_pool_reports_wrapped_original_exception(self):
+        # 2026-10-24 保活：主站回桩应答（K 线 body 只有 2 字节），pytdx 解析越界后包成
+        # TdxFunctionCallError("calling function error")，原因只在 original_exception 里，旧日志看不到
+        import struct
+        pool = pytdx_raw._HostPool()
+
+        class TdxFunctionCallError(Exception):
+            pass
+
+        class Api:
+            def get_security_bars(self, *args):
+                err = TdxFunctionCallError("calling function error")
+                try:
+                    struct.unpack("<HH", b"")
+                except struct.error as e:
+                    err.original_exception = e
+                raise err
+        pool._ensure_conn = lambda: setattr(pool, "_api", Api())
+        with self.assertLogs(pytdx_raw.log, "WARNING") as logs, \
+                self.assertRaises(raw.ProviderConnectionError) as cm:
+            pool.query("stock", 1, 1, "600036", 0, 800)
+        cause = "calling function error <- struct.error: unpack requires a buffer of 4 bytes"
+        self.assertIn(cause, str(cm.exception))
+        self.assertEqual(len(logs.output), pytdx_raw.FAILOVER_ATTEMPTS)
+        self.assertTrue(all(cause in line for line in logs.output), logs.output)
+
     def test_late_page_is_never_read_as_another_codes_page(self):
         # 回放 09-26 串包链：翻页超时时 pytdx 默认返回 None、迟到的响应留在连接上；
         # 旧实现把 None 当作见底（截断 A）并沿用连接，下一只 B 读走 A 的迟到页。
