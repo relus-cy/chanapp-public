@@ -354,11 +354,8 @@ class HKNewListingAcceptance(_Flow):
         self.assertEqual(body["meta"]["adjust"], "qfq")
 
 
-class UntrackedTodayPreopenAcceptance(_Flow):
-    """2026-10-23 生产实测（科创板 sh688836，不在自选，盘中首开）后补的回归：前复权要等当日参考前收确认才出今天，
-    修前请求路径（首开、补窗口、追赶、手动重拉）都不取参考前收，只有调度线程的盘中轮次会取，首开与重拉后
-    今天缺根，午休首开要等到 13:00，收盘后首开要等到 20:00 定稿。现在由请求路径补取：每代码一次请求，
-    与调度线程共用 60 秒重试节流；手动重拉是显式请求，不受节流。"""
+class _TradingDayFlow(_Flow):
+    """周一 2026-09-28 为已知开市日的搭建：盘前参考前收可取（self.pc 为 None 时上游还没给出当日报价）。"""
     DAY = "2026-09-28"
     LATE = "sz000005"                                  # 收盘后才首开的另一只非自选个股
 
@@ -385,6 +382,13 @@ class UntrackedTodayPreopenAcceptance(_Flow):
     def assert_today(self, body):
         self.assertEqual(body["kline"][-1]["time"][:10], self.DAY, body["meta"]["notices"])
         self.assertNotIn("today_unconfirmed", [n["code"] for n in body["meta"]["notices"]])
+
+
+class UntrackedTodayPreopenAcceptance(_TradingDayFlow):
+    """2026-10-23 生产实测（科创板 sh688836，不在自选，盘中首开）后补的回归：前复权要等当日参考前收确认才出今天，
+    修前请求路径（首开、补窗口、追赶、手动重拉）都不取参考前收，只有调度线程的盘中轮次会取，首开与重拉后
+    今天缺根，午休首开要等到 13:00，收盘后首开要等到 20:00 定稿。现在由请求路径补取：每代码一次请求，
+    与调度线程共用 60 秒重试节流；手动重拉是显式请求，不受节流。"""
 
     def test_first_open_in_session_shows_today_with_one_request(self):
         self.assert_today(self.open_at(11, 18))
@@ -418,6 +422,49 @@ class UntrackedTodayPreopenAcceptance(_Flow):
         self.open_at(9, 0)
         self.open_at(11, 18, code=IDX)
         self.assertEqual(self.preopen_calls, [])
+
+
+class UntrackedFirstOpenLiveAcceptance(_TradingDayFlow):
+    """2026-10-26 生产实测（sh603667，不在自选，10:02:57 盘中首开）后补的回归：修前首开只写今天已收盘的槽，
+    形成中的槽只有调度线程的盘中增量会取，首个响应停在上一槽收盘（实测约 50 秒后才更新，xx:14 首开最坏落后约
+    14 分钟）；离开超过查看租期后再开，期间收盘的槽也补不回（今天已收盘槽每代码每天只补一次，盘中增量只回最近
+    两槽），要等定稿。现在调度线程没在取的代码（不在自选、查看租期已过）在本市场盘中被打开时，请求路径补一次
+    今天已收盘槽（已覆盖零请求）再取一次盘中增量，每代码按盘中间隔节流。"""
+
+    def setUp(self):
+        super().setUp()
+        self.live_calls = []
+
+        def minute_live(code, fact_freq, *, now):           # 形成中的槽：价格 11，与已收盘槽的 10 区分
+            self.live_calls.append((code, now.strftime("%H:%M")))
+            end = now.replace(second=0) + timedelta(minutes=15 - now.minute % 15)
+            day = now.date().isoformat()
+            return [RawMinuteRow(code, day, f"{day} {end:%H:%M}", 11, 11, 11, 11, 1, "lot", 1, "forming", "traded",
+                                 new_batch_id())]
+        self.provider.minute_live = minute_live
+
+    def quote(self, body, code=X):
+        q = body["quotes"][code]
+        return q["price"], q["price_time"]
+
+    def test_first_open_in_session_serves_the_forming_slot(self):
+        body = self.open_at(10, 14, freq="m30")
+        self.assertEqual(self.quote(body), (11, f"{self.DAY} 10:15"))
+        self.assertEqual(self.live_calls, [(X, "10:14")])
+        self.chart(X, "day")                                # 已在查看租期：交给调度线程，请求路径零请求
+        self.assertEqual(len(self.live_calls), 1)
+
+    def test_reopen_after_lease_backfills_slots_closed_while_away(self):
+        self.open_at(10, 3, freq="m30")
+        body = self.open_at(14, 0, freq="m30")              # 期间没有调度轮次，查看租期早已过期
+        today = [b["time"][11:] for b in body["kline"] if b["time"].startswith(self.DAY)]
+        self.assertEqual(today, ["10:00", "10:30", "11:00", "11:30", "13:30", "14:00", "14:30"])
+        self.assertEqual(self.quote(body), (11, f"{self.DAY} 14:15"))
+
+    def test_no_live_request_outside_session_or_for_watchlist(self):
+        self.open_at(12, 10, freq="m30")                    # 午休
+        self.open_at(10, 14, code=A, freq="m30")            # 自选由调度线程每轮取
+        self.assertEqual(self.live_calls, [])
 
 
 if __name__ == "__main__":

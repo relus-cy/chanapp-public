@@ -205,10 +205,17 @@ class ViewingTrackingEndToEnd(unittest.TestCase):
         # 8. 离开页面：查看期内盘中取数，窗口期后停止；自选照常
         self.clock.t = at("2026-09-28", 10).timestamp()
         self.chart(X, "day")
-        self.assertEqual(self.calls(X, "live"), [])      # 读取本身不取盘中增量：页面与调度线程不各取一次（回归守护）
+        # 租期已过的代码盘中被打开：请求路径取一次盘中增量（2026-10-26 起首个响应即含形成中的槽）；租期内再读与
+        # 同一间隔内的调度轮次都不再取：页面与调度线程不各取一次（回归守护）
+        self.assertEqual(len(self.calls(X, "live")), 1)
+        self.chart(X, "m30")
         self.worker.tick(at("2026-09-28", 10))
+        self.assertEqual(len(self.calls(X, "live")), 1)
+        mid = at("2026-09-28", 10) + timedelta(seconds=config.INTRADAY_INTERVAL_S + 5)
+        self.clock.t = mid.timestamp()
+        self.worker.tick(mid)                            # 过了一个间隔、仍在租期：调度线程接手
         seen = len(self.calls(X, "live"))
-        self.assertGreater(seen, 0)
+        self.assertGreater(seen, 1)
         later = at("2026-09-28", 10) + timedelta(seconds=config.VIEWING_WINDOW_S + 10)
         self.clock.t = later.timestamp()
         self.worker.tick(later)

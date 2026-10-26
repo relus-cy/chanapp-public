@@ -10,6 +10,8 @@
   最新时不追赶；追赶后仍不可服务照常抛 DataUnavailable。
   视图提示今日除权待确认（A 股个股当日参考前收未入库，前复权不出今天）时经采集器补取一次参考前收再重读，
   每代码 60 秒内至多一次请求，失败照常返回现有视图。
+  调度线程没在取的代码（不在自选、查看租期已过）在本市场盘中被打开时，先补今天已收盘槽、再取一次盘中增量后重读，
+  首个响应即含形成中的槽；之后由调度线程接手。
 - get_bars_bundle(code, freqs, *, adjust, primary=None, quote_codes=())：一次读事务服务多周期（主图、共振与
   AI 共用），补取规则同上；给 primary（主图周期）时只有它的首取失败上抛，辅助周期首取失败只记日志；
   {freq: 返回体或 None}：视图存在而无 bar 时仍给返回体（空 bars、当前令牌），标的没有任何事实时为 None；
@@ -184,6 +186,18 @@ def _confirm_preopen(code: str, views_) -> bool:
         return False
 
 
+def _catch_up_live(code: str) -> bool:
+    """调度线程没在取的代码盘中被打开时补今天已收盘槽与形成中的槽（get_bars 与 get_bars_bundle 共用，须在
+    touch_viewing 之前）：返回是否需要重读视图。条件与节流见 Collector.catch_up_live；失败只记日志。"""
+    if not collector.is_enabled():
+        return False
+    try:
+        return _collector().catch_up_live(code)
+    except Exception:
+        log.warning("盘中跟进失败 code=%s", code, exc_info=True)
+        return False
+
+
 def _catch_up(code: str, t0: float) -> bool:
     """有事实的视图落后于目标日或还不可服务时限时追赶（get_bars 与 get_bars_bundle 共用）：返回是否需要重读视图。
 
@@ -216,7 +230,8 @@ def get_bars(code: str, freq: str = "day", *, adjust: str = "qfq") -> dict:
     if missing or short:
         _ensure(code, [freq], required=bool(missing))
         view = views.read_view(_reader(), code, freq, adjust=adjust)
-    if _confirm_preopen(code, [view]):
+    fresh = _confirm_preopen(code, [view])
+    if _catch_up_live(code) or fresh:
         view = views.read_view(_reader(), code, freq, adjust=adjust)
     # 有事实但还不可服务（例如港股当天才有 raw、前复权缓存的当天归定稿）也进入同一台账约束的追赶，再读一次
     if view is not None and _catch_up(code, t0):
@@ -275,7 +290,8 @@ def get_bars_bundle(code: str, freqs, *, adjust: str = "qfq", primary: str | Non
         _ensure(code, [f for f in missing if f not in required], required=False)
         _ensure(code, short, required=False)
         bundle, qt = _read_bundle(code, freqs, adjust, quote_codes)
-    if _confirm_preopen(code, bundle.values()):
+    fresh = _confirm_preopen(code, bundle.values())
+    if _catch_up_live(code) or fresh:
         bundle, qt = _read_bundle(code, freqs, adjust, quote_codes)
     if any(v is not None for v in bundle.values()) and _catch_up(code, t0):     # 有事实即可，同 get_bars
         bundle, qt = _read_bundle(code, freqs, adjust, quote_codes)

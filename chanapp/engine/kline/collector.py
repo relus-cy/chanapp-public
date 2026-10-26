@@ -376,6 +376,7 @@ class Collector:
         self._catchups: dict = {}          # 请求路径追赶：code → 完成事件（在途判定）
         self._refetching: set = set()      # 手动重拉在途的代码：请求路径追赶让路（重拉已覆盖窗口与当天）
         self._catchup_at: dict = {}        # 请求路径追赶：code → 最近一次启动的时钟读数
+        self._live_requested: dict = {}    # 请求路径盘中跟进（catch_up_live）：code → 最近一次的时钟读数
         self._catchup_guard = threading.Lock()
         self.source_breaker = Breaker(config.BREAKER_MAX_FAILURES, config.BREAKER_COOLDOWN_S, self.clock)
         self.code_backoff = Breaker(config.CODE_BACKOFF_AFTER, config.CODE_BACKOFF_S, self.clock)
@@ -2035,14 +2036,41 @@ class Collector:
     def intraday_tick(self, codes, now, *, active=None) -> int:
         """盘中增量：逐代码取一次。active 给定时每个请求前复核（调度线程按当前时钟复核查看租期与自选，
         不按轮首快照）。取增量前先补今天已收盘槽（_prefill_today，每代码每日至多一次）：盘中新进入
-        跟踪或查看租期的代码，minute_live 的最近两槽覆盖不到进入之前已收盘的部分。"""
+        跟踪或查看租期的代码，minute_live 的最近两槽覆盖不到进入之前已收盘的部分。请求路径一个间隔内刚取过的
+        代码本轮跳过（_live_just_requested）。"""
         written = 0
         for code in codes:
-            if active is not None and not active(code):
+            if (active is not None and not active(code)) or self._live_just_requested(code):
                 continue
             self._prefill_today(code, now)
             written += self._written(self._intraday_one(code, now)[0])
         return written
+
+    def catch_up_live(self, code) -> bool:
+        """请求路径的盘中跟进：调度线程没在取的代码（不在自选、查看租期已过或从未查看）在本市场盘中被打开时，
+        补一次今天已收盘槽（已覆盖零请求）再取一次盘中增量，返回是否有新提交（调用方据此重读视图）。
+
+        修前首开只写已收盘槽，首个响应停在上一槽收盘，要等下一轮调度；离开超过租期再开，期间收盘的槽也补不回
+        （_prefill_today 每代码每日一次，盘中增量只回最近两槽）。调用方在 touch_viewing 之前调用，之后由调度
+        线程接手；同一代码按盘中间隔节流（主图与共振的并发请求只取一次）。"""
+        if not is_enabled() or not self._fact_freq(code) or self._still_active(code):
+            return False
+        now = self.now()
+        if not self._market_in_session(market_of(code), now):
+            return False
+        with self._catchup_guard:
+            if self._live_just_requested(code):
+                return False
+            self._live_requested[code] = self.clock()
+        closed = self._fetch_today_closed(code, now) == "ok"
+        live = self._written(self._intraday_one(code, now)[0])
+        return closed or live
+
+    def _live_just_requested(self, code) -> bool:
+        """请求路径（catch_up_live）在一个盘中间隔内刚取过：它自己节流，调度线程本轮也跳过，页面与调度线程不各取一次。"""
+        last = self._live_requested.get(code)
+        interval = config.INTRADAY_INTERVAL_HK_S if market_of(code) == "HK" else config.INTRADAY_INTERVAL_S
+        return last is not None and self.clock() - last < interval
 
     def _intraday_one(self, code, now) -> tuple:
         """一个代码取一次盘中增量并提交：返回 (提交结果, 本次返回的行)；没取到、空返回或没提交时结果为 None
@@ -2885,10 +2913,13 @@ class Collector:
 
     def _in_session(self, now) -> bool:
         """任一市场处于盘中取数窗口（含收盘后 1 分钟与港股竞价后 10 分钟）。"""
+        return any(self._market_in_session(m, now) for m in ("CN", "HK"))
+
+    def _market_in_session(self, market, now) -> bool:
         hms = now.strftime("%H:%M:%S")
         windows = {"CN": (("09:30:00", "11:31:00"), ("13:00:00", "15:01:00")),
-                   "HK": (("09:30:00", "12:01:00"), ("13:00:00", "16:11:00"))}
-        return any(self._trading(m, now) and any(a <= hms <= b for a, b in w) for m, w in windows.items())
+                   "HK": (("09:30:00", "12:01:00"), ("13:00:00", "16:11:00"))}[market]
+        return self._trading(market, now) and any(a <= hms <= b for a, b in windows)
 
     # ---- 请求路径限时追赶（计划 2026-09-29 D4）----
     def _finalize_open(self, market, now) -> tuple:
