@@ -12,6 +12,8 @@
   每代码 60 秒内至多一次请求，失败照常返回现有视图。
   调度线程没在取的代码（不在自选、查看租期已过）在本市场盘中被打开时，先补今天已收盘槽、再取一次盘中增量后重读，
   首个响应即含形成中的槽；之后由调度线程接手。
+- fetch_trace()：上下文管理器，收集其中 get_bars / get_bars_bundle 在请求路径实际运行的取数步骤及结果
+  （"first(day):ok"、"preopen:pending" 等，词表见 _note），供 API 的 [timing] 日志行使用；不进返回体。
 - get_bars_bundle(code, freqs, *, adjust, primary=None, quote_codes=())：一次读事务服务多周期（主图、共振与
   AI 共用），补取规则同上；给 primary（主图周期）时只有它的首取失败上抛，辅助周期首取失败只记日志；
   {freq: 返回体或 None}：视图存在而无 bar 时仍给返回体（空 bars、当前令牌），标的没有任何事实时为 None；
@@ -32,6 +34,7 @@
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import time
@@ -54,6 +57,7 @@ _local = threading.local()
 _clock = time.monotonic
 _window_attempts: dict = {}   # (code, freq) → (最近补窗口时刻, 周期偏好版本)
 _window_lock = threading.Lock()
+_trace: contextvars.ContextVar = contextvars.ContextVar("chanapp_fetch_trace", default=None)
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +95,28 @@ def _reader():
     if conn is None:
         conn = conns[key] = facts.open_readonly(path) if is_demo() else facts.open_facts(path)
     return conn
+
+
+@contextmanager
+def fetch_trace():
+    """yield 一个 list：其中的读取在请求路径实际运行的取数步骤，按运行顺序，元素 "步骤:结果"。"""
+    steps: list = []
+    token = _trace.set(steps)
+    try:
+        yield steps
+    finally:
+        _trace.reset(token)
+
+
+def _note(step: str, result: str) -> None:
+    """记一个请求路径步骤（没有 fetch_trace 时不记）。词表：
+    first(周期) / window(周期)：首取 / 短窗口补取，ok | empty | busy | failed；
+    preopen：当日参考前收，confirmed | pending（仍未确认，含节流跳过）| skip（今天不需要）| failed；
+    live：盘中跟进，committed | none（取了没有新提交）| failed，条件不满足时不记；
+    catchup：限时追赶，started | failed，没启动时不记；refetching：重拉在途，只读现有快照。"""
+    steps = _trace.get()
+    if steps is not None:
+        steps.append(f"{step}:{result}")
 
 
 def _collector(watchlist_fn=None) -> collector.Collector:
@@ -156,21 +182,25 @@ def _to_fetch(code: str, views_by_freq: dict) -> tuple:
     return missing, short
 
 
-def _ensure(code: str, freqs, *, required: bool) -> None:
+def _ensure(code: str, freqs, *, required: bool, step: str = "first") -> None:
     """required 时失败上抛（API 转 502；等锁超过期限转 RefetchBusy，API 回 503）；否则只记日志（短视图补窗口、
-    主图请求里辅助周期的首取）。"""
+    主图请求里辅助周期的首取）。step 是 fetch_trace 里的步骤名：first（首取）或 window（短窗口补取）。"""
     for freq in freqs:
         try:
-            _collector().ensure_window(code, freq, wait=config.REQUEST_LOCK_WAIT_S)
+            got = _collector().ensure_window(code, freq, wait=config.REQUEST_LOCK_WAIT_S)
         except collector.FlightBusy as exc:        # 同一代码有长任务持锁：不等它，读现有快照
+            _note(f"{step}({freq})", "busy")
             if required:
                 raise RefetchBusy(f"{code} 正在更新") from exc
             log.info("补取让路 code=%s freq=%s：同一代码的取数在途", code, freq)
             return
         except Exception:
+            _note(f"{step}({freq})", "failed")
             if required:
                 raise
             log.warning("补取失败 code=%s freq=%s", code, freq, exc_info=True)
+        else:
+            _note(f"{step}({freq})", "ok" if got else "empty")
 
 
 def _confirm_preopen(code: str, views_) -> bool:
@@ -180,10 +210,13 @@ def _confirm_preopen(code: str, views_) -> bool:
     if not any(v is not None and any(n["code"] == "today_unconfirmed" for n in v.notices) for v in views_):
         return False
     try:
-        return bool(_collector().confirm_preopen(code))
+        confirmed = _collector().confirm_preopen(code)
     except Exception:
+        _note("preopen", "failed")
         log.warning("参考前收补取失败 code=%s", code, exc_info=True)
         return False
+    _note("preopen", "skip" if confirmed is None else "confirmed" if confirmed else "pending")
+    return bool(confirmed)
 
 
 def _catch_up_live(code: str) -> bool:
@@ -192,10 +225,14 @@ def _catch_up_live(code: str) -> bool:
     if not collector.is_enabled():
         return False
     try:
-        return _collector().catch_up_live(code)
+        committed = _collector().catch_up_live(code)
     except Exception:
+        _note("live", "failed")
         log.warning("盘中跟进失败 code=%s", code, exc_info=True)
         return False
+    if committed is not None:
+        _note("live", "committed" if committed else "none")
+    return bool(committed)
 
 
 def _catch_up(code: str, t0: float) -> bool:
@@ -206,10 +243,14 @@ def _catch_up(code: str, t0: float) -> bool:
     if not collector.is_enabled():
         return False
     try:
-        return _collector().catch_up_bounded(code, config.CATCHUP_WAIT_S - (time.monotonic() - t0))
+        started = _collector().catch_up_bounded(code, config.CATCHUP_WAIT_S - (time.monotonic() - t0))
     except Exception:
+        _note("catchup", "failed")
         log.warning("追赶失败 code=%s", code, exc_info=True)
         return False
+    if started:
+        _note("catchup", "started")
+    return started
 
 
 def get_bars(code: str, freq: str = "day", *, adjust: str = "qfq") -> dict:
@@ -221,6 +262,7 @@ def get_bars(code: str, freq: str = "day", *, adjust: str = "qfq") -> dict:
             raise DataUnavailable(f"{code} {freq} 样本暂无数据")
         return _payload(view, from_cache=True)
     if refetching(code):
+        _note("refetching", "read_only")
         _collector().touch_viewing(code)
         if not _servable(view):
             raise RefetchBusy(f"{code} 正在重拉")
@@ -228,7 +270,7 @@ def get_bars(code: str, freq: str = "day", *, adjust: str = "qfq") -> dict:
     missing, short = _to_fetch(code, {freq: view})
     from_cache = not missing
     if missing or short:
-        _ensure(code, [freq], required=bool(missing))
+        _ensure(code, [freq], required=bool(missing), step="first" if missing else "window")
         view = views.read_view(_reader(), code, freq, adjust=adjust)
     fresh = _confirm_preopen(code, [view])
     if _catch_up_live(code) or fresh:
@@ -274,6 +316,7 @@ def get_bars_bundle(code: str, freqs, *, adjust: str = "qfq", primary: str | Non
             out["quotes"] = quotes(quote_codes)
         return out
     if refetching(code):
+        _note("refetching", "read_only")
         _collector().touch_viewing(code)
         needed = [bundle.get(primary)] if primary else list(bundle.values())
         if not all(_servable(v) for v in needed):
@@ -288,7 +331,7 @@ def get_bars_bundle(code: str, freqs, *, adjust: str = "qfq", primary: str | Non
         required = [f for f in missing if primary is None or f == primary]
         _ensure(code, required, required=True)
         _ensure(code, [f for f in missing if f not in required], required=False)
-        _ensure(code, short, required=False)
+        _ensure(code, short, required=False, step="window")
         bundle, qt = _read_bundle(code, freqs, adjust, quote_codes)
     fresh = _confirm_preopen(code, bundle.values())
     if _catch_up_live(code) or fresh:

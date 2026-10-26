@@ -70,7 +70,7 @@ import sys
 import threading
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -212,6 +212,32 @@ def _chart_etag(payload) -> str:
     return 'W/"' + hashlib.sha256(canon.encode("utf-8")).hexdigest()[:32] + '"'
 
 
+def _age_s(at) -> str:
+    try:
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(at).astimezone()
+    except (TypeError, ValueError):
+        return "-"
+    return f"{max(0, int(age.total_seconds()))}s"
+
+
+def _served_state(dataset: dict, steps: list, refetch: str | None) -> str:
+    """[timing] chart 行的数据状态段：本次实际服务的主图数据（是否首取、末根时间与是否形成中、最近一次提交距今、
+    状态栏阶段、提示码）和请求路径实际运行的取数步骤（词表见 engine.data._note）。每个值都不含空格，按 key=value 检索；
+    只有时间、状态与代码，不含价格。"""
+    bars = dataset.get("bars") or []
+    last = bars[-1] if bars else None
+    phase = ((dataset.get("coverage") or {}).get("data_status") or {}).get("phase") or "-"
+    notices = ",".join(dict.fromkeys(n["code"] for n in dataset.get("notices") or [] if n.get("code"))) or "-"
+    fields = [f"cache={'hit' if dataset.get('from_cache') else 'first'}",
+              f"last={last['dt'].replace(' ', 'T') if last else '-'}",
+              f"forming={int(bool(last.get('forming'))) if last else '-'}",
+              f"fetch_age={_age_s(dataset.get('fetch_time'))}", f"phase={phase}", f"notices={notices}",
+              f"steps={','.join(steps) or '-'}"]
+    if refetch:
+        fields.append(f"refetch={refetch}")
+    return " ".join(fields)
+
+
 @app.get("/api/chart")
 def api_chart(request: Request,
               code: str = Query(..., min_length=2),
@@ -244,8 +270,9 @@ def api_chart(request: Request,
     try:
         # 主图与共振、AI 令牌一次读取（spec §6.3）：不再先单读主图、后读共振；当前代码与自选的报价同一次读事务内嵌
         quote_items = _quote_items(code)
-        dataset, bundle, raw_quotes = engine_chart_payload.read_chart_inputs(
-            code, freq, adjust, [it["code"] for it in quote_items])
+        with engine_data.fetch_trace() as steps:      # 请求路径实际运行的取数步骤，只进下面的 [timing] 行
+            dataset, bundle, raw_quotes = engine_chart_payload.read_chart_inputs(
+                code, freq, adjust, [it["code"] for it in quote_items])
     except Exception as e:  # 数据层错误统一成 502；同一代码重拉在途且没有可服务快照时 503（不等重拉的锁）
         if isinstance(e, engine_data.RefetchBusy):
             raise HTTPException(status_code=503, detail="正在更新这只标的，请稍后再试", headers=extra or None) from e
@@ -268,9 +295,10 @@ def api_chart(request: Request,
     body = None if hit else json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
                                        allow_nan=False)
     t_end = time.monotonic()
-    log.info("[timing] chart code=%s freq=%s bars=%dms compute=%dms resonance=%dms total=%dms etag=%s",
+    log.info("[timing] chart code=%s freq=%s bars=%dms compute=%dms resonance=%dms total=%dms etag=%s %s",
              code, freq, int((t_bars - t0) * 1000), timings["compute_ms"],
-             timings["resonance_ms"], int((t_end - t0) * 1000), "304" if hit else "200")
+             timings["resonance_ms"], int((t_end - t0) * 1000), "304" if hit else "200",
+             _served_state(dataset, steps, extra.get("X-Refetch-Status")))
     if hit:
         return Response(status_code=304, headers=headers)
     return Response(content=body, media_type="application/json", headers=headers)

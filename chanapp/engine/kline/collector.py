@@ -1983,7 +1983,7 @@ class Collector:
         """请求路径补确认当日参考前收：前复权等它确认才出今天，调度线程只在盘前与盘中窗口给活跃代码取，
         非自选首开、午休与收盘后到定稿前的查看要由这里补。返回 None 表示今天不需要（没有 F4 绑定、非交易日或
         未到 _PREOPEN_FROM），否则返回此刻是否已确认。已确认零请求；与调度线程共用每代码 60 秒的重试节流，
-        force（手动重拉）不受节流。"""
+        force（手动重拉）不受节流。本次调用请求后取得确认时记一条 INFO（前复权从这一刻起出今天）。"""
         if not is_enabled() or not self._has_preopen_binding(code):
             return None
         now = self.now()
@@ -1996,9 +1996,13 @@ class Collector:
         if force:
             state.setdefault("preopen_tried", {})[code] = now
             self.preopen([code], now)
+            requested = True
         else:
-            self._preopen_round(state, [code], now)
-        return self.preopen_confirmed(code, today)
+            requested = bool(self._preopen_round(state, [code], now))
+        confirmed = self.preopen_confirmed(code, today)
+        if confirmed and requested:
+            log.info("请求路径确认参考前收 code=%s day=%s via=%s", code, today, "refetch" if force else "open")
+        return confirmed
 
     def _preopen_due(self, state, codes, now) -> list:
         """未确认、且距上次尝试满 60 秒的 F4 标的（每代码节流，PREOPEN、INTRADAY 与请求路径 confirm_preopen 共用）。"""
@@ -2046,25 +2050,30 @@ class Collector:
             written += self._written(self._intraday_one(code, now)[0])
         return written
 
-    def catch_up_live(self, code) -> bool:
+    def catch_up_live(self, code) -> bool | None:
         """请求路径的盘中跟进：调度线程没在取的代码（不在自选、查看租期已过或从未查看）在本市场盘中被打开时，
-        补一次今天已收盘槽（已覆盖零请求）再取一次盘中增量，返回是否有新提交（调用方据此重读视图）。
+        补一次今天已收盘槽（已覆盖零请求）再取一次盘中增量，返回是否有新提交（调用方据此重读视图）；条件不满足
+        或节流跳过、没有取数时返回 None。有新提交时记一条 INFO（今天的槽从这一刻起可读）。
 
         修前首开只写已收盘槽，首个响应停在上一槽收盘，要等下一轮调度；离开超过租期再开，期间收盘的槽也补不回
         （_prefill_today 每代码每日一次，盘中增量只回最近两槽）。调用方在 touch_viewing 之前调用，之后由调度
         线程接手；同一代码按盘中间隔节流（主图与共振的并发请求只取一次）。"""
         if not is_enabled() or not self._fact_freq(code) or self._still_active(code):
-            return False
+            return None
         now = self.now()
         if not self._market_in_session(market_of(code), now):
-            return False
+            return None
         with self._catchup_guard:
             if self._live_just_requested(code):
-                return False
+                return None
             self._live_requested[code] = self.clock()
-        closed = self._fetch_today_closed(code, now) == "ok"
-        live = self._written(self._intraday_one(code, now)[0])
-        return closed or live
+        closed = self._fetch_today_closed(code, now)
+        res, rows = self._intraday_one(code, now)
+        live = self._written(res)
+        if closed == "ok" or live:
+            log.info("请求路径盘中跟进 code=%s closed=%s live_slot=%s", code, closed or "-",
+                     max(r.slot_end for r in rows).replace(" ", "T") if live else "-")
+        return closed == "ok" or live
 
     def _live_just_requested(self, code) -> bool:
         """请求路径（catch_up_live）在一个盘中间隔内刚取过：它自己节流，调度线程本轮也跳过，页面与调度线程不各取一次。"""

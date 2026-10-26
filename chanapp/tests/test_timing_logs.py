@@ -48,6 +48,9 @@ class TestChartTimingLog(unittest.TestCase):
         self.assertIsNotNone(line)
         for field in ("bars=", "compute=", "resonance=", "total="):
             self.assertIn(field, line)
+        # 替身数据集：缓存命中、末根是 fixture 最后一根，没有提示码、状态栏与请求路径步骤
+        self.assertIn(f"etag=200 cache=hit last={load_bars()[-1]['dt'].replace(' ', 'T')} forming=0 fetch_age=", line)
+        self.assertTrue(line.endswith(" phase=- notices=- steps=-"), line)
 
 
 class TestBarsTimingLog(unittest.TestCase):

@@ -15,7 +15,13 @@ CHANAPP_INSTANCE_CONFIG=/path/to/instance.json .venv/bin/python -m uvicorn chana
 - **单 worker**：不要加 `--workers`，也不要让两个进程共用同一缓存根。事实库靠进程内锁加 `facts.writer.lock` 文件锁保证单写者，文件锁以非阻塞方式获取，多个进程会互相抢锁，拿不到的一方提交直接失败。
 - **只监听回环地址**：应用本身没有登录与访问控制。需要从别的机器访问时，在前面放一个带认证与 TLS 的反向代理，或用 SSH 隧道。
 - 启动时先校验实例配置、初始化实例目录，失败则进程退出（`Application startup failed`），不会带着错误配置运行。
-- 日志写到标准输出与标准错误。`chanapp` 日志器为 INFO 级，`[timing]` 行记录每次图表请求的耗时。
+- 日志写到标准输出与标准错误。`chanapp` 日志器为 INFO 级。每次图表请求记一行 `[timing] chart`，字段都是 `key=value`、值里没有空格，行里只有代码、时间与状态，不含价格与凭据：
+  - 耗时：`bars`、`compute`、`resonance`、`total`，以及 `etag`（`200` 或 `304`）；
+  - 本次实际服务的主图数据：`cache`（`hit` 读已有事实，`first` 本次首取）、`last`（末根 K 线时间，空格换成 `T`）、`forming`（末根是否还没走完，`1`/`0`）、`fetch_age`（该数据集最近一次成功提交距今的秒数，从未提交为 `-`）、`phase`（`coverage.data_status.phase`）、`notices`（提示码，逗号分隔，没有为 `-`）；
+  - `steps`：这次请求在请求路径实际运行的取数步骤及结果，按运行顺序、逗号分隔，没有取数为 `-`。`first(周期)` 首取、`window(周期)` 短窗口补取（`ok`、`empty`、`busy`、`failed`）；`preopen` 当日参考前收（`confirmed`、`pending`、`skip`、`failed`）；`live` 盘中跟进（`committed`、`none`、`failed`）；`catchup` 限时追赶（`started`、`failed`）；`refetching:read_only` 表示同一代码重拉在途、只读现有快照；
+  - 手动重拉时另有 `refetch`，值同响应头 `X-Refetch-Status`。
+
+  请求路径确认了当日参考前收、或盘中跟进有新提交时，采集器另记一行 INFO（`请求路径确认参考前收 code=… day=… via=open|refetch`、`请求路径盘中跟进 code=… closed=… live_slot=…`），这一行的时间就是今天的数据开始可读的时刻。
 
 用服务管理器（如 systemd）长期运行时，单元需要做到：
 

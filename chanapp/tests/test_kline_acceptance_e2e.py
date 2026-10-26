@@ -14,6 +14,8 @@
 4. 指数（非系统依赖的深证成指）搜索查看：只取窗口，不规划完整历史；
 5. 前复权链不足：窗口里有缺失交易日时前复权图明确提示「前复权自 … 起可用」，不静默全拉。
 5b. 非自选个股盘中、午休或收盘后首开：请求路径补取当日参考前收，前复权当天就有今天（2026-10-23 生产缺根后补）。
+5c. 首开的 [timing] chart 日志行写明实际服务的数据状态与请求路径步骤，采集器记下今天何时可读（2026-10-26 两次
+    生产排查只能从耗时反推后补）。
 收盘：
 6. 盘中接纳后收盘、当天历史空返回：自选有界重试（20:00/22:00 两次，之后当天不再请求；2026-09-30 前为 17:30 起三次），状态保持
    「已收盘 · 待定稿」且时间不因失败推进；非自选在收盘后重新打开触发一次请求路径跟进，离开后不再有两小时一次的后台
@@ -354,6 +356,12 @@ class HKNewListingAcceptance(_Flow):
         self.assertEqual(body["meta"]["adjust"], "qfq")
 
 
+def _timing_fields(output) -> dict:
+    """最后一条 [timing] chart 日志行的 key=value 字段。"""
+    line = [m for m in output if "[timing] chart" in m][-1]
+    return dict(f.split("=", 1) for f in line.split() if "=" in f)
+
+
 class _TradingDayFlow(_Flow):
     """周一 2026-09-28 为已知开市日的搭建：盘前参考前收可取（self.pc 为 None 时上游还没给出当日报价）。"""
     DAY = "2026-09-28"
@@ -417,6 +425,28 @@ class UntrackedTodayPreopenAcceptance(_TradingDayFlow):
         self.assertEqual(self.last_headers.get("X-Refetch-Status"), "ok")
         self.assertEqual(len(self.preopen_calls), 3)
 
+    def test_timing_line_shows_hidden_today_and_the_steps_that_ran(self):
+        self.pc = None
+        with self.assertLogs("chanapp", level="INFO") as cm:
+            self.open_at(11, 18)
+        got = _timing_fields(cm.output)
+        self.assertEqual({k: got.get(k) for k in ("code", "freq", "etag", "cache", "last", "forming", "phase",
+                                                   "notices", "steps")},
+                         {"code": X, "freq": "day", "etag": "200", "cache": "first", "last": "2026-09-25",
+                          "forming": "0", "phase": "live", "notices": "today_unconfirmed",
+                          "steps": "first(day):ok,first(m60):ok,first(m30):ok,preopen:pending,live:none"})
+        # live:none：共用假源的盘中增量恒回 10:15 槽，11:18 时已被今天已收盘槽覆盖，取了没有新提交
+        self.assertRegex(got["fetch_age"], r"^\d+s$")
+        self.assertNotIn("refetch", got)
+        with self.assertLogs("chanapp", level="INFO") as cm:
+            self.open_at(11, 18)                           # 查看租期内、参考前收节流：只剩一步
+        got = _timing_fields(cm.output)
+        self.assertEqual((got["cache"], got["notices"], got["steps"]), ("hit", "today_unconfirmed", "preopen:pending"))
+        self.assertFalse([m for m in cm.output if "请求路径确认参考前收" in m])
+        with self.assertLogs("chanapp", level="INFO") as cm:
+            self.open_at(11, 18, refetch=1)
+        self.assertEqual(_timing_fields(cm.output)["refetch"], self.last_headers["X-Refetch-Status"])
+
     def test_no_request_on_non_trading_day_before_preopen_time_or_for_index(self):
         self.chart(X, "day")                               # 搭建时钟为周六晚
         self.open_at(9, 0)
@@ -460,6 +490,22 @@ class UntrackedFirstOpenLiveAcceptance(_TradingDayFlow):
         today = [b["time"][11:] for b in body["kline"] if b["time"].startswith(self.DAY)]
         self.assertEqual(today, ["10:00", "10:30", "11:00", "11:30", "13:30", "14:00", "14:30"])
         self.assertEqual(self.quote(body), (11, f"{self.DAY} 14:15"))
+
+    def test_logs_record_when_today_became_readable(self):
+        with self.assertLogs("chanapp", level="INFO") as cm:
+            self.open_at(10, 14, freq="m30")
+        lines = [m.split(":", 2)[2] for m in cm.output if "请求路径" in m or "[timing] chart" in m]
+        self.assertEqual(lines[:2], [f"请求路径确认参考前收 code={X} day={self.DAY} via=open",
+                                     f"请求路径盘中跟进 code={X} closed=covered live_slot={self.DAY}T10:15"])
+        got = _timing_fields(cm.output)
+        self.assertEqual({k: got.get(k) for k in ("cache", "last", "forming", "phase", "notices", "steps")},
+                         {"cache": "first", "last": f"{self.DAY}T10:30", "forming": "1", "phase": "live",
+                          "notices": "-",
+                          "steps": "first(m30):ok,first(day):ok,first(m60):ok,preopen:confirmed,live:committed"})
+        with self.assertLogs("chanapp", level="INFO") as cm:
+            self.chart(X, "day")                            # 已确认、在查看租期：请求路径不再取数
+        self.assertEqual(_timing_fields(cm.output)["steps"], "-")
+        self.assertFalse([m for m in cm.output if "请求路径" in m])
 
     def test_no_live_request_outside_session_or_for_watchlist(self):
         self.open_at(12, 10, freq="m30")                    # 午休
