@@ -30,7 +30,7 @@ chanapp 是一个缠论分析 Web 应用。本文说明它的 HTTP 接口有哪�
 
 参数：
 - `code`（必填）。
-- `freq`：`week`、`day`、`m60`、`m30`。必须是实例已勾选、且该市场能提供的周期，否则返回 400（见 `GET /api/periods`）。`m15`、`m5` 已下线，返回 400。
+- `freq`：`week`、`day`、`m60`、`m30`、`m15`。必须是实例已勾选、且该市场能提供的周期，否则返回 400（见 `GET /api/periods`；港股不提供 `m15`）。`m5` 已下线，返回 400。
 - `adjust`：`qfq`（默认，前复权）或 `raw`（不复权）。
 - `rule_profile`：`strict`（默认，严格成笔）或 `relaxed`（宽松成笔）。
 - `signal_scope`：`expanded`（默认，笔级买卖点的中枢门槛放宽为 0）或 `standard`（上游默认门槛）。

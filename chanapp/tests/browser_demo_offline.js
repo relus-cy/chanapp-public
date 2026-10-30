@@ -46,7 +46,7 @@ async page => {
   await page.goto(origin + '/?code=sz300308&freq=day');
   await page.locator('#f10Sec').waitFor({state:'visible'});
   check(await page.locator('#periodDialog').isHidden(), 'fresh demo must not open period dialog');
-  check(await page.locator('#freqTabs button').count() === 4, 'fresh demo must preset all four periods');
+  check(await page.locator('#freqTabs button').count() === 5, 'fresh demo must preset all five periods (A share has 15 min)');
   await page.waitForFunction(() => document.getElementById('status').textContent.includes('历史'));
   await page.waitForFunction(() => document.body.innerText.includes('历史样本仅 243 根'));
   check((await page.locator('body').innerText()).includes('243'), 'short day history must disclose 243 bars');
@@ -54,7 +54,7 @@ async page => {
   // The quote table arrives embedded in the chart response; wait for the card before reading.
   await page.locator('#quoteSec').filter({hasText: '历史'}).waitFor({timeout: 5000}).catch(() => {});
   check((await page.locator('#quoteSec').innerText()).includes('历史'), 'quote must be marked historical');
-  for (const freq of ['week', 'm30', 'm60', 'day']) {
+  for (const freq of ['week', 'm30', 'm15', 'm60', 'day']) {
     await waitChart(() => page.locator('#freqTabs [data-freq="' + freq + '"]').click(), 'freq=' + freq + '&');
   }
   // The top progress line belongs to the finished request: hidden again, busy state cleared.
@@ -261,7 +261,7 @@ async page => {
     return new Set([...r.getClientRects()].map(x => Math.round(x.top))).size;
   });
   check(f10Lines === 1, 'F10 empty note must fit on one line, lines: ' + f10Lines);
-  // The four popovers share one material: radius, border and shadow.
+  // The popovers share one material: radius, border and shadow.
   const popStyle = sel => page.evaluate(s => {
     const cs = getComputedStyle(document.querySelector(s));
     return {radius: [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomRightRadius, cs.borderBottomLeftRadius].join(' '),
@@ -280,6 +280,67 @@ async page => {
   await page.locator('#subSegPop:not([hidden])').waitFor();
   pops.indicator = await popStyle('#subSegPop');
   await page.keyboard.press('Escape');
+  // MA settings: defaults, edit a period in place (color slot kept), reject a duplicate, fill to 7, persist across reload.
+  const maChips = () => page.$$eval('#maSeg button[data-ma]', bs => bs.map(b =>
+    (b.classList.contains('active') ? '+' : '-') + b.textContent + '@' + b.querySelector('.dot').style.background));
+  check(JSON.stringify(await maChips()) === JSON.stringify(['+MA5@var(--ma-1)', '+MA13@var(--ma-2)', '+MA20@var(--ma-3)',
+    '-MA55@var(--ma-4)', '-MA144@var(--ma-5)', '-MA250@var(--ma-6)']), 'MA defaults: ' + JSON.stringify(await maChips()));
+  // The settings button stays clickable where the MA switches share the subchart bar with the indicator menu.
+  for (const width of [1280, 1366]) {
+    await page.setViewportSize({width, height: 768});
+    await page.waitForTimeout(300);
+    const hit = await page.evaluate(() => {
+      const r = document.getElementById('maSetBtn').getBoundingClientRect();
+      const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return !!at && at.closest('#maSetBtn') !== null;
+    });
+    check(hit, width + 'px: MA settings button must not be covered');
+  }
+  await page.setViewportSize({width: 1440, height: 900});
+  await page.locator('#maSetBtn').click();
+  await page.locator('#maPop:not([hidden])').waitFor();
+  pops.ma = await popStyle('#maPop');
+  const n13 = page.locator('#maRows .ma-row[data-ma="13"] .ma-n');
+  await n13.fill('20');
+  await n13.press('Enter');
+  check((await page.locator('#maErr').innerText()).includes('已有 MA20'), 'duplicate MA period must be refused with a reason');
+  await n13.fill('21');
+  await n13.press('Enter');
+  check((await maChips()).includes('+MA21@var(--ma-2)'), 'edited MA keeps its color slot and switch: ' + JSON.stringify(await maChips()));
+  check((await page.locator('#maErr').innerText()) === '', 'a successful Enter leaves no error: ' + await page.locator('#maErr').innerText());
+  check(await page.locator('#maRows .ma-row[data-ma="21"] .ma-n').evaluate(e => e === document.activeElement),
+    'focus stays on the edited period');
+  await page.locator('#maAdd').click();
+  check(!(await page.locator('#maAdd').isEnabled()) && (await page.locator('#maRows .ma-row').count()) === 7,
+    'MA list stops at 7 and disables adding');
+  await page.locator('#maRows .ma-row[data-ma="144"] .ma-on').check();
+  // Deleting keeps the settings open, so several lines can be removed in a row.
+  await page.locator('#maRows .ma-row[data-ma="250"] .ma-del').click();
+  check(await page.locator('#maPop').isVisible(), 'deleting a line keeps MA settings open');
+  await page.locator('#maRows .ma-row[data-ma="55"] .ma-del').click();
+  check(await page.locator('#maRows .ma-row').count() === 5 && await page.locator('#maAdd').isEnabled(),
+    'second delete works and frees a slot');
+  await page.locator('#maAdd').click();
+  await page.locator('#maAdd').click();
+  // Escape cancels a period being typed instead of saving it, and leaves no stale error.
+  const n144 = page.locator('#maRows .ma-row[data-ma="144"] .ma-n');
+  await n144.fill('150');
+  await page.keyboard.press('Escape');
+  check(await page.locator('#maPop').isHidden(), 'Escape closes MA settings');
+  check((await maChips()).some(c => c.includes('MA144')) && !(await maChips()).some(c => c.includes('MA150')),
+    'Escape discards the typed period: ' + JSON.stringify(await maChips()));
+  await page.locator('#maSetBtn').click();
+  check((await page.locator('#maErr').innerText()) === '', 'reopened MA settings show no stale error');
+  await page.keyboard.press('Escape');
+  await page.locator('#maSeg button[data-ma="5"]').click();
+  const maBefore = await maChips();
+  await page.reload();
+  await page.locator('#maSeg button[data-ma="21"]').waitFor();
+  check(JSON.stringify(await maChips()) === JSON.stringify(maBefore), 'MA settings persist across reload: ' + JSON.stringify(await maChips()));
+  await page.locator('#maSetBtn').click();
+  await page.locator('#maReset').click();
+  await page.keyboard.press('Escape');
+  check((await maChips())[0] === '+MA5@var(--ma-1)' && (await maChips()).length === 6, 'reset restores MA defaults');
   await page.locator('#wlForm input').fill('上证');
   await page.locator('.wl-drop .cand').first().waitFor();
   pops.search = await popStyle('#sidebar .wl-drop');

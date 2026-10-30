@@ -35,7 +35,7 @@
     p.up = up; p.down = down; p.gold = gold;
     p.upA = hexA(up, .45); p.downA = hexA(down, .45); p.goldA = hexA(gold, .55);
     p.zsFill = hexA(gold, chart.zsFillA); p.zsLine = hexA(gold, chart.zsLineA);
-    [5, 13, 20, 60, 144, 250].forEach(function (n) { p['ma' + n] = v('--ma' + n); });
+    p.ma = [1, 2, 3, 4, 5, 6, 7].map(function (i) { return v('--ma-' + i); });   // 均线色位 0–6
     p.dc = v('--dc'); p.dcStop = v('--dc-stop');
     return p;
   }
@@ -61,7 +61,7 @@
   (function () {
     var qs = new URLSearchParams(location.search);
     if (qs.get('code')) state.code = qs.get('code');
-    if (qs.get('freq')) state.freq = normalizeFreq(qs.get('freq'));  // 旧链接的 5分/15分归到 30 分
+    if (qs.get('freq')) state.freq = normalizeFreq(qs.get('freq'));  // 旧链接的 5分归到 30 分
   })();
   var periodPrefs = null; // 服务端实例偏好；确认完成前不加载图表
   var periodSaving = false;
@@ -1258,61 +1258,203 @@
     charts.xdSeries.applyOptions({ color: P.gold });
     charts.formingBiSegs.forEach(function (s) { s.applyOptions({ color: P.biForming }); });
     charts.formingXdSegs.forEach(function (s) { s.applyOptions({ color: P.goldA }); });
-    Object.keys(maSeries).forEach(function (n) { maSeries[n].applyOptions({ color: P['ma' + n] }); });
+    Object.keys(maSeries).forEach(function (n) { maSeries[n].applyOptions({ color: maColor(+n) }); });
     // 成交量/信号箭头/中枢/通道/背驰线/副图：走同一渲染路径换色，不重置可视区间
     if (lastChartData) renderChart(lastChartData, { resetRange: false });
   }
 
-  // ---------- MA 均线开关组（主图，可叠加多条，默认 5/13/20） ----------
+  // ---------- MA 均线（主图，可叠加多条；周期、开关与增删见 ma.js，设置存本机、各 K 线周期共用） ----------
 
-  var MA_PERIODS = [5, 13, 20, 60, 144, 250];
-  var activeMa = { 5: true, 13: true, 20: true };
-  var maSeries = {};
+  var maConfig = chanMa.readConfig(function (k) { return localStorage.getItem(k); });
+  var maSeries = {};   // 周期 → 已画的线；只有打开的线有
   var maData = {};
+
+  function maLine(n) { return maConfig.filter(function (l) { return l.n === n; })[0]; }
+  function maColor(n) { var l = maLine(n); return l ? P.ma[l.slot] : P.ma[0]; }
 
   function computeMAs() {
     maData = {};
     var closes = klineData.map(function (b) { return b.close; });
-    MA_PERIODS.forEach(function (n) {
-      var out = [], s = 0;
-      for (var i = 0; i < closes.length; i++) {
-        s += closes[i];
-        if (i >= n) s -= closes[i - n];
-        out.push(i >= n - 1 ? s / n : null);
-      }
-      maData[n] = out;
-    });
+    maConfig.forEach(function (l) { maData[l.n] = chanMa.sma(closes, l.n); });
   }
 
   function refreshMaSeries() {
     if (!charts) return;
-    MA_PERIODS.forEach(function (n) {
-      if (activeMa[n]) {
-        if (!maSeries[n]) {
-          maSeries[n] = charts.main.addSeries(LightweightCharts.LineSeries, {
-            color: P['ma' + n], lineWidth: 1,
-            priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-          });
-        }
-        var arr = maData[n] || [];
-        maSeries[n].setData(klineData.map(function (b, i) {
-          return arr[i] == null ? { time: toTime(b.time) } : { time: toTime(b.time), value: +arr[i].toFixed(2) };
-        }).filter(function (x) { return x.value !== undefined; }));
-      } else if (maSeries[n]) {
-        charts.main.removeSeries(maSeries[n]);
-        delete maSeries[n];
+    Object.keys(maSeries).forEach(function (key) {
+      var l = maLine(+key);
+      if (l && l.on) return;
+      charts.main.removeSeries(maSeries[key]);
+      delete maSeries[key];
+    });
+    maConfig.forEach(function (l) {
+      if (!l.on) return;
+      if (!maSeries[l.n]) {
+        maSeries[l.n] = charts.main.addSeries(LightweightCharts.LineSeries, {
+          color: P.ma[l.slot], lineWidth: 1,
+          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        });
+      } else {
+        maSeries[l.n].applyOptions({ color: P.ma[l.slot] });
       }
+      var arr = maData[l.n] || [];
+      maSeries[l.n].setData(klineData.map(function (b, i) {
+        return arr[i] == null ? { time: toTime(b.time) } : { time: toTime(b.time), value: +arr[i].toFixed(2) };
+      }).filter(function (x) { return x.value !== undefined; }));
     });
   }
 
+  function maDot(slot) {
+    var dot = document.createElement('i');
+    dot.className = 'dot';
+    dot.style.background = 'var(--ma-' + (slot + 1) + ')';
+    return dot;
+  }
+
+  // 开关分段（设置钮之前）与设置浮层的行，都按 maConfig 重画
+  function renderMaControls() {
+    var seg = el('maSeg'), setBtn = el('maSetBtn');
+    Array.prototype.slice.call(seg.querySelectorAll('button[data-ma]')).forEach(function (b) { seg.removeChild(b); });
+    maConfig.forEach(function (l) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.ma = String(l.n);
+      b.className = l.on ? 'active' : '';
+      b.setAttribute('aria-pressed', l.on ? 'true' : 'false');
+      b.appendChild(maDot(l.slot));
+      b.appendChild(document.createTextNode('MA' + l.n));
+      seg.insertBefore(b, setBtn);
+    });
+    var rows = el('maRows');
+    rows.innerHTML = '';
+    maConfig.forEach(function (l) {
+      var row = document.createElement('div');
+      row.className = 'ma-row';
+      row.dataset.ma = String(l.n);
+      var on = document.createElement('input');
+      on.type = 'checkbox'; on.checked = l.on; on.className = 'ma-on';
+      on.setAttribute('aria-label', '显示 MA' + l.n);
+      var label = document.createElement('label');
+      label.appendChild(maDot(l.slot));
+      label.appendChild(document.createTextNode('MA'));
+      var num = document.createElement('input');
+      num.type = 'number'; num.min = String(chanMa.MIN_N); num.max = String(chanMa.MAX_N); num.step = '1';
+      num.inputMode = 'numeric'; num.value = String(l.n); num.className = 'ma-n';
+      num.setAttribute('aria-label', 'MA' + l.n + ' 的周期');
+      label.appendChild(num);
+      var del = document.createElement('button');
+      del.type = 'button'; del.className = 'ma-del';
+      del.setAttribute('aria-label', '删除 MA' + l.n);
+      del.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+      row.appendChild(on); row.appendChild(label); row.appendChild(del);
+      rows.appendChild(row);
+    });
+    var full = !chanMa.canAdd(maConfig);
+    el('maAdd').disabled = full;
+    el('maAdd').textContent = full ? '已满 ' + chanMa.MAX + ' 条' : '添加均线';
+  }
+
+  // 设置改动立即生效并保存；focusN 为重画后要把焦点放回的那一行
+  function applyMa(next, focus) {
+    maConfig = next;
+    chanMa.writeConfig(function (k, v) { localStorage.setItem(k, v); }, maConfig);
+    computeMAs();
+    refreshMaSeries();
+    renderMaControls();
+    if (focus) {
+      var target = focus.n != null && el('maRows').querySelector('.ma-row[data-ma="' + focus.n + '"] ' + focus.sel);
+      (target || el(focus.fallback || 'maAdd')).focus();
+    }
+  }
+
   function wireMaSeg() {
+    var wrap = el('maWrap'), btn = el('maSetBtn'), pop = el('maPop');
+    function setOpen(open) {
+      pop.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.classList.toggle('active', open);
+      el('maErr').textContent = '';
+    }
     el('maSeg').addEventListener('click', function (e) {
       var b = e.target.closest('button'); if (!b) return;
-      var n = +b.dataset.ma;
-      activeMa[n] = !activeMa[n];
-      b.classList.toggle('active', activeMa[n]);
-      refreshMaSeries();
+      if (b === btn) { setOpen(pop.hidden); if (!pop.hidden) { var f = pop.querySelector('.ma-n'); (f || el('maAdd')).focus(); } return; }
+      if (b.dataset.ma) applyMa(chanMa.toggle(maConfig, +b.dataset.ma));
     });
+    // 改周期：change（失焦或步进）与回车都提交；拒绝时说明原因、输入框标红，值留着让用户改，失焦再还原。
+    // 回车提交后重画会移除仍有焦点的旧输入框，浏览器随即对它补发 change：已提交的框不再处理。
+    // 回车后焦点回到新行的输入框；失焦提交（多为 Tab）时放到本行下一个控件
+    function commitPeriod(input, byEnter) {
+      if (input.dataset.committed) return;
+      var n = +input.closest('.ma-row').dataset.ma;
+      if (String(input.value).trim() === String(n)) { input.removeAttribute('aria-invalid'); el('maErr').textContent = ''; return; }
+      var r = chanMa.setPeriod(maConfig, n, input.value);
+      if (r.error) {
+        el('maErr').textContent = r.error;
+        input.setAttribute('aria-invalid', 'true');
+        return;
+      }
+      el('maErr').textContent = '';
+      input.dataset.committed = '1';
+      applyMa(r.config, { n: +String(input.value).trim(), sel: byEnter ? '.ma-n' : '.ma-del' });
+    }
+    el('maRows').addEventListener('change', function (e) {
+      var row = e.target.closest('.ma-row'); if (!row) return;
+      if (e.target.classList.contains('ma-on')) {
+        var n = +row.dataset.ma;
+        applyMa(chanMa.toggle(maConfig, n), { n: n, sel: '.ma-on' });
+      } else if (e.target.classList.contains('ma-n')) {
+        commitPeriod(e.target);
+      }
+    });
+    el('maRows').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && e.target.classList.contains('ma-n')) { e.preventDefault(); commitPeriod(e.target, true); }
+    });
+    el('maRows').addEventListener('focusout', function (e) {
+      if (!e.target.classList || !e.target.classList.contains('ma-n') || e.target.getAttribute('aria-invalid') !== 'true') return;
+      var row = e.target.closest('.ma-row');
+      e.target.value = row.dataset.ma;
+      e.target.removeAttribute('aria-invalid');
+      if (el('maErr').textContent) el('maErr').textContent += '，已还原为 ' + row.dataset.ma;
+    });
+    el('maRows').addEventListener('click', function (e) {
+      var del = e.target.closest('.ma-del'); if (!del) return;
+      var n = +del.closest('.ma-row').dataset.ma;
+      var i = maConfig.map(function (l) { return l.n; }).indexOf(n);
+      var next = chanMa.remove(maConfig, n);
+      var neighbor = next[Math.min(i, next.length - 1)];
+      el('maErr').textContent = '';
+      applyMa(next, { n: neighbor && neighbor.n, sel: '.ma-del' });
+    });
+    el('maAdd').addEventListener('click', function () {
+      var before = maConfig.map(function (l) { return l.n; });
+      var next = chanMa.add(maConfig);
+      var added = next.filter(function (l) { return before.indexOf(l.n) < 0; })[0];
+      el('maErr').textContent = '';
+      applyMa(next, { n: added && added.n, sel: '.ma-n' });
+    });
+    el('maReset').addEventListener('click', function () {
+      el('maErr').textContent = '';
+      applyMa(chanMa.defaults(), { fallback: 'maReset' });
+    });
+    wrap.addEventListener('focusout', function (e) {
+      if (!pop.hidden && e.relatedTarget && !wrap.contains(e.relatedTarget)) setOpen(false);
+    });
+    // 点击的控件可能已随重画移出页面（删除、开关）：那不算点在浮层外
+    document.addEventListener('click', function (e) {
+      if (!pop.hidden && e.target.isConnected && !wrap.contains(e.target)) setOpen(false);
+    });
+    // Esc 取消正在输入的周期：先还原输入框，焦点移走时就不会提交
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !pop.hidden) {
+        var typing = document.activeElement;
+        if (typing && pop.contains(typing) && typing.classList.contains('ma-n')) {
+          typing.value = typing.closest('.ma-row').dataset.ma;
+          typing.removeAttribute('aria-invalid');
+        }
+        setOpen(false); btn.focus();
+        e.stopImmediatePropagation();
+      }
+    });
+    renderMaControls();
   }
 
   // ---------- 副图指标（MACD 信号骨架；KDJ/RSI/BOLL 纯显示层，前端自算） ----------
@@ -2736,7 +2878,7 @@
     // 联合 AI 的身份不含当前周期，仍由其原生命周期管理。
     if (detailKind === 'card' || detailKind === 'bs') closeDetail();
     if (!state.code) return;
-    // 已下线的 5分/15分（旧链接、旧状态）归到 30 分，无法识别的回日线；每次加载同步周期与复权控件
+    // 已下线的 5分（旧链接、旧状态）归到 30 分，无法识别的回日线；每次加载同步周期与复权控件
     state.freq = normalizeFreq(state.freq);
     if (!periodPrefs || periodPrefs.notice) {
       clearPeriodView(periodPrefs ? '请确认展示周期' : '正在读取周期偏好');
@@ -2922,11 +3064,12 @@
     load({ refresh: true, refetch: true });
   }
 
-  // 页面周期（目标 2026-09-29 第三阶段）：5分/15分已下线，服务端对它们回 400；旧链接与旧状态归到 30 分。
+  // 页面周期（目标 2026-09-29 第三阶段）：5分已下线，服务端回 400；旧链接与旧状态归到 30 分。
+  // 15 分 2026-10-29 恢复，是否可用由周期偏好的市场能力决定（港股不可用时 load 回退到已勾选的可用周期）。
   // 启动时读 URL 就要调用（函数声明会提升，外部 var 表那时还没赋值），所以不依赖外部变量。
   function normalizeFreq(freq) {
-    if (freq === 'day' || freq === 'week' || freq === 'm60' || freq === 'm30') return freq;
-    return freq === 'm5' || freq === 'm15' ? 'm30' : 'day';
+    if (freq === 'day' || freq === 'week' || freq === 'm60' || freq === 'm30' || freq === 'm15') return freq;
+    return freq === 'm5' ? 'm30' : 'day';
   }
 
   // ---------- 交易时段自动刷新（开市与否只认后端 /api/session：交易日历 + engine/session.py 时段） ----------
@@ -3326,7 +3469,7 @@
     });
     document.addEventListener('keydown', function (ev) {
       if (ev.key !== 'Escape' || !pop.classList.contains('open')) return;
-      if (el('aiPop').classList.contains('open') || !el('subSegPop').hidden || !el('dcSegPop').hidden) return;  // 上层浮层先消费 Esc（其 handler 已 stopImmediatePropagation，此处仅兜底）
+      if (el('aiPop').classList.contains('open') || !el('subSegPop').hidden || !el('dcSegPop').hidden || !el('maPop').hidden) return;  // 上层浮层先消费 Esc（其 handler 已 stopImmediatePropagation，此处仅兜底）
       setOpen(false, true);
     });
   }
@@ -3845,7 +3988,7 @@
       if (!drawCtl || !drawCtl.consumesEscape()) return;
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target && ev.target.tagName || '')) return;
       if (el('rulesPop').classList.contains('open') || el('aiPop').classList.contains('open') ||
-          !el('subSegPop').hidden || !el('dcSegPop').hidden || el('periodDialog').open) return;
+          !el('subSegPop').hidden || !el('dcSegPop').hidden || !el('maPop').hidden || el('periodDialog').open) return;
       var dm = drawCtl.manager;
       if (dm.tool()) dm.setTool(null); else dm.select([]);
       ev.preventDefault();

@@ -5,10 +5,10 @@ test('period dialog cancels edits and saves an empty selection across reload', a
   await screen.getByRole('button', '展示周期').click();
   await browser.locator('#periodOptions input[value="day"]').uncheck();
   await screen.getByRole('button', '取消').click();
-  await expect(browser.locator('#freqTabs button:not([hidden])')).toHaveCount(4);
+  await expect(browser.locator('#freqTabs button:not([hidden])')).toHaveCount(5);
   await screen.getByRole('button', '展示周期').click();
   await expect(browser.locator('#periodOptions input[value="day"]')).toBeChecked();
-  for (const freq of ['day', 'week', 'm30', 'm60']) {
+  for (const freq of ['day', 'week', 'm30', 'm60', 'm15']) {
     await browser.locator(`#periodOptions input[value="${freq}"]`).uncheck();
   }
   await screen.getByRole('button', '保存并继续').click();
@@ -43,6 +43,20 @@ test('stale period edits show a conflict and preserve the other client selection
   await screen.getByRole('button', '保存并继续').click();
   await expect(browser.locator('#periodDialog')).toBeHidden();
   await expect(browser.locator('#freqTabs button:not([hidden])')).toHaveText(['日线']);
+});
+
+test('A-share 15-minute chart serves the sample session bars and stays out of the multi-period summary', async ({ app, browser, screen }) => {
+  await openChart({ app, browser });
+  const response = browser.waitForResponse(/\/api\/chart\?.*freq=m15&/);
+  await screen.getByRole('button', '15分').tap();
+  const result = await response;
+  expect(result.status).toBe(200);
+  const body = await result.json();
+  const last = body.kline.map(bar => bar.time).filter(time => time.startsWith(body.kline.at(-1).time.slice(0, 10)));
+  expect([last.length, last[0], last.at(-1).slice(11)]).toEqual([16, last[0].slice(0, 11) + '09:45', '15:00']);
+  expect(body.resonance.map(item => item.freq)).not.toContain('m15');
+  await expect(browser.locator('#freqTabs .active')).toHaveText('15分');
+  await expect(browser.locator('#chartError')).toBeHidden();
 });
 
 test('legacy minute links normalize to 30 minutes and demo AI explains its boundary', async ({ app, browser }) => {

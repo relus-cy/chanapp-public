@@ -66,7 +66,7 @@ async function json(endpoint, method = 'GET') {
 }
 async function select(page, selected) {
   if (!await page.locator('#periodDialog').isVisible()) await page.locator('#periodBtn').click();
-  for (const freq of ['m30', 'm60', 'day', 'week']) {
+  for (const freq of ['m30', 'm60', 'day', 'week', 'm15']) {
     const input = page.locator(`#periodOptions input[value="${freq}"]`);
     if (await input.isEnabled()) await input.setChecked(selected.includes(freq));
   }
@@ -112,8 +112,8 @@ async function analyzeUI(page, freqs, label) {
     await page.goto(origin);
     await page.getByRole('dialog').waitFor({state: 'visible', timeout: 10000});
     assert.match(await page.getByRole('dialog').innerText(), /周期/);
-    assert.equal(await page.locator('#periodOptions input:checked').count(), 4);
-    console.log('PASS first-use dialog, four defaults');
+    assert.equal(await page.locator('#periodOptions input:checked').count(), 5);
+    console.log('PASS first-use dialog, five defaults');
     await select(page, []);
     await pause(300);
     assert.equal(chartRequests.length, 0, 'first-use none must never request a chart');
@@ -286,7 +286,7 @@ async function analyzeUI(page, freqs, label) {
     await json('/__test/history', 'POST');
     assert.equal((await json('/__test/evidence')).calls.filter(c => c[0].startsWith('m')).length, 0);
     await analyzeUI(page, ['day'], '日线');
-    assert.equal((await json('/api/periods')).catalog.length, 4);
+    assert.equal((await json('/api/periods')).catalog.length, 5);
     console.log('PASS absent minute capability stops minute collection despite retained selection');
     await page.goto('about:blank');
     await stop();
@@ -299,8 +299,8 @@ async function analyzeUI(page, freqs, label) {
     assert.equal(await page.getByRole('dialog').isVisible(), false);
     const migrated = await json('/api/periods');
     assert.equal(migrated.notice, null);
-    assert.deepEqual([...migrated.selected].sort(), ['day', 'm30', 'm60', 'week']);
-    console.log('PASS existing instance upgrades silently with four periods');
+    assert.deepEqual([...migrated.selected].sort(), ['day', 'm15', 'm30', 'm60', 'week']);
+    console.log('PASS existing instance upgrades silently with all five periods');
     console.log('PASS all period selection browser E2E scenarios');
   } finally {
     await cleanup();

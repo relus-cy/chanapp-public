@@ -81,11 +81,10 @@ class TestChartHistoryApi(unittest.TestCase):
         self.assertEqual((response.status_code, response.json()["token"]), (409, "t2"))
 
     def test_unsupported_history_periods_400(self):
-        # 有意改写（目标 2026-09-29 第三阶段）：m15/m5 整体下线，分页入口同样回「不再提供」
-        for freq in ("m15", "m5"):
-            response = self.client.get(f"/api/chart?code=sh600519&freq={freq}&before=2026-06-01&token=t")
-            self.assertEqual(response.status_code, 400)
-            self.assertEqual(response.json(), {"detail": "不再提供 5 分与 15 分周期，请改用 30 分及以上"})
+        # 有意改写（目标 2026-09-29 第三阶段）：m5 整体下线，分页入口同样回「不再提供」；m15 2026-10-29 恢复后支持分页
+        response = self.client.get("/api/chart?code=sh600519&freq=m5&before=2026-06-01&token=t")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "不再提供 5 分周期，请改用 15 分及以上"})
 
     def test_week_and_m60_history_supported(self):
         for freq, dt in (("week", "2026-03-06"), ("m60", "2026-03-02 10:30")):

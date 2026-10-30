@@ -285,7 +285,7 @@ class DemoOfflineTests(unittest.TestCase):
                 response = client.get("/api/periods")
                 self.assertEqual(response.status_code, 200, response.text[:300])
                 state = response.json()
-                self.assertEqual(state["selected"], ["day", "week", "m60", "m30"])
+                self.assertEqual(state["selected"], ["day", "week", "m60", "m30", "m15"])
                 self.assertIsNone(state["notice"])
                 saved = client.put("/api/periods", json={"selected": ["day"], "revision": state["revision"]})
                 self.assertEqual(saved.status_code, 200, saved.text[:300])

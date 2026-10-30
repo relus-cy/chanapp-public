@@ -25,9 +25,9 @@ test('day and night themes survive reload and retain a rendered chart', async ({
   await expect(browser.locator('#chart canvas').first()).toBeVisible();
 });
 
-test('all six moving-average controls toggle independently and survive period changes', async ({ app, browser, screen }) => {
+test('all six default moving-average controls toggle independently and survive period changes', async ({ app, browser, screen }) => {
   await openChart({ app, browser });
-  for (const [period, selected] of [[5, true], [13, true], [20, true], [60, false], [144, false], [250, false]] as const) {
+  for (const [period, selected] of [[5, true], [13, true], [20, true], [55, false], [144, false], [250, false]] as const) {
     const button = screen.getByRole('button', `MA${period}`);
     await expect.poll(async () => (await button.getAttribute('class') || '').split(' ').includes('active')).toBe(selected);
     await button.tap();
@@ -35,7 +35,7 @@ test('all six moving-average controls toggle independently and survive period ch
   }
   await chartAction(browser, () => screen.getByRole('button', '60分').tap(), /\/api\/chart\?.*freq=m60&/);
   for (const period of [5, 13, 20]) await expect(browser).toHaveClass(screen.getByRole('button', `MA${period}`), /^$/);
-  for (const period of [60, 144, 250]) await expect(browser).toHaveClass(screen.getByRole('button', `MA${period}`), /active/);
+  for (const period of [55, 144, 250]) await expect(browser).toHaveClass(screen.getByRole('button', `MA${period}`), /active/);
 });
 
 test('four subchart indicators show the pinned sample values and remain selected across periods', async ({ app, browser, screen }) => {

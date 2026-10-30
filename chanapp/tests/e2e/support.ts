@@ -21,7 +21,7 @@ export const test = base.extend({
   isolatedDemo: async ({ app, browser }, use) => {
     const periods = await api(app, '/api/periods');
     await api(app, '/api/periods', 'PUT', {
-      revision: periods.revision, selected: ['m30', 'm60', 'day', 'week'],
+      revision: periods.revision, selected: ['m30', 'm60', 'day', 'week', 'm15'],
     });
     for (const item of await api(app, '/api/watchlist')) {
       await api(app, `/api/watchlist/${item.code}`, 'DELETE');

@@ -17,11 +17,12 @@
 | 打开 demo、默认图表、历史截止、短样本与缺少资料说明 | `browser_demo_offline.js` | 真实 demo |
 | 搜索空结果、键盘选择、取消、候选加入、页头加入、移除、最近查看 | `e2e/watchlist.e2e.ts` | 真实 demo |
 | 自选星标排序与撤销、标签保存／取消／清空、重载持久化 | `e2e/watchlist.e2e.ts` | 真实 demo |
-| 两支样本的四个周期、前复权／不复权、指数复权边界 | `browser_demo_offline.js`、`e2e/chart-controls.e2e.ts` | 真实 demo |
-| 展示周期取消／保存／清空、冲突、旧分钟链接 | `e2e/periods.e2e.ts` | 真实 demo |
+| 两支样本的五个周期、前复权／不复权、指数复权边界 | `browser_demo_offline.js`、`e2e/chart-controls.e2e.ts` | 真实 demo |
+| 展示周期取消／保存／清空、冲突、旧分钟链接、A 股 15 分出图 | `e2e/periods.e2e.ts` | 真实 demo |
 | 首次选择、来源能力变化、跨页面同步、采集与重启 | `browser_period_selection_e2e.js` | 外部 fixture |
 | 成笔标准、提示范围、结构层显隐、日夜主题与偏好持久化 | `e2e/chart-controls.e2e.ts` | 真实 demo |
-| 六个均线按钮状态、四种副图指标及样本数值、周期切换 | `e2e/chart-controls.e2e.ts` | 真实 demo；数学边界另见 `test_indicators.js` |
+| 默认六条均线的开关状态、四种副图指标及样本数值、周期切换 | `e2e/chart-controls.e2e.ts` | 真实 demo；数学边界另见 `test_indicators.js` |
+| 均线设置：改周期保色位、拒绝重复、满 7 条、删除与恢复默认、重载保留 | `browser_demo_offline.js` | 真实 demo；清洗与色位分配另见 `test_ma.js` |
 | 信号依据卡、共振详情、返回焦点、周期变化关闭旧详情 | `e2e/chart-controls.e2e.ts` | 真实 demo |
 | 鼠标画线、全部工具放置与默认样式、锁定与锁定全部、工具栏开合与样式条位置、按钮悬停提示、保存与重载、复权隐藏与新除权换算、样式记忆、吸附、填充透明度、跨周期与翻历史、未来区锚点、两台设备与冲突、写入失败、快速换标的、键盘、主题、读不懂的记录、清空 | `e2e/drawings.e2e.ts` | 真实 demo，第二台设备用独立浏览器；跨周期映射、港股时段、停牌与前复权换算另见 `test_drawings.js` |
 | 拖动历史、十字线、主副图同步、侧栏与窄屏布局 | `browser_demo_offline.js` | 真实 demo；部分图表观测使用只读探针 |

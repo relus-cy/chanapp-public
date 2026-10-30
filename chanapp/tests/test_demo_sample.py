@@ -53,7 +53,7 @@ class DemoSampleTests(unittest.TestCase):
                 chart = client.get('/api/chart?code=sz300308&freq=day').json()
                 client.post('/api/watchlist', json={'code': 'sh000001', 'name': '上证指数'})
                 prefs = client.get('/api/periods').json()
-                self.assertEqual(prefs['selected'], ['day', 'week', 'm60', 'm30'])
+                self.assertEqual(prefs['selected'], ['day', 'week', 'm60', 'm30', 'm15'])
                 self.assertIsNone(prefs['notice'])
                 saved = client.put('/api/periods', json={'selected':['day','week'], 'revision':prefs['revision']})
                 self.assertEqual(saved.status_code, 200)

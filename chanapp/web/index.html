@@ -27,7 +27,9 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     --gold-line: #d7c8a6;
     --up: #d63f33;
     --down: #2e8ca3;
-    --ma5: #6a7079; --ma13: #7d5f0c; --ma20: #2e8ca3; --ma60: #d63f33; --ma144: #8a72b8; --ma250: #4f7fb8;
+    /* 均线色位 1–7（app.js 按色位取色，不按周期）：OKLCH 等距取色，对图表底色 ≥3:1，
+       避开结构金、涨红跌青与唐奇安品红/橙（OKLab 距离 ≥0.08） */
+    --ma-1: #5f636a; --ma-2: #3664be; --ma-3: #7f4bb1; --ma-4: #298a41; --ma-5: #8b8318; --ma-6: #7f463d; --ma-7: #2c3361;
     --dc: #b03a8c; --dc-stop: #c25e12;   /* 唐奇安通道线、止损线：避开金（结构）、红青（涨跌）与均线色 */
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
     /* 圆角同心：内层 = 外层 − 内边距（分段 4 = 轨道 6 − 2；浮层内行 8 = 浮层 12 − 4） */
@@ -64,7 +66,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     --gold-line: #675633;
     --up: #df4b3e;
     --down: #3aa6b9;
-    --ma5: #9aa2ad; --ma13: #c9a24d; --ma20: #3aa6b9; --ma60: #df4b3e; --ma144: #a58fd6; --ma250: #6f9fd8;
+    --ma-1: #adb1b9; --ma-2: #70a6f5; --ma-3: #bf93f1; --ma-4: #66cb79; --ma-5: #ccca5f; --ma-6: #c5907e; --ma-7: #dadaff;
     --dc: #da78c0; --dc-stop: #e8873d;
     /* 夜间浮起的面要比所在面亮一级，不能沿用比面板还暗的 --overlay */
     --material: rgba(30,33,40,.86);
@@ -461,14 +463,14 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
      可见（同步可聚焦）。 */
   /* 浮层统一材质（缠论、展示周期对话框、搜索候选、副图指标菜单）：同圆角、描边、阴影、半透明模糊底，
      打开时同一段轻微下落淡入；不支持 backdrop-filter 时退回不透明底保证可读 */
-  .rules-pop, .period-dialog, #sidebar .wl-drop, #subSegPop, #dcSegPop {
+  .rules-pop, .period-dialog, #sidebar .wl-drop, #subSegPop, #dcSegPop, #maPop {
     background: var(--material); -webkit-backdrop-filter: saturate(1.5) blur(16px); backdrop-filter: saturate(1.5) blur(16px);
     border: 1px solid var(--line2); border-radius: var(--radius-l); box-shadow: var(--shadow-float);
   }
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    .rules-pop, .period-dialog, #sidebar .wl-drop, #subSegPop, #dcSegPop { background: var(--material-solid); }
+    .rules-pop, .period-dialog, #sidebar .wl-drop, #subSegPop, #dcSegPop, #maPop { background: var(--material-solid); }
   }
-  .rules-pop.open, .period-dialog[open], #sidebar .wl-drop:not([hidden]), #subSegPop:not([hidden]), #dcSegPop:not([hidden]) {
+  .rules-pop.open, .period-dialog[open], #sidebar .wl-drop:not([hidden]), #subSegPop:not([hidden]), #dcSegPop:not([hidden]), #maPop:not([hidden]) {
     animation: popIn var(--dur) var(--ease);
   }
   @keyframes popIn { from { opacity: 0; transform: translateY(-4px) scale(.985); } to { opacity: 1; transform: none; } }
@@ -618,7 +620,43 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
   #subWrap { flex: 1.15; min-height: 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; }
   #subBar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; height: 34px; flex-shrink: 0; background: var(--panel); }
   .seg button { padding: 0 8px; font-size: 11px; font-family: var(--mono); }
-  #maSeg .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; }
+  #maSeg .dot, #maPop .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; }
+  /* 均线：逐条开关的分段 + 末尾设置钮打开设置浮层（改周期、增删，至多 7 条；颜色按色位自动分配） */
+  #maWrap { position: relative; display: flex; flex-shrink: 0; }   /* 不压缩：压窄后设置钮会被副图指标钮盖住 */
+  #maSeg #maSetBtn { padding: 0 6px; }
+  #maSetBtn svg { width: 12px; height: 12px; }
+  /* 均线栏下方只有副图，矮窗口放不下 7 行：向上弹出，压在主图上 */
+  #maPop {
+    position: absolute; bottom: calc(100% + 6px); left: -1px; z-index: 30; width: 216px;
+    display: flex; flex-direction: column; gap: 2px; padding: 6px; overscroll-behavior: contain;
+  }
+  #maPop[hidden] { display: none; }
+  #maPop .ma-head { font-size: 11px; color: var(--faint); padding: 4px 6px; }
+  #maPop .ma-row { display: flex; align-items: center; gap: 6px; padding: 2px 6px; border-radius: var(--radius-m); }
+  #maPop .ma-row label { display: flex; align-items: center; gap: 4px; flex: 1; font-size: 11px; font-family: var(--mono); color: var(--dim); }
+  #maPop .ma-row .dot { margin-right: 0; }
+  #maPop .ma-on { accent-color: var(--gold); margin: 0; }
+  #maPop input[type="number"] {
+    width: 56px; height: 22px; padding: 0 6px; font: 11px var(--mono); color: var(--fg);
+    background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius-xs);
+  }
+  #maPop input[aria-invalid="true"] { border-color: var(--up); }
+  #maPop .ma-del {
+    width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent;
+    color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  }
+  #maPop .ma-del svg { width: 12px; height: 12px; }
+  @media (hover:hover) { #maPop .ma-del:hover { background: var(--raise); color: var(--fg); } }
+  #maPop .ma-err { margin: 0; padding: 0 6px; font-size: 11px; color: var(--up); }
+  #maPop .ma-err:empty { display: none; }
+  #maPop .ma-foot { display: flex; justify-content: space-between; gap: 6px; padding: 4px 0 0; border-top: 1px solid var(--line); margin-top: 2px; }
+  #maPop .ma-foot button {
+    height: 24px; padding: 0 8px; border: 0; border-radius: var(--radius-xs); background: transparent;
+    color: var(--dim); font-size: 11px; cursor: pointer;
+  }
+  #maPop .ma-foot button:disabled { opacity: .45; cursor: not-allowed; }
+  @media (hover:hover) { #maPop .ma-foot button:not(:disabled):hover { background: var(--raise); color: var(--fg); } }
+  @media (pointer:coarse) { #maPop .ma-del, #maPop .ma-foot button, #maPop input[type="number"] { min-height: 36px; } }
   /* 副图指标：窄窗下 seg 会换行顶高副图栏，改为当前值按钮 + 点击弹出小菜单 */
   #subSeg { position: relative; }
   /* 单选指标只有当前值一个钮：常显选中胶囊 */
@@ -868,8 +906,12 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     .resonance { flex-basis: 100%; }
   }
   @container (max-width: 700px) {
-    #subBar { display: grid; grid-template-columns: auto 1fr; justify-items: start; height: 86px; gap: 4px 8px; }
-    #maSeg, #subNote { grid-column: 1 / -1; }
+    #subBar { display: grid; grid-template-columns: auto 1fr; justify-items: start; height: auto; min-height: 86px; gap: 4px 8px; }
+    #maWrap, #subNote { grid-column: 1 / -1; }
+    /* 均线至多 7 条加设置钮，手机宽度一行放不下：允许换行，副图栏随之增高 */
+    #maWrap { max-width: 100%; }
+    #maSeg { flex-wrap: wrap; height: auto; }
+    #maSeg button { height: calc(var(--ctl-h-sm) - 6px); }   /* 轨道定高时的按钮高：24 − 2×2 内边距 − 2×1 描边 */
     #subNote { max-width: 100%; height: 16px; }
     .legend { white-space: normal; max-width: calc(100% - 85px); line-height: 1.5; }
     #axisAnchor { top: 66px; }
@@ -897,7 +939,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     #sidebar, #page, .sb-btn, .seg button, .freq button,
     #center .resonance, #center #chartWrap, #rail, #aiPop { transition: none; }
     .rules-pop, .soft-btn, .rule-option button, #ruleSummary, .hd-btn, #themeBtn, #aiRefresh, #loadBar { transition: none; }
-    .rules-pop.open, .period-dialog[open], #sidebar .wl-drop:not([hidden]), #subSegPop:not([hidden]), #dcSegPop:not([hidden]) { animation: none; }
+    .rules-pop.open, .period-dialog[open], #sidebar .wl-drop:not([hidden]), #subSegPop:not([hidden]), #dcSegPop:not([hidden]), #maPop:not([hidden]) { animation: none; }
     /* 加载细线不移动：静态低对比整条 */
     #loadBar::before { animation: none; transform: none; width: 100%; background: var(--gold); opacity: .35; }
     #sidebar .item, #sidebar .wl-add, #sidebar .item .del, #sidebar .item .star, #sidebar .item .add, .hd-btn { transition: none; }
@@ -1054,13 +1096,20 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
     </div>
     <div id="subWrap">
       <div id="subBar">
-        <div class="seg" id="maSeg" title="主图均线（可叠加多条）">
-          <button data-ma="5" class="active"><i class="dot" style="background:var(--ma5)"></i>MA5</button>
-          <button data-ma="13" class="active"><i class="dot" style="background:var(--ma13)"></i>MA13</button>
-          <button data-ma="20" class="active"><i class="dot" style="background:var(--ma20)"></i>MA20</button>
-          <button data-ma="60"><i class="dot" style="background:var(--ma60)"></i>MA60</button>
-          <button data-ma="144"><i class="dot" style="background:var(--ma144)"></i>MA144</button>
-          <button data-ma="250"><i class="dot" style="background:var(--ma250)"></i>MA250</button>
+        <div id="maWrap">
+          <!-- 逐条开关按钮由 app.js 按均线设置生成，插在设置钮之前 -->
+          <div class="seg" id="maSeg" role="group" aria-label="主图均线开关" title="主图均线（可叠加多条）">
+            <button type="button" id="maSetBtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="maPop" title="均线设置：周期、开关与增删" aria-label="均线设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h4m4 0h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
+          </div>
+          <div id="maPop" role="dialog" aria-labelledby="maHead" hidden>
+            <div class="ma-head" id="maHead">均线设置 · 各周期共用 · 至多 7 条</div>
+            <div id="maRows"></div>
+            <p class="ma-err" id="maErr" role="alert"></p>
+            <div class="ma-foot">
+              <button type="button" id="maAdd">添加均线</button>
+              <button type="button" id="maReset">恢复默认</button>
+            </div>
+          </div>
         </div>
         <div class="seg" id="subSeg" title="副图指标（单选）">
           <button id="subSegBtn" aria-haspopup="true" aria-expanded="false"><span id="subSegCur">MACD</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
@@ -1145,6 +1194,7 @@ document.documentElement.dataset.theme = localStorage.getItem('chanapp-theme') |
 <script src="/vendor/lightweight-charts.standalone.production.js"></script>
 <script src="/indicators.js"></script>
 <script src="/donchian.js"></script>
+<script src="/ma.js"></script>
 <script src="/vendor/lightweight-charts-drawing.umd.js"></script>
 <script src="/drawings.js"></script>
 <script src="/app.js"></script>

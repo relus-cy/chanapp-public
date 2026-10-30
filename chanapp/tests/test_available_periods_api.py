@@ -135,8 +135,38 @@ class AvailablePeriodsApiTests(unittest.TestCase):
         state = self.select([])
         self.assertEqual(state['catalog'], [
             {'freq': 'day', 'label': '日线'}, {'freq': 'week', 'label': '周线'},
-            {'freq': 'm60', 'label': '60分'}, {'freq': 'm30', 'label': '30分'}])
+            {'freq': 'm60', 'label': '60分'}, {'freq': 'm30', 'label': '30分'}, {'freq': 'm15', 'label': '15分'}])
         self.assertEqual(self.client.get('/api/periods').json()['catalog'], state['catalog'])
+
+    def test_m15_chart_and_history_from_a_share_facts_outside_analysis(self):
+        # 15 分 2026-10-29 恢复：A 股由 m15 事实直接服务（每日 16 根，止于 15:00），分页可左拉；
+        # 只勾 15 分也算分钟周期在用（采集不暂停）；共振与 AI 仍只读 day/m60/m30
+        self.select(['day', 'm15'])
+        self.assertTrue(period_preferences.current().minute_enabled('sh600036'))
+        chart = self.chart('m15')
+        last_day = [b['time'] for b in chart['kline'] if b['time'].startswith('2026-09-25')]
+        self.assertEqual(len(last_day), 16)
+        self.assertEqual((last_day[0], last_day[7], last_day[8], last_day[-1]),
+                         ('2026-09-25 09:45', '2026-09-25 11:30', '2026-09-25 13:15', '2026-09-25 15:00'))
+        self.assertEqual([x['freq'] for x in chart['resonance']], ['day'])
+        self.assertEqual(chart['meta']['analysis_freqs'], ['day'])
+        first = chart['kline'][0]['time']
+        page = self.client.get('/api/chart', params={'code': 'sh600036', 'freq': 'm15', 'adjust': 'raw',
+                                                     'before': first, 'token': chart['meta']['token']})
+        self.assertEqual(page.status_code, 200, page.text)
+        older = page.json()['kline']
+        self.assertTrue(older)
+        self.assertLess(older[-1]['time'], first)
+
+    def test_m15_rejected_for_hk_whose_facts_are_m30(self):
+        state = self.client.get('/api/periods').json()
+        self.assertIn('m15', state['markets']['cn']['available'])
+        self.assertNotIn('m15', state['markets']['hk']['available'])
+        self.assertEqual(state['markets']['hk']['reasons']['m15'], '当前港股粒度为 m30，无法显示 15 分')
+        self.select(['day', 'm15'])
+        r = self.client.get('/api/chart', params={'code': 'hk00700', 'freq': 'm15'})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()['detail'], '该周期未勾选或当前市场无法合成')
 
     def test_read_failure_is_unavailable_not_stale(self):
         # 读失败（如写锁超时）不是数据更新：回 409 会让页面反复整窗重载

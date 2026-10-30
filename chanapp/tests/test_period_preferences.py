@@ -42,7 +42,7 @@ class PeriodPreferencesTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             state = response.json()
             self.assertEqual(state['notice']['kind'], 'first_use')
-            self.assertEqual(set(state['selected']), {'day', 'week', 'm60', 'm30'})
+            self.assertEqual(set(state['selected']), {'day', 'week', 'm60', 'm30', 'm15'})
             saved = client.put('/api/periods', json={'selected': ['day'], 'revision': state['revision']})
             self.assertEqual(saved.status_code, 200)
             self.assertIsNone(saved.json()['notice'])
@@ -52,12 +52,31 @@ class PeriodPreferencesTests(unittest.TestCase):
             self.assertIsNone(state['notice'])
         self.assertTrue((self.instance / 'periods.json').is_file())
 
-    def test_upgrade_keeps_four_and_does_not_prompt(self):
+    def test_upgrade_keeps_all_and_does_not_prompt(self):
         self.instance.mkdir()
         (self.instance / 'watchlist.json').write_text('[]')
         with TestClient(app) as client:
             state = client.get('/api/periods').json()
-            self.assertEqual(set(state['selected']), {'day', 'week', 'm60', 'm30'})
+            self.assertEqual(set(state['selected']), {'day', 'week', 'm60', 'm30', 'm15'})
+            self.assertIsNone(state['notice'])
+
+    def test_four_period_file_offers_restored_m15_once_without_selecting_it(self):
+        # 2026-10-29 前的偏好文件：目录只有四个周期。升级后提示一次「A 股 15分现已可用」（港股不变、不提示），
+        # 原勾选不动，确认后重启不再提示
+        self.instance.mkdir()
+        four = ['day', 'week', 'm60', 'm30']
+        (self.instance / 'periods.json').write_text(json.dumps({
+            'selected': ['day', 'm30'], 'capabilities': {'cn': four, 'hk': four}, 'notice': None, 'revision': 'old'}))
+        with TestClient(app) as client:
+            state = client.get('/api/periods').json()
+            self.assertEqual(state['selected'], ['day', 'm30'])
+            self.assertEqual(state['notice'], {'kind': 'capabilities_changed',
+                                               'changes': [{'market': 'cn', 'freq': 'm15', 'available': True}]})
+            saved = client.put('/api/periods', json={'selected': ['day', 'm30', 'm15'], 'revision': state['revision']})
+            self.assertEqual(saved.status_code, 200, saved.text)
+        with TestClient(app) as client:
+            state = client.get('/api/periods').json()
+            self.assertEqual(state['selected'], ['day', 'm30', 'm15'])
             self.assertIsNone(state['notice'])
 
     def test_corrupt_nested_preferences_do_not_block_startup(self):

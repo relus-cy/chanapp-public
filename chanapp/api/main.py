@@ -1,14 +1,14 @@
 """缠论分析自用 web app API。
 
-GET /api/chart?code=&freq=week|day|m60|m30&adjust=qfq|raw&rule_profile=&signal_scope=
-（5 分、15 分已下线：freq=m5|m15 回 400「不再提供」，不读数据）
+GET /api/chart?code=&freq=week|day|m60|m30|m15&adjust=qfq|raw&rule_profile=&signal_scope=
+（5 分已下线：freq=m5 回 400「不再提供」，不读数据；15 分只在能合成它的市场可选，港股回 400）
 返回 {kline, macd{rows}, structure{bi,xd,zs,zs_xd,forming}, signals, rule_profile, calculation_id,
       evidence, channels, resonance, meta}；meta 为门面返回体（去掉 bars）加 data_version、bars 根数、
 first_dt、last_dt 与 analysis_tokens {day, m60, m30}（AI 请求令牌的唯一来源）。
 另含 "quotes" 键 {code: 报价行}（自选各项与当前代码，行结构同 /api/quotes）：与 bars 同一次读事务——价格卡、
 自选各行与图中末根 bar 同快照。
 响应带弱 ETag（整包哈希，剔除按秒变化的 stale_age_s）与 Cache-Control: no-cache；If-None-Match 命中回 304 空体。
-带 before 为历史分页：只支持 day/week/m60/m30；必须回传 meta.token，不符或缺失返回
+带 before 为历史分页：只支持 day/week/m60/m30/m15；必须回传 meta.token，不符或缺失返回
 409 {"detail": "数据已更新", "token": 当前令牌}（扁平响应体），客户端整窗重载。
 主图当前周期与 resonance、analysis_tokens 出自同一次 bundle 读取（当前周期不在日/60/30 时一并读入）。
 resonance：多周期摘要（日/60/30）；某级缺数据则该级缺省；structure_short 为真表示该级输入未取够默认窗口。
@@ -179,7 +179,7 @@ def _normalize_before(before: str) -> str:
     return normalized
 
 
-HISTORY_PERIODS = ("day", "week", "m60", "m30")
+HISTORY_PERIODS = ("day", "week", "m60", "m30", "m15")
 
 
 def _conflict(**body) -> JSONResponse:

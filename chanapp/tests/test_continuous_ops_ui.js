@@ -324,13 +324,13 @@ function tabsEnv(code, extras) {
   console.log('H. adjust toggle checks passed');
 }
 
-// ---------- I. 有意改写（目标 2026-09-29 第三阶段）：两个市场都只有日/周/60/30；旧的 5分/15分在 load() 归到 30 分 ----------
+// ---------- I. 有意改写（目标 2026-09-29 第三阶段）：旧的 5分在 load() 归到 30 分；此处夹具目录只有日/周/60/30（15 分另见 test_retired_periods_ui.js） ----------
 {
   for (const code of ['hk00700', 'sh600926']) {
     const t = tabsEnv(code);
     t.context.renderTabs();
     assert.deepEqual(['day', 'week', 'm60', 'm30'].filter(f => !t.freqBtn(f).hidden),
-      ['day', 'week', 'm60', 'm30'], code + ' 四个周期都显示');
+      ['day', 'week', 'm60', 'm30'], code + ' 夹具目录里的四个周期都显示');
   }
   const hk = tabsEnv('hk00700');
   hk.context.renderTabs();
@@ -346,11 +346,9 @@ function tabsEnv(code, extras) {
     return { env, url: env._harness.pending[0].url };
   };
   for (const code of ['hk00700', 'sh600926']) {
-    for (const freq of ['m5', 'm15']) {
-      const { env, url } = run(code, freq);
-      assert.equal(env.state.freq, 'm30', code + ' ' + freq + ' 归到 30 分');
-      assert.match(url, /&freq=m30&/, '请求按 30 分发出');
-    }
+    const { env, url } = run(code, 'm5');
+    assert.equal(env.state.freq, 'm30', code + ' m5 归到 30 分');
+    assert.match(url, /&freq=m30&/, '请求按 30 分发出');
   }
   assert.match(run('hk00700', 'm30').url, /&freq=m30&/, '港股 30分照常');
   console.log('I. retired short period checks passed');

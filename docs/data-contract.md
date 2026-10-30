@@ -20,7 +20,7 @@
 | `status(codes) -> dict` | 运行状态，同 `/api/status` |
 | `configure_instance()` | 上下文管理器：加载并校验实例配置、初始化实例目录。应用启动时调用；脚本直接使用门面时也要先进入它，才会按实例配置选择模式与数据路径 |
 
-`m15`、`m5` 只在门面层保留；页面与 HTTP 接口只提供 30 分、60 分、日线、周线。所请求周期细于该市场的分钟事实粒度时（例如港股事实为 m30 时的 m15），返回空 `bars` 与 `unsupported` 提示，不从粗粒度伪造细周期。
+`m5` 只在门面层保留；页面与 HTTP 接口提供 15 分、30 分、60 分、日线、周线。所请求周期细于该市场的分钟事实粒度时（例如港股事实为 m30 时的 m15），返回空 `bars` 与 `unsupported` 提示，不从粗粒度伪造细周期。
 
 ### 返回字段
 
@@ -102,7 +102,7 @@
 
 完整字段以 `chanapp/api/main.py`、`chanapp/api/analysis.py` 为准，这里只列与数据契约相关的行为。给 AI 与脚本的读取说明（每个字段的含义与用途）由实例在 `/llms.txt` 提供，源文件 `chanapp/web/llms.txt`；`chanapp/tests/test_llms_txt.py` 保证它列出全部 `/api` 接口和 `/api/chart` 的字段。
 
-- `GET /api/chart?code=&freq=&adjust=`：`freq` 取 `week`、`day`、`m60`、`m30`；`m15`、`m5` 在读取前返回 400。未勾选或当前市场不能合成的周期返回 400。当前周期首次取数失败返回 502。响应为 `{kline, macd, structure, signals, evidence, channels, donchian, resonance, meta, ...}`，`kline` 元素为 `{time, open, high, low, close, volume}`；`donchian` 见下文「唐奇安通道」；`meta` 是门面返回体去掉 `bars`，另加 `bars`（根数）、`first_dt`、`last_dt`、`analysis_freqs`、`analysis_tokens`、`analysis_calculation_id`。响应另含 `quotes`：自选各项与当前代码的报价行（结构同 `/api/quotes`），与 `kline` 同一次读取，页面的价格卡与自选各行用它，保证与图中末根 bar 同快照；两个市场相同。响应里的浮点数（前复权价、结构价位、MACD、特征等）统一保留 4 位小数，历史分页同。带弱 ETag，`If-None-Match` 命中返回 304。带 `refetch=1` 时先手动重拉，结果放在响应头 `X-Refetch-Status`。
+- `GET /api/chart?code=&freq=&adjust=`：`freq` 取 `week`、`day`、`m60`、`m30`、`m15`；`m5` 在读取前返回 400。未勾选或当前市场不能合成的周期（如港股的 `m15`）返回 400。当前周期首次取数失败返回 502。响应为 `{kline, macd, structure, signals, evidence, channels, donchian, resonance, meta, ...}`，`kline` 元素为 `{time, open, high, low, close, volume}`；`donchian` 见下文「唐奇安通道」；`meta` 是门面返回体去掉 `bars`，另加 `bars`（根数）、`first_dt`、`last_dt`、`analysis_freqs`、`analysis_tokens`、`analysis_calculation_id`。响应另含 `quotes`：自选各项与当前代码的报价行（结构同 `/api/quotes`），与 `kline` 同一次读取，页面的价格卡与自选各行用它，保证与图中末根 bar 同快照；两个市场相同。响应里的浮点数（前复权价、结构价位、MACD、特征等）统一保留 4 位小数，历史分页同。带弱 ETag，`If-None-Match` 命中返回 304。带 `refetch=1` 时先手动重拉，结果放在响应头 `X-Refetch-Status`。
 - `GET /api/chart?...&before=&limit=&token=`：历史分页，`limit` 为 1–2000（默认 520），`token` 取首页的 `meta.token`。令牌不符或缺失返回 **409 `{"detail": "数据已更新", "token": 当前令牌}`**；标的没有事实返回 503。
 - `/api/chart` 的 `donchian`（唐奇安通道，计算在 `chanapp/engine/donchian.py`）：不复权的个股为 `null`（除权日价格整体下移会被误判为跌破），前复权和指数都给。其余情况为 `{"20/10": 组, "55/20": 组}`，键是入场／离场回看根数，覆盖首页窗口的全部 bar；历史分页不带它，更早的 bar 上不画通道。每组：
   - `rows`：与 `kline` 逐根对齐的 `[{time, entry, exit, n}]`。`entry` 是前 20（或 55）根的最高价，`exit` 是前 10（或 20）根的最低价，都不含当前根，根数不足为 `null`；`n` 是 Wilder 平滑的 20 根真实波幅（海龟交易法的 N），从窗口起点起算。
@@ -110,7 +110,7 @@
   - `modes`：`close`（收盘确认）与 `touch`（盘中触价）两种判定方式各一份 `{signals, trades, state}`，都从窗口起点空仓开始按规则推演，不是用户的实际持仓。`signals` 元素为 `{time, side, kind, status, price, level}`，卖出信号另带 `basis`：`side` 取 `buy`、`sell`；`kind` 取 `close`（收盘越过）、`touch`（盘中越过：盘中触价方式的信号，以及收盘确认方式下形成中的 bar 盘中越过、尚未收盘的情况）、`false_break`（盘中越过、收盘没越过的已收盘 bar，只在收盘确认方式下出现）；`status` 在 bar 的 `forming` 为真时取 `provisional`，否则取 `confirmed`；`level` 是被越过的线位（卖出时为有效离场价）；`basis` 取 `stop`（止损高于该根离场线，`level` 即止损）或 `exit`（`level` 即离场线，两者相等时也取它）。`trades` 是每一笔规则进出，含已平仓的：`{entry_time, entry_price, stop, exit_time, exit_price}`，`stop` 是这一笔入场后固定的止损，持有中的那笔 `exit_time`、`exit_price` 为 `null`。`state` 为 `{holding, entry_time, entry_price, stop, effective_exit, effective_entry, provisional}`：`stop` 是入场价减 2N（收盘确认取入场那根的 N，盘中触价取上一根的 N），入场后固定；`effective_exit = max(离场线, stop)`，离场线取接下来要判定的那根：最后一根形成中且不是入场那根时是它自己的离场线，否则是下一根的（即 `next.exit`）；`effective_entry` 只在空仓时有值（持有时为 `null`），是接下来要判定的入场线，取法同上：最后一根形成中且没在它上面离场时是它自己的入场线，否则是 `next.entry`；`provisional` 为真表示最近一次入场或离场发生在形成中的 bar 上，收盘前可能撤销。
   - `suggestion`：`{weight, stop_distance, risk_budget}` 或 `null`。`stop_distance = 2N ÷ 收盘`，`weight = min(1, risk_budget ÷ stop_distance)`，`risk_budget` 为 0.01，即止损触发时亏损约为总资金的 1%。只是建议，不读取实际持仓。
 - `GET /api/analysis?code=&freq=&adjust=&rule_profile=&signal_scope=&tokens=`：`tokens` 是 URL 编码的 JSON 对象，取自图表的 `meta.analysis_tokens`；`freq` 不影响分析内容。按以下顺序判断，命中即返回：
-  1. `freq` 为 `m15`、`m5` 返回 400；`week` 等不在 `day`、`m60`、`m30` 内的值由参数校验返回 422；
+  1. `freq` 为 `m5` 返回 400；`week` 等不在 `day`、`m60`、`m30`、`m15` 内的值由参数校验返回 422（`m15` 只是被接受，分析组合仍是上文所列）；
   2. demo 返回 200 `status: "disabled"`；
   3. 未配置模型（没有 `LLM_API_KEY`）返回 200 `status: "unconfigured"`，不取数；
   4. `tokens` 缺失、无法解析，或周期键集合与本次分析组合不同，返回 409 `{"detail": "数据已更新", "tokens": 当前令牌}`；

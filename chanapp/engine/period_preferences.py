@@ -15,7 +15,7 @@ import uuid
 
 from chanapp.engine import atomic_file
 
-PERIOD_LABELS = {'day': '日线', 'week': '周线', 'm60': '60分', 'm30': '30分'}
+PERIOD_LABELS = {'day': '日线', 'week': '周线', 'm60': '60分', 'm30': '30分', 'm15': '15分'}
 PERIODS = tuple(PERIOD_LABELS)
 _MINUTES = {'m5': 5, 'm15': 15, 'm30': 30, 'm60': 60}
 _LABELS = {'cn': 'A 股', 'hk': '港股'}
@@ -120,7 +120,7 @@ class Preferences:
             if revision != self._state['revision']:
                 raise Conflict('周期偏好已更新，请重新确认')
             if any(f not in PERIODS for f in selected):
-                raise ValueError('仅支持 30 分、60 分、日、周')
+                raise ValueError('仅支持 15 分、30 分、60 分、日、周')
             available = {f for m in self.markets.values() for f in m['available']}
             if any(f not in available and f not in self._state['selected'] for f in selected):
                 raise ValueError('不能新增当前所有市场都无法合成的周期')
@@ -142,7 +142,7 @@ class Preferences:
                          if f in self._state['selected'] and f in self.markets[market]['available'])
 
     def minute_enabled(self, code):
-        return bool(self.allowed(code, ('m60', 'm30')))
+        return bool(self.allowed(code, ('m60', 'm30', 'm15')))
 
 
 _current = None
@@ -164,7 +164,7 @@ def activate(paths, minute_frequencies, *, new_instance=False):
 
 
 def preset(paths, minute_frequencies):
-    """demo 初始化时在 activate 之前调用；只在文件缺席时预置四个勾选且无弹窗。
+    """demo 初始化时在 activate 之前调用；只在文件缺席时预置全部周期的勾选且无弹窗。
 
     minute_frequencies 例：{"CN": "m5", "HK": "m30"}；paths 由 instance_paths.resolve/current 返回。
     已有偏好不覆盖，后续改粒度仍由正常启动重检。

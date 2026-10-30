@@ -236,11 +236,11 @@ def _parse_tokens(raw: str | None) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-RETIRED_DETAIL = "不再提供 5 分与 15 分周期，请改用 30 分及以上"
+RETIRED_DETAIL = "不再提供 5 分周期，请改用 15 分及以上"
 
 
 def reject_retired_freq(freq: str) -> None:
-    """已下线周期明确回 400（不静默改成别的周期冒充）；页面把旧链接的 m5/m15 归到 m30 后再请求。"""
+    """已下线周期明确回 400（不静默改成别的周期冒充）；页面把旧链接的 m5 归到 m30 后再请求。"""
     if freq in api_view_log.RETIRED_FREQS:
         raise HTTPException(status_code=400, detail=RETIRED_DETAIL)
 
